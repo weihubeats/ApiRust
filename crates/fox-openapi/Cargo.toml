@@ -1,0 +1,16 @@
+[package]
+name = "fox-openapi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fox-core = { path = "../fox-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+indexmap = { workspace = true }
+openapiv3 = { workspace = true }

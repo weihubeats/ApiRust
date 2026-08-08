@@ -1,0 +1,17 @@
+[package]
+name = "fox-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+regex = { workspace = true }
+rand = { workspace = true }
+sqlx = { workspace = true }
+reqwest = { workspace = true }

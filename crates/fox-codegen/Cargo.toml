@@ -1,0 +1,9 @@
+[package]
+name = "fox-codegen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fox-core = { path = "../fox-core" }
+base64 = { workspace = true }

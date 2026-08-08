@@ -1,0 +1,35 @@
+[package]
+name = "fox-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "fox-desktop"
+path = "src/main.rs"
+
+[dependencies]
+fox-core = { path = "../fox-core" }
+fox-storage = { path = "../fox-storage" }
+fox-http = { path = "../fox-http" }
+fox-openapi = { path = "../fox-openapi" }
+fox-mock = { path = "../fox-mock" }
+fox-test = { path = "../fox-test" }
+fox-backup = { path = "../fox-backup" }
+fox-codegen = { path = "../fox-codegen" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = { workspace = true }
+rfd = { workspace = true }
+dioxus = { workspace = true }
+sqlx = { workspace = true }
+
+[dev-dependencies]
+dioxus-html = { version = "0.5", features = ["serialize"] }

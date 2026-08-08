@@ -1,0 +1,22 @@
+[package]
+name = "fox-test"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fox-core = { path = "../fox-core" }
+fox-http = { path = "../fox-http" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+jsonpath-rust = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+bytes = { workspace = true }

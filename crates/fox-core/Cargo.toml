@@ -15,3 +15,4 @@ regex = { workspace = true }
 rand = { workspace = true }
 sqlx = { workspace = true }
 reqwest = { workspace = true }
+shell-words = "1.1"

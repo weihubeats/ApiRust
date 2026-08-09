@@ -2,6 +2,7 @@
 
 mod app;
 mod components;
+mod feedback;
 mod pages;
 mod services;
 mod state;

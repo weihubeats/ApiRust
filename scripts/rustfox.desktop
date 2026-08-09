@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=RustFox
+Name[zh_CN]=RustFox
+Comment=Local-first API client and mock server
+Comment[zh_CN]=本地优先的 API 调试与 Mock 工具
+Exec=@BIN@
+Icon=rustfox
+Terminal=false
+Categories=Development;Network;
+StartupNotify=false
+Keywords=api;http;rest;mock;debug;

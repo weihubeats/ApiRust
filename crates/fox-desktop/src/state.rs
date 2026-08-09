@@ -2,6 +2,7 @@
 
 use chrono::Utc;
 use dioxus::prelude::*;
+use fox_core::curl_parser::CurlParsed;
 use fox_core::model::*;
 use fox_storage::repository as repo;
 use std::collections::HashMap;
@@ -65,7 +66,12 @@ pub struct AppState {
     /// 运行中的 Mock 服务句柄（None 表示未启动）。
     pub mock_handle: Signal<Option<Arc<tokio::sync::Mutex<Option<fox_mock::server::MockServer>>>>>,
     pub mock_port: Signal<Option<u16>>,
+    /// 最近用户操作步骤（问题反馈报告用），最多保留 60 条。
+    pub steps: Signal<Vec<String>>,
 }
+
+/// 操作步骤上限。
+const MAX_STEPS: usize = 60;
 
 static TOAST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -87,7 +93,13 @@ impl AppState {
             mock_rules: Signal::new(Vec::new()),
             mock_handle: Signal::new(None),
             mock_port: Signal::new(None),
+            steps: Signal::new(Vec::new()),
         }
+    }
+
+    /// 记录一条用户操作步骤（保留最近 MAX_STEPS 条）。
+    pub fn record_step(&self, message: impl Into<String>) {
+        push_step(self.steps, message.into());
     }
 
     pub fn set_current_project(&self, id: Option<Uuid>) {
@@ -312,6 +324,63 @@ impl AppState {
                     id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                     kind: ToastKind::Error,
                     message: format!("创建接口失败：{}", e.user_message()),
+                }),
+            }
+        });
+    }
+
+    /// 从 cURL 解析结果创建接口（含方法、路径、请求头、Body、认证），并打开标签。
+    pub fn create_endpoint_from_curl(&self, folder_id: Option<Uuid>, parsed: &CurlParsed) {
+        let Some(project_id) = self.current_project() else {
+            self.toast_error("未选择项目");
+            return;
+        };
+        let now = Utc::now();
+        let name = parsed
+            .url
+            .trim_end_matches('/')
+            .rsplit('/')
+            .find(|s| !s.is_empty())
+            .unwrap_or("导入接口")
+            .to_string();
+        let model = Endpoint {
+            id: Uuid::new_v4(),
+            project_id,
+            folder_id,
+            name,
+            method: parsed.method,
+            path: parsed.url.clone(),
+            description: String::new(),
+            status: EndpointStatus::Developing,
+            sort_order: 0,
+            request: RequestSpec {
+                headers: parsed.headers.clone(),
+                body: parsed.body.clone().unwrap_or(BodySpec::None),
+                auth: parsed.auth.clone(),
+                ..RequestSpec::default()
+            },
+            created_at: now,
+            updated_at: now,
+        };
+        let db = self.services.db.clone();
+        let mut endpoints = self.endpoints;
+        let mut toasts = self.toasts;
+        let st = self.clone();
+        spawn(async move {
+            match repo::save_endpoint(&db, &model).await {
+                Ok(()) => {
+                    endpoints.write().push(model.clone());
+                    st.open_endpoint_tab(model.id);
+                    toasts.write().push(Toast {
+                        id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                        kind: ToastKind::Success,
+                        message: "cURL 导入成功".into(),
+                    });
+                }
+                Err(e) => toasts.write().push(Toast {
+                    id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    kind: ToastKind::Error,
+                    message: format!("导入失败：{}", e.user_message()),
                 }),
             }
         });
@@ -662,6 +731,7 @@ impl AppState {
         let db = self.services.db.clone();
         let mut endpoints = self.endpoints;
         let mut toasts = self.toasts;
+        let steps = self.steps;
         let count = imported.len();
         spawn(async move {
             let mut created = 0usize;
@@ -753,6 +823,13 @@ impl AppState {
                 kind: ToastKind::Success,
                 message: format!("导入完成（{}）：新建 {created}，覆盖 {updated_count}，跳过 {skipped}（共 {count} 个接口）", format.label()),
             });
+            push_step(
+                steps,
+                format!(
+                    "导入 OpenAPI（{}）：新建 {created}/覆盖 {updated_count}/跳过 {skipped}",
+                    format.label()
+                ),
+            );
         });
     }
 
@@ -771,6 +848,7 @@ impl AppState {
             .unwrap_or_else(|| "未命名项目".into());
         let eps = self.endpoints.read().clone();
         let db = self.services.db.clone();
+        let steps = self.steps;
         spawn(async move {
             let mut examples: HashMap<Uuid, Vec<ResponseExample>> = HashMap::new();
             for ep in &eps {
@@ -784,6 +862,7 @@ impl AppState {
                     }
                 }
             }
+            push_step(steps, format!("导出 OpenAPI 文档（{} 个接口）", eps.len()));
             match fox_openapi::export::export_project(&project_name, &eps, &examples) {
                 Ok(json) => f(Ok(json)),
                 Err(e) => f(Err(e.user_message())),
@@ -812,6 +891,7 @@ impl AppState {
         let mut port = self.mock_port;
         let mut handle = self.mock_handle;
         let mut toasts = self.toasts;
+        let steps = self.steps;
         spawn(async move {
             // 1. 加载响应示例。
             let mut examples_by_ep: HashMap<Uuid, Vec<ResponseExample>> = HashMap::new();
@@ -856,6 +936,8 @@ impl AppState {
                 Ok(server) => {
                     let addr = server.address();
                     let server_port = server.port;
+                    tracing::info!("用户启动 Mock port={}", server_port);
+                    push_step(steps, format!("启动 Mock 服务（port {server_port}）"));
                     let inner = Arc::new(tokio::sync::Mutex::new(Some(server)));
                     handle.set(Some(inner));
                     port.set(Some(server_port));
@@ -882,6 +964,7 @@ impl AppState {
         let mut port = self.mock_port;
         let mut handle = self.mock_handle;
         let mut toasts = self.toasts;
+        let steps = self.steps;
         spawn(async move {
             if let Some(inner) = handle.write().take() {
                 let taken = inner.lock().await.take();
@@ -890,6 +973,7 @@ impl AppState {
                 }
             }
             port.set(None);
+            push_step(steps, "停止 Mock 服务".into());
             toasts.write().push(Toast {
                 id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 kind: ToastKind::Info,
@@ -920,6 +1004,7 @@ impl AppState {
         let mock_rules = self.mock_rules.read().clone();
         let db = self.services.db.clone();
         let st = self.clone();
+        let steps = self.steps;
         spawn(async move {
             let mut examples: Vec<fox_core::model::ResponseExample> = Vec::new();
             for ep in &endpoints {
@@ -957,10 +1042,13 @@ impl AppState {
                     );
                     let path = dir.join(filename);
                     match std::fs::write(&path, json) {
-                        Ok(()) => st.toast_success(format!(
-                            "备份完成：{}（恢复时请粘贴该文件内容）",
-                            path.display()
-                        )),
+                        Ok(()) => {
+                            push_step(steps, format!("备份项目：{}", path.display()));
+                            st.toast_success(format!(
+                                "备份完成：{}（恢复时请粘贴该文件内容）",
+                                path.display()
+                            ));
+                        }
                         Err(e) => st.toast_error(format!("备份写入失败：{e}")),
                     }
                 }
@@ -980,6 +1068,7 @@ impl AppState {
         };
         let db = self.services.db.clone();
         let st = self.clone();
+        let steps = self.steps;
         spawn(async move {
             let restored = fox_backup::restore_backup(&file);
             // 新项目先入库，再按引用关系写入子对象。
@@ -1016,6 +1105,10 @@ impl AppState {
             st.refresh_projects();
             st.refresh_project_data(restored.project.id);
             st.set_current_project(Some(restored.project.id));
+            push_step(
+                steps,
+                format!("恢复备份：项目「{}」", restored.project.name),
+            );
             if failed.is_empty() {
                 st.toast_success(format!("恢复完成：项目「{}」已创建", restored.project.name));
             } else {
@@ -1128,6 +1221,16 @@ impl AppState {
                 }),
             }
         });
+    }
+}
+
+/// 追加步骤并裁剪到 MAX_STEPS 条（供 async 闭包内使用）。
+fn push_step(mut steps: Signal<Vec<String>>, msg: String) {
+    let mut guard = steps.write();
+    guard.push(msg);
+    if guard.len() > MAX_STEPS {
+        let drop_count = guard.len() - MAX_STEPS;
+        guard.drain(..drop_count);
     }
 }
 

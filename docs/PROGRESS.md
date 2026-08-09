@@ -232,9 +232,24 @@
 2. 所有控件（输入框 / 多行文本域 / 按钮 / 下拉）均带 `rf-` 前缀样式类；所有颜色 / 圆角 / 间距 / 字号全部引用 CSS 变量（styles.rs 之外的源文件无硬编码十六进制颜色）。
 3. 每个可交互元素具备完整状态反馈：hover（边框/背景加深）、active（按下加深或缩放）、focus（3px 蓝色光环）；按钮 disabled 半透明且不可点。
 4. 图标全部为内联 SVG（stroke=currentColor）：搜索、下拉箭头、加号、文件夹、设置滑杆、失败 X 等；界面中无 emoji 作为图标。
-5. 顶栏 48px：logo「RustFox」+ 分隔线 + 项目下拉（未选时显示「未选择项目」占位、默认选中当前项目）+ spacer + 搜索框 + 设置按钮；窗口缩放右侧元素不溢出。
+5. 顶栏 48px：logo「RustFox」+ 分隔线 + 项目下拉（未选时显示「未选择项目」占位、默认选中当前项目）+ 环境下拉 + spacer + 搜索框 + 反馈按钮 + 设置按钮；窗口缩放右侧元素不溢出。
 6. 首页：无项目时空状态居中（文件夹图标 +「还没有项目」标题 + 引导文案）；有项目时卡片网格展示（名称 / 描述 / 接口数 / 更新时间 / 删除按钮）；创建表单两行输入 + 「创建项目」主按钮。
 7. 工作区：方法选择下拉高亮当前方法徽章；目录树选中项有左侧高亮条；标签栏脏标记「●」；发送按钮 hover 变亮；响应区深色代码底 + 绿色/红色状态徽章；失败详情行红色 X 图标。
 8. 设置页：环境列表行 hover 反馈；Mock 规则表单、OpenAPI 导入区、备份区均使用统一输入框/按钮/下拉风格；折叠面板的展开/收起状态清晰。
 9. 全局配色为深色渐变层级（bg → panel → panel-2），主色蓝色（#3b82f6 系）、成功绿 / 警告黄 / 危险红语义色统一；Toast 右下角弹出且带对应语义色边框。
 10. 质量标准：`cargo fmt --all` 无 diff、`cargo clippy -D warnings` 0 错误、`cargo test --workspace` 全部通过；任意窗口尺寸下布局不塌、无内容重叠；交互流畅无卡顿。
+
+## M2.6：功能联通性验收与诊断（✅ 通过）
+
+- 新增 `crates/fox-smoke`：`tests/smoke_test.rs` 端到端冒烟（纯逻辑，无 UI）：
+  - `full_user_flow`：建项目 → 建环境 → 建接口 → 启动 Mock → 变量解析 + 真实 HTTP 请求 → 校验响应 → 保存请求历史 → 断言测试运行（status + jsonpath）→ 测试结果落库 → 停止 Mock；
+  - `openapi_roundtrip_and_backup`：导出 OpenAPI 3.0 → 再导入（识别格式一致、path/method/参数/示例一致）→ 备份 `build_backup → serialize → parse → restore_backup`（逐字段一致性 + 重映射 UUID 后落库不冲突）。
+- 关键操作日志（`tracing::info`，问题定界用）：
+  - `用户点击发送请求 url={} method={}`（workspace.rs do_send）
+  - `用户保存接口 id={} name={}`（workspace.rs save）
+  - `用户启动 Mock port={}`（state.rs start_mock）
+  - `用户运行测试 count={}`（workspace.rs run_tests）
+- 操作步骤记录：`AppState::record_step`（环形保留 60 条）覆盖发送/保存/导出/导入/Mock 启停/备份/恢复/压测。
+- 顶栏「反馈」按钮 → `feedback.rs::generate_report` 生成 `{数据目录}/reports/rustfox_report_时间.md`：环境信息（OS/版本/数据目录）+ 当前上下文 + 操作步骤 + 日志尾部 500 行。
+- `docs/SMOKE_TEST.md`：5 组手动验收清单（基础链路 / 导入 / Mock+curl / 断言测试 / 备份恢复）+ 报告提交步骤。
+- 门禁：fmt ✓、clippy -D warnings ✓、`cargo test --workspace`（125 = 123 + 冒烟 2）全绿；冒烟 10s 无 panic。

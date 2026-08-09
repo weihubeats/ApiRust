@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Package (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-latest
+            package: scripts/package.sh
+            shell: bash
+          - name: macos
+            os: macos-latest
+            package: scripts/package.sh
+            shell: bash
+          - name: windows
+            os: windows-latest
+            package: scripts/package.bat
+            shell: cmd
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux dependencies (WebKit/GTK)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            zip
+
+      - name: Install NSIS (Windows installer)
+        if: runner.os == 'Windows'
+        uses: negrutiu/nsis-install@v2
+
+      - name: Build release binary
+        run: cargo build --release -p fox-desktop
+
+      - name: Run package script
+        shell: ${{ matrix.shell }}
+        run: ${{ matrix.package }}
+
+      - name: Smoke test (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          test -x target/release/fox-desktop
+          ls -la dist/
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem dist | Select-Object Name, Length
+
+      - name: Upload artifacts (job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustfox-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Draft GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Show artifacts
+        run: ls -laR artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: RustFox ${{ github.ref_name }}
+          body: |
+            ## RustFox 分发包
+
+            无需安装 Rust，下载对应平台压缩包解压即用。
+
+            - **Windows**: `RustFox-*-setup.exe`（安装包，自动创建开始菜单与桌面快捷方式）或 `RustFox-*-windows-x86_64.zip`（便携版）
+            - **macOS**: `RustFox-*-macos-*.zip`（内含 RustFox.app，拖入「应用程序」即可）
+            - **Linux**: `RustFox-*-linux-*.tar.gz`（解压后运行 `./install_linux.sh` 添加到应用菜单）
+
+            使用手册：[docs/USER_GUIDE.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/USER_GUIDE.md)
+          files: artifacts/**
+          draft: true
+          generate_release_notes: true

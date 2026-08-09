@@ -446,6 +446,10 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
 
 /* 代码生成 */
 .codegen-modal { display: flex; flex-direction: column; max-height: 76vh; width: 680px; }
+.curl-modal { display: flex; flex-direction: column; max-height: 78vh; width: 680px; }
+.curl-modal .hint { text-align: left; color: var(--muted); font-size: 12px;
+  margin: 0 0 var(--s-2); line-height: 1.5; }
+.curl-input { flex: 1; min-height: 200px; resize: vertical; font-family: var(--mono); }
 .codegen-out { flex: 1; overflow: auto; background: var(--code-bg); color: var(--text);
   border-radius: var(--r-m); padding: var(--s-3) var(--s-4); font-size: 12.5px;
   line-height: 1.6; white-space: pre; user-select: text; border: 1px solid var(--border); }

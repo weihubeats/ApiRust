@@ -5,13 +5,15 @@ use std::collections::{HashMap, HashSet};
 use chrono::Utc;
 use dioxus::prelude::*;
 use fox_codegen::{render as render_code, GenRequest, Lang};
+use fox_core::curl_parser::{parse_curl, CurlParsed};
 use fox_core::model::{
     ApiKeyLocation, AuthSpec, BodySpec, Endpoint, EndpointStatus, HttpMethod, KeyValue,
     RequestHistory, RequestSpec, ResponseExample, TestRun,
 };
-use fox_core::util::{build_url, format_json, is_json_content_type};
+use fox_core::util::{build_url, format_json, is_absolute_url, is_json_content_type};
 use fox_core::variable::{resolve_variables_with, ResolveOptions};
-use fox_http::client::{send_request, HttpResponseData};
+use fox_core::AppError;
+use fox_http::client::{describe_http_error, send_request, HttpResponseData};
 use fox_openapi::markdown::export_markdown;
 use fox_storage::db as storage_db;
 use fox_storage::repository as repo;
@@ -21,7 +23,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::components::dropdown::Dropdown;
-use crate::components::icons::XIcon;
+use crate::components::icons::{ImportIcon, XIcon};
 use crate::state::AppState;
 
 /// 编辑器分组。
@@ -554,6 +556,8 @@ fn run_tests(
             running.set(false);
             return;
         };
+        tracing::info!("用户运行测试 count={}", endpoints.len());
+        st.record_step(format!("运行测试（{} 个接口）", endpoints.len()));
         let folder_ids: HashMap<Uuid, i64> = st
             .folders
             .read()
@@ -660,6 +664,7 @@ fn run_load_benchmark(
             return;
         }
         let cfg = LoadConfig { concurrency, total };
+        st.record_step(format!("开始压测（{} 并发 × {} 次）", concurrency, total));
         let result = run_load(ep.method, &url, &spec, &cfg).await;
         load_result.set(Some(result.clone()));
         running.set(false);
@@ -758,6 +763,25 @@ fn blank_endpoint(project_id: Uuid) -> Endpoint {
         request: RequestSpec::default(),
         created_at: now,
         updated_at: now,
+    }
+}
+
+/// M17：把 cURL 解析结果应用到一个接口草稿（方法、路径、请求头、Body、认证）。
+fn apply_curl(ep: &mut Endpoint, parsed: &CurlParsed) {
+    ep.method = parsed.method;
+    ep.path = parsed.url.clone();
+    ep.request.headers = parsed.headers.clone();
+    ep.request.auth = parsed.auth.clone();
+    if let Some(body) = &parsed.body {
+        ep.request.body = body.clone();
+    }
+    if ep.name.trim().is_empty() || ep.name.trim() == "新建接口" {
+        let last = parsed
+            .url
+            .trim_end_matches('/')
+            .rsplit('/')
+            .find(|s| !s.is_empty());
+        ep.name = last.unwrap_or("导入接口").to_string();
     }
 }
 
@@ -1148,6 +1172,9 @@ pub fn WorkspacePage() -> Element {
     // M15：多标签草稿缓存（按接口 id 保留每个标签页的未保存修改）。
     let tab_drafts: Signal<HashMap<Uuid, Endpoint>> = use_signal(HashMap::new);
     let dirty: Signal<HashSet<Uuid>> = use_signal(HashSet::new);
+    // M17：cURL 导入。
+    let curl_open: Signal<bool> = use_signal(|| false);
+    let curl_input: Signal<String> = use_signal(String::new);
 
     // M9：draft 变化时同步 tests 配置文本。
     {
@@ -1345,7 +1372,9 @@ pub fn WorkspacePage() -> Element {
     // M13 渲染局部。
     let st_cg = state.clone();
     let st_btn = state.clone();
-    let codegen_open_flag = *codegen_open.peek();
+    let codegen_open_flag = *codegen_open.read();
+    // M17 渲染局部。
+    let curl_open_flag = *curl_open.read();
     let codegen_lang_str = codegen_lang.peek().clone();
     let codegen_code_str = codegen_code.peek().clone();
     // M14 渲染局部。
@@ -1547,6 +1576,9 @@ pub fn WorkspacePage() -> Element {
                 return;
             }
             let id = ep.id;
+            let name = ep.name.clone();
+            tracing::info!("用户保存接口 id={} name={}", id, name);
+            st.record_step(format!("保存接口「{name}」"));
             st.save_endpoint(ep);
             dirty.write().remove(&id);
         }
@@ -1632,11 +1664,15 @@ pub fn WorkspacePage() -> Element {
             };
             let vars = merged_vars(&st, project_id);
             let (url, spec) = render_request(&ep, &vars);
-            if !url.starts_with("http://") && !url.starts_with("https://") {
-                st.toast_error(format!("URL 无效：{url}"));
+            // URL 校验：完整 URL 直接用；相对路径且缺少 base_url 时明确提示。
+            if !is_absolute_url(&url) {
+                tracing::warn!("[HTTP] URL 不是完整地址，且未配置 base_url: {url}");
+                st.toast_error("请输入完整的 URL，或在环境变量中配置 base_url");
                 return;
             }
             let method = ep.method;
+            tracing::info!("[HTTP] 准备发送请求: {} {}", method, url);
+            st.record_step(format!("发送请求 {} {}", method, url));
             let (tx, rx) = tokio::sync::oneshot::channel();
             abort_tx.set(Some(tx));
             sending.set(true);
@@ -1646,31 +1682,41 @@ pub fn WorkspacePage() -> Element {
             let mut rv = response;
             let mut ht = histories;
             spawn(async move {
-                tokio::select! {
-                    _ = rx => {
-                        sg.set(false);
+                // 无论成功 / 失败 / 取消，最后统一恢复按钮状态。
+                let outcome = tokio::select! {
+                    _ = rx => None,
+                    result = send_request(method, &url, &spec, None) => Some(result),
+                };
+                sg.set(false);
+                match outcome {
+                    None => {
                         st_task.toast_info("请求已取消");
                     }
-                    result = send_request(method, &url, &spec, None) => {
-                        sg.set(false);
-                        match result {
-                            Ok(data) => {
-                                let history = build_history(&ep, project_id, &url, &data);
-                                rv.set(to_response_view(data));
-                                let db = db.clone();
-                                if let Err(e) = repo::save_request_history(&db, &history).await {
-                                    st_task.toast_error(format!("保存历史失败：{}", e.user_message()));
-                                } else {
-                                    st_task.toast_success("请求完成，已保存历史");
-                                }
-                                if let Ok(list) = repo::list_request_histories(&db, project_id, 50).await {
-                                    ht.set(list);
-                                }
-                            }
-                            Err(e) => {
-                                st_task.toast_error(format!("请求失败：{}", e.user_message()));
-                            }
+                    Some(Ok(data)) => {
+                        tracing::info!(
+                            "[HTTP] 请求完成: status={}, duration={}ms",
+                            data.status,
+                            data.duration_ms
+                        );
+                        let history = build_history(&ep, project_id, &url, &data);
+                        rv.set(to_response_view(data));
+                        let db = db.clone();
+                        if let Err(e) = repo::save_request_history(&db, &history).await {
+                            st_task.toast_error(format!("保存历史失败：{}", e.user_message()));
+                        } else {
+                            st_task.toast_success("请求完成，已保存历史");
                         }
+                        if let Ok(list) = repo::list_request_histories(&db, project_id, 50).await {
+                            ht.set(list);
+                        }
+                    }
+                    Some(Err(e)) => {
+                        tracing::error!("[HTTP] 请求失败: {}", e);
+                        let msg = match &e {
+                            AppError::Http(re) => describe_http_error(re),
+                            _ => e.user_message(),
+                        };
+                        st_task.toast_error(format!("请求失败：{msg}"));
                     }
                 }
             });
@@ -1686,6 +1732,40 @@ pub fn WorkspacePage() -> Element {
                 let _ = tx.send(());
             }
             sending.set(false);
+        }
+    };
+
+    // M17：导入 cURL 命令 —— 解析后覆盖当前草稿。
+    let mut import_curl = {
+        let st = state.clone();
+        let mut d = draft;
+        let mut tds = tab_drafts;
+        let mut dirty = dirty;
+        let mut co = curl_open;
+        let mut ci = curl_input;
+        move || {
+            let Some(ep) = d.peek().clone() else {
+                st.toast_error("未选择接口，无法导入");
+                return;
+            };
+            let raw = ci.peek().clone();
+            let parsed = match parse_curl(&raw) {
+                Ok(p) => p,
+                Err(e) => {
+                    st.toast_error(format!("cURL 格式无法识别：{}", e.user_message()));
+                    return;
+                }
+            };
+            let mut guard = d.write();
+            if let Some(ep) = guard.as_mut() {
+                apply_curl(ep, &parsed);
+            }
+            drop(guard);
+            tds.write().insert(ep.id, ep.clone());
+            dirty.write().insert(ep.id);
+            co.set(false);
+            ci.set(String::new());
+            st.toast_success("导入成功");
         }
     };
 
@@ -1714,6 +1794,10 @@ pub fn WorkspacePage() -> Element {
                             }
                         },
                     }
+                    button { class: "rf-btn rf-btn-sm", onclick: move |_| {
+                        let mut co = curl_open;
+                        co.set(true);
+                    }, ImportIcon {}, "导入 cURL" }
                     input {
                         class: "rf-input grow",
                         value: "{ep.path}",
@@ -2260,6 +2344,43 @@ pub fn WorkspacePage() -> Element {
                         }
                     }
                 }
+                // M17：导入 cURL 弹窗。
+                if curl_open_flag {
+                    div {
+                        class: "modal-backdrop",
+                        onclick: move |_| {
+                            let mut co = curl_open;
+                            co.set(false);
+                        },
+                        div {
+                            class: "modal curl-modal",
+                            onclick: |e| { e.stop_propagation(); },
+                            div { class: "kv-title", "从 cURL 命令导入" }
+                            div {
+                                class: "hint",
+                                "粘贴浏览器开发者工具「Copy as cURL」复制的命令，自动识别方法、URL、请求头、请求体与 Basic 认证。",
+                            }
+                            textarea {
+                                class: "rf-textarea curl-input",
+                                rows: "10",
+                                placeholder: "例如：\ncurl -X POST https://api.example.com/users \\\n  -H \"Content-Type: application/json\" \\\n  -u user:pass \\\n  -d \"{{\"name\":\"test\"}}\"",
+                                value: "{curl_input}",
+                                oninput: move |e| {
+                                    let v = e.data().value();
+                                    let mut ci = curl_input;
+                                    ci.set(v);
+                                },
+                            }
+                            div { class: "rf-modal-actions",
+                                button { class: "rf-btn", onclick: move |_| {
+                                    let mut co = curl_open;
+                                    co.set(false);
+                                }, "取消" }
+                                button { class: "rf-btn rf-btn-primary", onclick: move |_| import_curl(), "解析并导入" }
+                            }
+                        }
+                    }
+                }
             }
         }
 }
@@ -2304,5 +2425,94 @@ mod tests {
         let compact = pretty.replace(['\n', ' '], "");
         assert_eq!(compact, "{\"a\":1,\"b\":2}");
         assert!(format_json("{oops").is_err());
+    }
+
+    #[test]
+    fn apply_curl_overwrites_draft_fields() {
+        let mut ep = ep_with_path("/old");
+        ep.name = "新建接口".into();
+        let parsed = parse_curl(
+            "curl -X POST -H \"Content-Type: application/json\" -u u:p \
+             -d '{\"a\":1}' https://api.example.com/users",
+        )
+        .unwrap();
+        apply_curl(&mut ep, &parsed);
+        assert_eq!(ep.method, HttpMethod::POST);
+        assert_eq!(ep.path, "https://api.example.com/users");
+        assert_eq!(ep.request.headers.len(), 1);
+        assert!(matches!(ep.request.auth, AuthSpec::Basic { .. }));
+        assert!(matches!(
+            ep.request.body,
+            BodySpec::Json { raw } if raw.trim() == "{\"a\":1}"
+        ));
+        assert_eq!(ep.name, "users");
+    }
+
+    #[test]
+    fn apply_curl_keeps_custom_name() {
+        let mut ep = ep_with_path("/old");
+        ep.name = "我的接口".into();
+        let parsed = parse_curl("curl https://api.example.com/users").unwrap();
+        apply_curl(&mut ep, &parsed);
+        assert_eq!(ep.name, "我的接口");
+    }
+
+    fn ep_with_path(path: &str) -> Endpoint {
+        let now = Utc::now();
+        Endpoint {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            folder_id: None,
+            name: "测试接口".into(),
+            method: HttpMethod::GET,
+            path: path.to_string(),
+            description: String::new(),
+            status: EndpointStatus::Developing,
+            sort_order: 0,
+            request: RequestSpec::default(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn render_request_keeps_absolute_url_without_base() {
+        let ep = ep_with_path("https://httpbin.org/get");
+        let (url, _) = render_request(&ep, &HashMap::new());
+        assert_eq!(url, "https://httpbin.org/get");
+    }
+
+    #[test]
+    fn render_request_absolute_url_wins_over_base_url() {
+        let ep = ep_with_path("https://httpbin.org/get");
+        let vars = HashMap::from([("base_url".to_string(), "https://other.example.com".to_string())]);
+        let (url, _) = render_request(&ep, &vars);
+        assert_eq!(url, "https://httpbin.org/get");
+    }
+
+    #[test]
+    fn render_request_joins_relative_path_with_base_url() {
+        let ep = ep_with_path("/api/users");
+        let vars = HashMap::from([("base_url".to_string(), "https://api.example.com".to_string())]);
+        let (url, _) = render_request(&ep, &vars);
+        assert_eq!(url, "https://api.example.com/api/users");
+    }
+
+    #[test]
+    fn render_request_missing_base_url_yields_relative_url() {
+        let ep = ep_with_path("/api/users");
+        let (url, _) = render_request(&ep, &HashMap::new());
+        assert_eq!(url, "/api/users");
+        assert!(!is_absolute_url(&url));
+    }
+
+    #[test]
+    fn render_request_resolves_variables_in_path() {
+        let mut ep = ep_with_path("/users/{id}");
+        ep.request.path_variables = vec![KeyValue::new("id", "42")];
+        let mut vars = HashMap::new();
+        vars.insert("base_url".to_string(), "http://localhost:8080".to_string());
+        let (url, _) = render_request(&ep, &vars);
+        assert_eq!(url, "http://localhost:8080/users/42");
     }
 }

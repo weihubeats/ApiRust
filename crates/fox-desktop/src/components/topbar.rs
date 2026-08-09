@@ -1,9 +1,10 @@
-//! 顶部栏：logo | 分隔线 | 项目下拉 | spacer | 搜索框 | 设置入口。
+//! 顶部栏：logo | 分隔线 | 项目下拉 | 环境下拉 | spacer | 搜索框 | 反馈 | 设置。
 
 use dioxus::prelude::*;
 
 use crate::components::dropdown::Dropdown;
 use crate::components::icons::{SearchIcon, SlidersIcon};
+use crate::feedback;
 use crate::state::{AppState, Page};
 
 #[component]
@@ -37,6 +38,7 @@ pub fn TopBar() -> Element {
         .map(|id| id.to_string())
         .unwrap_or_default();
     let st_env = state.clone();
+    let st_feedback = state.clone();
 
     rsx! {
         header { class: "rf-topbar",
@@ -72,6 +74,22 @@ pub fn TopBar() -> Element {
                     value: "{search}",
                     oninput: move |e| search.set(e.data().value()),
                 }
+            }
+            button {
+                class: "rf-btn rf-btn-ghost",
+                onclick: move |_| {
+                    let st_fb = st_feedback.clone();
+                    spawn(async move {
+                        match feedback::generate_report(&st_fb) {
+                            Ok(path) => st_fb.toast_success(format!(
+                                "反馈报告已生成：{}（请将该文件内容提交到 GitHub Issue）",
+                                path.display()
+                            )),
+                            Err(e) => st_fb.toast_error(format!("生成反馈报告失败：{e}")),
+                        }
+                    });
+                },
+                "反馈"
             }
             button {
                 class: "rf-btn rf-btn-ghost",

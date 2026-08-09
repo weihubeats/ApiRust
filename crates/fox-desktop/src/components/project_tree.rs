@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use dioxus::prelude::*;
+use fox_core::curl_parser::parse_curl;
 use fox_core::model::{Endpoint, Folder};
 use uuid::Uuid;
 
@@ -14,6 +15,7 @@ use crate::state::AppState;
 pub enum TreeAction {
     CreateFolder { parent_id: Option<Uuid> },
     CreateEndpoint { folder_id: Option<Uuid> },
+    ImportCurl { folder_id: Option<Uuid> },
     RenameFolder { id: Uuid, current: String },
     RenameEndpoint { id: Uuid, current: String },
     DeleteFolder { id: Uuid },
@@ -42,11 +44,18 @@ pub fn SideBar() -> Element {
 
     let modal: Signal<Option<TreeAction>> = use_signal(|| None);
     let mut modal_input: Signal<String> = use_signal(String::new);
+    // 导入 cURL 弹窗。
+    let curl_open: Signal<bool> = use_signal(|| false);
+    let curl_target: Signal<Option<Uuid>> = use_signal(|| None);
+    let curl_input: Signal<String> = use_signal(String::new);
 
     let dispatcher: Dispatcher = Rc::new(RefCell::new({
         let st = state.clone();
         let mut modal_sig = modal;
         let mut input = modal_input;
+        let mut co = curl_open;
+        let mut target = curl_target;
+        let mut ci = curl_input;
         move |action| match action {
             TreeAction::CreateFolder { .. }
             | TreeAction::CreateEndpoint { .. }
@@ -62,6 +71,11 @@ pub fn SideBar() -> Element {
                 input.set(init);
                 modal_sig.set(Some(action));
             }
+            TreeAction::ImportCurl { folder_id } => {
+                ci.set(String::new());
+                target.set(folder_id);
+                co.set(true);
+            }
             TreeAction::DeleteFolder { id } => st.delete_folder(id),
             TreeAction::DeleteEndpoint { id } => st.delete_endpoint(id),
             TreeAction::DuplicateEndpoint { id } => st.duplicate_endpoint(id),
@@ -71,6 +85,7 @@ pub fn SideBar() -> Element {
     use_context_provider(move || dispatcher_provided);
     let top_btn_a = dispatcher.clone();
     let top_btn_b = dispatcher.clone();
+    let top_btn_c = dispatcher.clone();
 
     let dialog_visible = modal.read().is_some();
     let dialog_title: &str = modal
@@ -113,6 +128,29 @@ pub fn SideBar() -> Element {
         let mut modal_sig = modal;
         move || modal_sig.set(None)
     };
+    // 导入 cURL：解析命令并在目标目录下创建接口。
+    let mut do_import = {
+        let st = state.clone();
+        let mut co = curl_open;
+        let mut ci = curl_input;
+        let mut target = curl_target;
+        move || {
+            let Some(folder_id) = *target.peek() else {
+                return;
+            };
+            let raw = ci.peek().clone();
+            match parse_curl(&raw) {
+                Ok(parsed) => {
+                    st.create_endpoint_from_curl(Some(folder_id), &parsed);
+                    co.set(false);
+                    ci.set(String::new());
+                    target.set(None);
+                }
+                Err(e) => st.toast_error(format!("cURL 格式无法识别：{}", e.user_message())),
+            }
+        }
+    };
+    let curl_open_flag = *curl_open.read();
     let mut ok_a = dialog_ok.clone();
     let mut ok_b = dialog_ok.clone();
     let mut cancel_a = dialog_cancel;
@@ -145,6 +183,11 @@ pub fn SideBar() -> Element {
                     class: "rf-btn rf-btn-sm",
                     onclick: move |_| top_btn_b.borrow_mut()(TreeAction::CreateEndpoint { folder_id: None }),
                     "＋ 接口",
+                }
+                button {
+                    class: "rf-btn rf-btn-sm",
+                    onclick: move |_| top_btn_c.borrow_mut()(TreeAction::ImportCurl { folder_id: None }),
+                    "导入 cURL",
                 }
             }
             for ep in endpoints.iter().filter(|e| e.folder_id.is_none()).cloned() {
@@ -192,6 +235,42 @@ pub fn SideBar() -> Element {
                 }
             }
         }
+        if curl_open_flag {
+            div {
+                class: "modal-backdrop",
+                onclick: move |_| {
+                    let mut co = curl_open;
+                    co.set(false);
+                },
+                div {
+                    class: "modal curl-modal",
+                    onclick: |e| { e.stop_propagation(); },
+                    h3 { "从 cURL 导入接口" }
+                    div {
+                        class: "hint",
+                        "粘贴浏览器「Copy as cURL」复制的命令，自动解析方法、URL、请求头、Body 与认证，并在当前位置创建接口。",
+                    }
+                    textarea {
+                        class: "rf-textarea curl-input",
+                        rows: "10",
+                        placeholder: "curl -X POST https://api.example.com/users \\\n  -H \"Content-Type: application/json\" \\\n  -u user:pass \\\n  -d \"{{\"name\":\"test\"}}\"",
+                        value: "{curl_input}",
+                        oninput: move |e| {
+                            let v = e.data().value();
+                            let mut ci = curl_input;
+                            ci.set(v);
+                        },
+                    }
+                    div { class: "rf-modal-actions",
+                        button { class: "rf-btn", onclick: move |_| {
+                            let mut co = curl_open;
+                            co.set(false);
+                        }, "取消" }
+                        button { class: "rf-btn rf-btn-primary", onclick: move |_| do_import(), "解析并导入" }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -209,6 +288,7 @@ pub fn FolderNode(
     let d2 = dispatcher.clone();
     let d3 = dispatcher.clone();
     let d4 = dispatcher.clone();
+    let d5 = dispatcher.clone();
     let children: Vec<Folder> = folders
         .iter()
         .filter(|f| f.parent_id == Some(folder.id))
@@ -239,7 +319,15 @@ pub fn FolderNode(
                     class: "rf-tree-action",
                     onclick: move |e| {
                         e.stop_propagation();
-                        (d3.borrow_mut())(TreeAction::RenameFolder { id: folder.id, current: folder.name.clone() });
+                        (d3.borrow_mut())(TreeAction::ImportCurl { folder_id: Some(folder.id) });
+                    },
+                    "导入cURL"
+                }
+                button {
+                    class: "rf-tree-action",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        (d4.borrow_mut())(TreeAction::RenameFolder { id: folder.id, current: folder.name.clone() });
                     },
                     "改名"
                 }
@@ -247,7 +335,7 @@ pub fn FolderNode(
                     class: "rf-tree-action",
                     onclick: move |e| {
                         e.stop_propagation();
-                        (d4.borrow_mut())(TreeAction::DeleteFolder { id: folder.id });
+                        (d5.borrow_mut())(TreeAction::DeleteFolder { id: folder.id });
                     },
                     "删除"
                 }
@@ -278,6 +366,7 @@ pub fn EndpointRow(ep: Endpoint, depth: usize) -> Element {
     let d1 = dispatcher.clone();
     let d2 = dispatcher.clone();
     let d3 = dispatcher.clone();
+    let d4 = dispatcher.clone();
     let is_active = state
         .active_endpoint_id
         .read()
@@ -295,9 +384,18 @@ pub fn EndpointRow(ep: Endpoint, depth: usize) -> Element {
             div { class: "tree-actions",
                 button {
                     class: "rf-tree-action",
+                    id: "import-curl-{ep.id}",
                     onclick: move |e| {
                         e.stop_propagation();
-                        (d1.borrow_mut())(TreeAction::DuplicateEndpoint { id: ep.id });
+                        (d1.borrow_mut())(TreeAction::ImportCurl { folder_id: ep.folder_id });
+                    },
+                    "导入cURL"
+                }
+                button {
+                    class: "rf-tree-action",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        (d2.borrow_mut())(TreeAction::DuplicateEndpoint { id: ep.id });
                     },
                     "复制"
                 }
@@ -305,7 +403,7 @@ pub fn EndpointRow(ep: Endpoint, depth: usize) -> Element {
                     class: "rf-tree-action",
                     onclick: move |e| {
                         e.stop_propagation();
-                        (d2.borrow_mut())(TreeAction::RenameEndpoint { id: ep.id, current: ep.name.clone() });
+                        (d3.borrow_mut())(TreeAction::RenameEndpoint { id: ep.id, current: ep.name.clone() });
                     },
                     "改名"
                 }
@@ -313,7 +411,7 @@ pub fn EndpointRow(ep: Endpoint, depth: usize) -> Element {
                     class: "rf-tree-action",
                     onclick: move |e| {
                         e.stop_propagation();
-                        (d3.borrow_mut())(TreeAction::DeleteEndpoint { id: ep.id });
+                        (d4.borrow_mut())(TreeAction::DeleteEndpoint { id: ep.id });
                     },
                     "删除"
                 }

@@ -158,6 +158,8 @@ pub async fn send_request(
     let timeout_ms = timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
     let client = Client::builder()
         .timeout(Duration::from_millis(timeout_ms))
+        // 禁用系统代理：本地开发（127.0.0.1 / localhost）不受代理干扰。
+        .no_proxy()
         .build()
         .map_err(AppError::Http)?;
 
@@ -249,6 +251,39 @@ pub async fn send_request(
         cookies,
         truncated,
     })
+}
+
+/// 把 reqwest 错误翻译为面向用户的中文提示（DNS / 超时 / TLS / 连接失败）。
+pub fn describe_http_error(e: &reqwest::Error) -> String {
+    let chain = source_chain(e);
+    if e.is_timeout() {
+        "连接超时：服务器未在限定时间内响应（默认 30 秒）".to_string()
+    } else if chain.contains("lookup")
+        || chain.contains("name or service not known")
+        || chain.contains("dns")
+        || (chain.contains("resolve") && !chain.contains("certificate"))
+    {
+        "DNS 解析失败：域名不存在或网络不可用".to_string()
+    } else if e.is_connect() {
+        "连接失败：目标拒绝连接或网络不可达".to_string()
+    } else if chain.contains("certificate") || chain.contains("tls") {
+        "TLS 证书错误：证书无效、已过期或不受信任".to_string()
+    } else if e.is_builder() {
+        "HTTP 请求构建失败".to_string()
+    } else {
+        "请求失败，服务端未返回有效响应".to_string()
+    }
+}
+
+/// 收集错误链（自身 + 所有 source）为小写文本，用于关键词识别。
+fn source_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![e.to_string().to_lowercase()];
+    let mut cur = e.source();
+    while let Some(cause) = cur {
+        parts.push(cause.to_string().to_lowercase());
+        cur = cause.source();
+    }
+    parts.join(" | ")
 }
 
 #[cfg(test)]
@@ -391,6 +426,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connection_refused_mapped_to_chinese_hint() {
+        let spec = RequestSpec::default();
+        let err = send_request(HttpMethod::GET, "http://127.0.0.1:1/", &spec, Some(3000))
+            .await
+            .unwrap_err();
+        match err {
+            AppError::Http(re) => {
+                let msg = describe_http_error(&re);
+                assert!(msg.contains("连接失败"), "意外提示：{msg}");
+            }
+            other => panic!("非 HTTP 错误：{other}"),
+        }
+    }
+
+    #[tokio::test]
     async fn timeout_is_applied() {
         // 服务端不响应：读请求后挂起。
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -416,6 +466,10 @@ mod tests {
         .await;
         assert!(err.is_err());
         assert!(start.elapsed().as_millis() < 3000);
+        if let Err(AppError::Http(re)) = err {
+            let msg = describe_http_error(&re);
+            assert!(msg.contains("超时"), "意外提示：{msg}");
+        }
     }
 
     #[tokio::test]

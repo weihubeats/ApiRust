@@ -1,0 +1,20 @@
+[package]
+name = "fox-smoke"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+fox-core = { path = "../fox-core" }
+fox-storage = { path = "../fox-storage" }
+fox-http = { path = "../fox-http" }
+fox-mock = { path = "../fox-mock" }
+fox-openapi = { path = "../fox-openapi" }
+fox-test = { path = "../fox-test" }
+fox-backup = { path = "../fox-backup" }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }

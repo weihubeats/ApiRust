@@ -2,6 +2,16 @@
 
 基于 Rust 的本地优先 API 管理工具。
 
+## 下载使用（无需安装 Rust）
+
+在项目的 GitHub **Releases** 页面（点仓库右侧 Releases）下载对应平台的二进制包，解压/安装后双击即可使用：
+
+- **Windows**：`RustFox-*-setup.exe` 安装包（自动创建开始菜单与桌面快捷方式）或便携 zip
+- **macOS**：zip 内含 `RustFox.app`，拖入「应用程序」即可
+- **Linux**：`tar.gz`，运行 `./install_linux.sh` 添加到应用菜单
+
+完整用户手册见 [docs/USER_GUIDE.md](docs/USER_GUIDE.md)。
+
 ## 技术栈
 
 - Rust（Dioxus Desktop UI、Tokio 异步运行时）
@@ -9,6 +19,15 @@
 - reqwest（HTTP 客户端）
 - axum（Mock Server）
 - openapiv3（OpenAPI 导入导出）
+
+## 构建分发包（开发者）
+
+```bash
+scripts/package.sh    # Linux / macOS：tar.gz 或 RustFox.app
+scripts/package.bat   # Windows：便携 zip + NSIS 安装包
+```
+
+推 `v*` 标签自动触发 GitHub Actions 构建三平台分发包并发布 Release（见 `.github/workflows/release.yml`）。
 
 ## 里程碑
 

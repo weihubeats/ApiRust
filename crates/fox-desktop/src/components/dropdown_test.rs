@@ -9,7 +9,7 @@ mod tests {
     use crate::components::dropdown::Dropdown;
 
     fn probe() -> Element {
-        let mut received = use_signal(|| String::new());
+        let mut received = use_signal(String::new);
         rsx! {
             Dropdown {
                 options: vec![
@@ -54,7 +54,7 @@ mod tests {
         )))
     }
 
-    fn with_converter(f: impl FnOnce() -> ()) {
+    fn with_converter(f: impl FnOnce()) {
         dioxus_html::set_event_converter(Box::new(dioxus_html::SerializedHtmlEventConverter));
         f();
     }

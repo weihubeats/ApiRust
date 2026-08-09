@@ -10,6 +10,7 @@ members = [
     "crates/fox-backup",
     "crates/fox-secret",
     "crates/fox-codegen",
+    "crates/fox-smoke",
     "crates/fox-desktop",
 ]
 

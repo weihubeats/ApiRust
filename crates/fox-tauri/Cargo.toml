@@ -1,0 +1,31 @@
+[package]
+name = "fox-tauri"
+version = "0.1.0"
+edition = "2021"
+description = "fox-core / fox-storage 的 Tauri 2 插件封装：Vue 3 前端通过 IPC 调用的 Command 层"
+
+# 独立工作区：不加入根 workspace，避免 tauri 依赖拖慢主仓构建。
+# 依赖的 fox-* crate 通过路径引用，其 workspace 继承仍解析到仓库根。
+[workspace]
+
+[dependencies]
+fox-core = { path = "../fox-core" }
+fox-storage = { path = "../fox-storage" }
+fox-http = { path = "../fox-http" }
+
+tauri = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+url = "2"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.7", features = [
+    "runtime-tokio-rustls",
+    "sqlite",
+    "uuid",
+    "chrono",
+    "json",
+    "migrate",
+] }

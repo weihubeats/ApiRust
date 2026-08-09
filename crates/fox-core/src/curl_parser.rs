@@ -125,8 +125,20 @@ pub fn parse_curl(input: &str) -> Result<CurlParsed, AppError> {
                     i += 1;
                 }
             }
-            // 不支持的参数（-v / -k / -s / -L / -o ...）忽略：仅跳过本 token。
-            other if other.starts_with('-') && other.len() > 1 => {}
+            // 未知长选项：取值型（如 --cookie ~/a.txt）跳过其值，其余仅跳过自身。
+            other if other.starts_with("--") && other.len() > 2 => {
+                if words.get(i + 1).is_some() && VALUE_LONG_OPTIONS.contains(&other) {
+                    i += 1;
+                }
+            }
+            // 未知短选项：含取值型字符（如 -b、-A，-i/-k 无值）时一并跳过其值。
+            other if other.starts_with('-') && other.len() > 1 => {
+                if words.get(i + 1).is_some()
+                    && other[1..].chars().any(|c| VALUE_SHORT_OPTS.contains(&c))
+                {
+                    i += 1;
+                }
+            }
             // 第一个非参数 token 即 URL。
             _ => {
                 if out.url.is_empty() {
@@ -168,6 +180,41 @@ fn is_value_option(name: &str) -> bool {
             | "--data-urlencode"
     )
 }
+
+/// 额外消耗一个值（空格形式 `--name value`）的常用长选项；其值不能当作 URL。
+const VALUE_LONG_OPTIONS: &[&str] = &[
+    "--user-agent",
+    "--cookie",
+    "--referer",
+    "--output",
+    "--write-out",
+    "--proxy",
+    "--cookie-jar",
+    "--cert",
+    "--form",
+    "--config",
+    "--max-time",
+    "--max-redirs",
+    "--connect-timeout",
+    "--limit-rate",
+    "--range",
+    "--upload-file",
+    "--resolve",
+    "--retry",
+    "--retry-delay",
+    "--interface",
+    "--cacert",
+    "--capath",
+    "--key",
+    "--proto",
+    "--proto-redir",
+];
+
+/// 消耗一个值（后接一个 token）的短选项字符（`-i`/`-s`/`-L`/`-k` 等无值）。
+const VALUE_SHORT_OPTS: &[char] = &[
+    'A', 'b', 'c', 'd', 'e', 'E', 'F', 'H', 'K', 'm', 'o', 'P', 'r', 'T', 'U', 'u', 'w', 'x', 'X',
+    't', 'z',
+];
 
 fn apply_value_option(
     out: &mut CurlParsed,
@@ -365,5 +412,39 @@ mod tests {
     fn parse_with_curl_bin_path() {
         let p = parse_curl("/usr/bin/curl --insecure https://api.example.com/ping").unwrap();
         assert_eq!(p.url, "https://api.example.com/ping");
+    }
+
+    /// 取值型选项（-b/-A/--cookie 等）的值不能误当成 URL。
+    #[test]
+    fn parse_cookie_flag_value_not_url() {
+        let p = parse_curl(
+            r#"curl -i --header "Content-Type:application/json" -X GET -b ~/cookie.txt http://www.baidu.com"#,
+        )
+        .unwrap();
+        assert_eq!(p.url, "http://www.baidu.com");
+        assert_eq!(p.method, HttpMethod::GET);
+        assert_eq!(p.headers.len(), 1);
+        assert_eq!(p.headers[0].key, "Content-Type");
+        assert_eq!(p.headers[0].value, "application/json");
+    }
+
+    /// 长选项空格取值形式（--cookie 等）也跳过值。
+    #[test]
+    fn parse_long_value_options_skipped() {
+        let p = parse_curl(
+            r#"curl --cookie "a=1; b=2" --user-agent "Mozilla/5.0" -x http://proxy:8080 https://api.example.com"#,
+        )
+        .unwrap();
+        assert_eq!(p.url, "https://api.example.com");
+        assert_eq!(p.method, HttpMethod::GET);
+        assert!(p.headers.is_empty());
+    }
+
+    /// 组合短选项（-ikLb 等价于 -i -k -L -b）同样跳过 -b 的值。
+    #[test]
+    fn parse_combined_short_flags_with_value() {
+        let p = parse_curl(r#"curl -ikLb "a=1" https://api.example.com"#).unwrap();
+        assert_eq!(p.url, "https://api.example.com");
+        assert_eq!(p.method, HttpMethod::GET);
     }
 }

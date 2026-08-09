@@ -310,10 +310,12 @@ impl AppState {
         let db = self.services.db.clone();
         let mut endpoints = self.endpoints;
         let mut toasts = self.toasts;
+        let st = self.clone();
         spawn(async move {
             match repo::create_endpoint(&db, project_id, folder_id, &name).await {
                 Ok(ep) => {
-                    endpoints.write().push(ep);
+                    endpoints.write().push(ep.clone());
+                    st.open_endpoint_tab(ep.id);
                     toasts.write().push(Toast {
                         id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                         kind: ToastKind::Success,
@@ -519,10 +521,12 @@ impl AppState {
         let db = self.services.db.clone();
         let mut endpoints = self.endpoints;
         let mut toasts = self.toasts;
+        let st = self.clone();
         spawn(async move {
             match repo::duplicate_endpoint(&db, endpoint_id).await {
                 Ok(ep) => {
-                    endpoints.write().push(ep);
+                    endpoints.write().push(ep.clone());
+                    st.open_endpoint_tab(ep.id);
                     toasts.write().push(Toast {
                         id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                         kind: ToastKind::Success,

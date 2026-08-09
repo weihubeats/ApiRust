@@ -42,7 +42,14 @@ pub fn TopBar() -> Element {
 
     rsx! {
         header { class: "rf-topbar",
-            div { class: "rf-logo", "RustFox" }
+            div {
+                class: "rf-logo",
+                onclick: move |_| {
+                    let mut p = state.current_page;
+                    p.set(Page::Home);
+                },
+                "RustFox",
+            }
             div { class: "rf-topbar-sep" }
             Dropdown {
                 options,

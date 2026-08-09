@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
+use dioxus::events::eval;
 use dioxus::prelude::*;
 use fox_codegen::{render as render_code, GenRequest, Lang};
 use fox_core::curl_parser::{parse_curl, CurlParsed};
@@ -1138,6 +1139,39 @@ fn label_field(label: &'static str, draft: Signal<Option<Endpoint>>, field: Auth
     }
 }
 
+/// 响应区拖拽分隔条：按下后跟随鼠标调整响应区高度（JS 直接改内联样式，拖动流畅）。
+const RESIZER_JS: &str = r#"
+(function () {
+  var bar = document.getElementById('rf-resizer');
+  if (!bar) { return; }
+  var dragging = false, startY = 0, startH = 0;
+  bar.addEventListener('pointerdown', function (e) {
+    dragging = true;
+    startY = e.clientY;
+    var resp = bar.nextElementSibling;
+    startH = resp ? resp.getBoundingClientRect().height : 240;
+    try { bar.setPointerCapture(e.pointerId); } catch (err) {}
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  bar.addEventListener('pointermove', function (e) {
+    if (!dragging) { return; }
+    var resp = bar.nextElementSibling;
+    if (!resp) { return; }
+    var h = startH + (startY - e.clientY);
+    h = Math.max(90, Math.min(2200, h));
+    resp.style.flex = '0 0 ' + h + 'px';
+    resp.style.minHeight = h + 'px';
+  });
+  function endDrag() {
+    dragging = false;
+    document.body.style.userSelect = '';
+  }
+  bar.addEventListener('pointerup', endDrag);
+  bar.addEventListener('pointercancel', endDrag);
+})();
+"#;
+
 /// 工作区页面。
 #[component]
 pub fn WorkspacePage() -> Element {
@@ -1268,13 +1302,14 @@ pub fn WorkspacePage() -> Element {
         });
     }
 
-    let Some(ep) = draft.peek().clone() else {
-        return rsx! {
-            div { class: "empty", "未选择接口，请从左侧目录选择" }
-        };
-    };
+    // 关键：不在渲染中途提前 return。提前 return 会让本页面对 draft / active_endpoint_id
+    // 等信号的订阅失效，导致打开/新建接口后页面永远不会重渲染（卡死在空态）。
+    // 因此始终把草稿读出，编辑器主体在函数末尾以条件分支渲染。
+    let ep_opt = draft.read().clone();
+    let _active_endpoint_id = *state.active_endpoint_id.read();
 
-    let method_str = ep.method.to_string();
+    if let Some(ep) = ep_opt {
+        let method_str = ep.method.to_string();
     let body_mode = ep.request.body.mode_name();
     let auth_type = auth_mode(&ep.request.auth);
     let raw_body = body_raw(&ep);
@@ -2133,7 +2168,7 @@ pub fn WorkspacePage() -> Element {
                                         class: "rf-btn rf-btn-sm rf-btn-primary",
                                         disabled: load_running_flag,
                                         onclick: move |_| {
-                                            let Some(ep) = draft.peek().clone() else {
+let Some(ep) = draft.read().clone() else {
                                                 return;
                                             };
                                             let concurrency: usize = load_concurrency
@@ -2231,6 +2266,14 @@ pub fn WorkspacePage() -> Element {
                 }
                 // M5：响应区。
                 if sending_visible || resp.is_some() {
+                    div {
+                        id: "rf-resizer",
+                        class: "rf-resizer",
+                        title: "拖动调整响应区高度",
+                        onmounted: move |_| {
+                            let _ = eval(RESIZER_JS);
+                        },
+                    }
                     div { class: "response",
                         div { class: "resp-head",
                             if let Some(r) = &resp {
@@ -2383,6 +2426,11 @@ pub fn WorkspacePage() -> Element {
                 }
             }
         }
+    } else {
+        rsx! {
+            div { class: "empty", "未选择接口，请从左侧目录选择" }
+        }
+    }
 }
 
 #[cfg(test)]

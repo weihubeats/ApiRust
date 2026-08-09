@@ -17,10 +17,10 @@ mod tests {
 
     /// 根组件：在 VirtualDom 作用域内创建状态（Signal 必须挂载到作用域）。
     fn root(_: ()) -> Element {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let pool = rt.block_on(fox_storage::db::memory_pool()).unwrap();
-        let mut state = AppState::new(Services::new(pool));
-        let project_id = Uuid::new_v4();
+        let pool = POOL.with(|s| s.borrow().clone()).expect("连接池已就绪");
+        let project_id = PROJECT.with(|s| s.borrow().clone()).expect("项目已就绪");
+        let mut state = AppState::new(Services::new(pool.clone()));
+        // 项目行在 setup 阶段已入库（外键约束），此处在状态中保持一致。
         state.projects.write().push(Project {
             id: project_id,
             name: "测试项目".into(),
@@ -51,6 +51,31 @@ mod tests {
 
     thread_local! {
         static ST: RefCell<Option<AppState>> = const { RefCell::new(None) };
+        static POOL: RefCell<Option<sqlx::SqlitePool>> = const { RefCell::new(None) };
+        static PROJECT: RefCell<Option<Uuid>> = const { RefCell::new(None) };
+    }
+
+    /// 创建内存连接池并写入项目行（SQLite 外键约束要求项目已存在），记录项目 id。
+    fn setup_pool(rt: &tokio::runtime::Runtime) -> Uuid {
+        let project_id = Uuid::new_v4();
+        let pool = rt.block_on(async {
+            let pool = fox_storage::db::memory_pool().await.unwrap();
+            let project = Project {
+                id: project_id,
+                name: "测试项目".into(),
+                description: String::new(),
+                variables: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+            fox_storage::repository::save_project(&pool, &project)
+                .await
+                .unwrap();
+            pool
+        });
+        POOL.with(|s| *s.borrow_mut() = Some(pool));
+        PROJECT.with(|s| *s.borrow_mut() = Some(project_id));
+        project_id
     }
 
     /// 所有 click 监听元素 id（按挂载顺序）。
@@ -93,14 +118,40 @@ mod tests {
         )))
     }
 
+    fn form_input(value: &str) -> Rc<dyn std::any::Any> {
+        Rc::new(PlatformEventData::new(Box::new(
+            dioxus_html::SerializedFormData::new(value.to_string(), HashMap::new(), None),
+        )))
+    }
+
+    /// 特定事件名（click / input）的监听元素 id（按挂载顺序）。
+    fn event_listeners(muts: &Mutations, name: &str) -> Vec<ElementId> {
+        let mut out = Vec::new();
+        for m in &muts.edits {
+            if let Mutation::NewEventListener { name: n, id, .. } = m {
+                if *n == name {
+                    out.push(*id);
+                }
+            }
+        }
+        out
+    }
+
     fn with_converter(f: impl FnOnce()) {
         dioxus_html::set_event_converter(Box::new(dioxus_html::SerializedHtmlEventConverter));
         f();
     }
 
+    /// 先准备内存连接池（SQLite :memory: 需在事件循环外创建），再执行测试体。
+    fn with_pool(f: impl FnOnce()) {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _ = setup_pool(&rt);
+        f();
+    }
+
     #[test]
     fn import_curl_opens_and_closes_modal() {
-        with_converter(|| {
+        with_pool(|| { with_converter(|| {
             let mut dom = VirtualDom::new_with_props(root, ());
             let m1 = dom.rebuild_to_vec();
             let state = ST.with(|s| s.borrow().clone()).expect("状态已就绪");
@@ -151,5 +202,94 @@ mod tests {
                 .collect();
             assert_eq!(fresh2.len(), 4, "接口行按钮也应弹出导入弹窗");
         });
+        });
+    }
+
+    #[test]
+    fn import_curl_from_toolbar_creates_endpoint() {
+        dioxus_html::set_event_converter(Box::new(dioxus_html::SerializedHtmlEventConverter));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let pool = fox_storage::db::memory_pool().await.unwrap();
+            let project_id = Uuid::new_v4();
+            let project = Project {
+                id: project_id,
+                name: "测试项目".into(),
+                description: String::new(),
+                variables: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+            fox_storage::repository::save_project(&pool, &project)
+                .await
+                .unwrap();
+            POOL.with(|s| *s.borrow_mut() = Some(pool));
+            PROJECT.with(|s| *s.borrow_mut() = Some(project_id));
+            let mut dom = VirtualDom::new_with_props(root, ());
+                let m1 = dom.rebuild_to_vec();
+                let state = ST.with(|s| s.borrow().clone()).expect("状态已就绪");
+                let clicks1 = event_listeners(&m1, "click");
+                let inputs1 = event_listeners(&m1, "input");
+
+                // 顶栏「导入 cURL」是第三个 click 监听（＋ 文件夹、＋ 接口、导入 cURL）。
+                let toolbar_btn = clicks1[2];
+                dom.handle_event("click", mouse(), toolbar_btn, true);
+                let m2 = dom.render_immediate_to_vec();
+                let clicks2 = event_listeners(&m2, "click");
+                let modal_ids: Vec<ElementId> = clicks2
+                    .iter()
+                    .filter(|id| !clicks1.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(modal_ids.len(), 4, "顶栏导入应弹出弹窗");
+
+                // 弹窗 textarea（新增的 input 监听）。
+                let inputs2 = event_listeners(&m2, "input");
+                let textarea_ids: Vec<ElementId> = inputs2
+                    .iter()
+                    .filter(|id| !inputs1.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(textarea_ids.len(), 1, "应有一个 textarea");
+                dom.handle_event(
+                    "input",
+                    form_input("curl -X POST -H 'Content-Type: application/json' -d '{\"a\":1}' https://api.example.com/users"),
+                    textarea_ids[0],
+                    true,
+                );
+                let _m3 = dom.render_immediate_to_vec();
+
+                // 点「解析并导入」（新增监听中的最后一个）。
+                dom.handle_event("click", mouse(), modal_ids[3], true);
+                let m4 = dom.render_immediate_to_vec();
+
+                // 弹窗应关闭。
+                let clicks4 = event_listeners(&m4, "click");
+                let fresh: Vec<ElementId> = clicks4
+                    .iter()
+                    .filter(|id| !clicks1.contains(id))
+                    .copied()
+                    .collect();
+                assert!(fresh.is_empty(), "导入后弹窗应关闭，残留监听：{fresh:?}");
+
+                // 异步创建接口：泵几轮让 spawn 完成。
+                for _ in 0..20 {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    let _ = dom.render_immediate_to_vec();
+                }
+                let eps = state.endpoints.read().clone();
+                let toasts: Vec<String> = state
+                    .toasts
+                    .read()
+                    .iter()
+                    .map(|t| t.message.clone())
+                    .collect();
+                assert!(
+                    eps.iter().any(|e| e.path == "https://api.example.com/users"
+                        && e.method == HttpMethod::POST),
+                    "应在项目根创建 POST 接口，实际：{:?}；toasts：{toasts:?}",
+                    eps.iter().map(|e| (e.name.clone(), e.path.clone())).collect::<Vec<_>>()
+                );
+            });
     }
 }

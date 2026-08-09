@@ -27,6 +27,12 @@ pub enum AppError {
     #[error("test error: {0}")]
     Test(String),
 
+    #[error("script error: {0}")]
+    ScriptError(String),
+
+    #[error("websocket error: {0}")]
+    WebSocket(String),
+
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -43,6 +49,8 @@ impl AppError {
             AppError::OpenApi(msg) => msg.clone(),
             AppError::Mock(msg) => msg.clone(),
             AppError::Test(msg) => msg.clone(),
+            AppError::ScriptError(msg) => msg.clone(),
+            AppError::WebSocket(msg) => msg.clone(),
             AppError::Json(_) => "JSON 解析失败".to_string(),
         }
     }
@@ -59,4 +67,12 @@ pub fn validation(msg: impl Into<String>) -> AppError {
 
 pub fn openapi_error(msg: impl Into<String>) -> AppError {
     AppError::OpenApi(msg.into())
+}
+
+pub fn script_error(msg: impl Into<String>) -> AppError {
+    AppError::ScriptError(msg.into())
+}
+
+pub fn ws_error(msg: impl Into<String>) -> AppError {
+    AppError::WebSocket(msg.into())
 }

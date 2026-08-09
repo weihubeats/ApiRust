@@ -58,16 +58,17 @@ svg { display: block; }
 .rf-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 32px; padding: 0 14px; border-radius: var(--r-s);
-  border: 1px solid transparent; font-weight: 500; cursor: pointer;
-  user-select: none;
+  border: 1px solid var(--border); font-weight: 500; cursor: pointer;
+  user-select: none; background: var(--panel-2); color: var(--text);
   transition: background .15s, border-color .15s, color .15s, transform .05s;
 }
+.rf-btn:hover { background: var(--border-2); border-color: var(--border-2); }
 .rf-btn:active { transform: translateY(1px); }
 .rf-btn:disabled { opacity: .5; cursor: not-allowed; }
-.rf-btn-primary { background: var(--accent); color: #fff; }
-.rf-btn-primary:hover { background: var(--accent-2); }
+.rf-btn-primary { background: var(--accent); color: #fff; border-color: transparent; }
+.rf-btn-primary:hover { background: var(--accent-2); border-color: transparent; }
 .rf-btn-ghost { background: transparent; border-color: var(--border); color: var(--text-2); }
-.rf-btn-ghost:hover { background: var(--panel-2); color: var(--text); }
+.rf-btn-ghost:hover { background: var(--panel-2); color: var(--text); border-color: var(--border-2); }
 .rf-btn-sm { height: 26px; padding: 0 10px; font-size: 12px; }
 
 
@@ -103,7 +104,7 @@ svg { display: block; }
   padding: 0 16px; background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
-.rf-logo { font-size: 15px; font-weight: 700; color: var(--accent); }
+.rf-logo { font-size: 15px; font-weight: 700; color: var(--accent); cursor: pointer; }
 .rf-topbar-sep { width: 1px; height: 20px; background: var(--border); }
 .rf-topbar-spacer { flex: 1; }
 .rf-search { position: relative; width: 280px; }
@@ -374,6 +375,11 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
 .kv-table .row-actions { width: 72px; text-align: center; }
 
 /* 响应区 */
+.rf-resizer { height: 6px; flex-shrink: 0; cursor: row-resize; position: relative; }
+.rf-resizer::after { content: ''; position: absolute; left: 0; right: 0; top: 50%;
+  height: 2px; transform: translateY(-50%); border-radius: 2px;
+  background: transparent; transition: background .12s; }
+.rf-resizer:hover::after, .rf-resizer:active::after { background: var(--accent); }
 .response { display: flex; flex-direction: column; flex: 1; min-height: 0;
   border-top: 1px solid var(--border); }
 .resp-head { display: flex; gap: var(--s-3); align-items: center; padding: var(--s-2) var(--s-3);

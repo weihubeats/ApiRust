@@ -128,20 +128,18 @@ pub fn SideBar() -> Element {
         let mut modal_sig = modal;
         move || modal_sig.set(None)
     };
-    // 导入 cURL：解析命令并在目标目录下创建接口。
+    // 导入 cURL：解析命令并在目标目录下创建接口（cursor_target 为 None 表示项目根目录）。
     let mut do_import = {
         let st = state.clone();
         let mut co = curl_open;
         let mut ci = curl_input;
         let mut target = curl_target;
         move || {
-            let Some(folder_id) = *target.peek() else {
-                return;
-            };
+            let folder_id = *target.peek();
             let raw = ci.peek().clone();
             match parse_curl(&raw) {
                 Ok(parsed) => {
-                    st.create_endpoint_from_curl(Some(folder_id), &parsed);
+                    st.create_endpoint_from_curl(folder_id, &parsed);
                     co.set(false);
                     ci.set(String::new());
                     target.set(None);

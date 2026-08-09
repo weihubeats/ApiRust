@@ -3,3 +3,6 @@
 *.db
 /dist
 /assets/icons/rustfox.iconset
+
+__pycache__/
+*.pyc

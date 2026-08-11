@@ -81,9 +81,15 @@ elif [[ "$OS" = "macos" ]]; then
     cp "$ROOT/docs/USER_GUIDE.md" "$STAGE/USER_GUIDE.md"
     ZBALL="$DIST/RustFox-$VERSION-macos-$ARCH.zip"
     (cd "$STAGE" && zip -qr "$ZBALL" RustFox.app README.md USER_GUIDE.md)
-    rm -rf "$STAGE"
     echo "==> 产物: $ZBALL（内含 RustFox.app + README + 使用手册）"
-    echo "    macOS 用户直接双击 RustFox.app，或拖入 /Applications"
+
+    # DMG（拖拽安装布局：RustFox.app + Applications 软链）
+    DMG="$DIST/RustFox-$VERSION-macos-$ARCH.dmg"
+    ln -s /Applications "$STAGE/Applications"
+    hdiutil create -volname "RustFox" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+    rm -rf "$STAGE"
+    echo "==> 产物: $DMG"
+    echo "    macOS 用户双击 dmg，把 RustFox.app 拖入 Applications 即可"
 fi
 
 echo "==> 完成。所有产物在: $DIST/"

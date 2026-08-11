@@ -7,7 +7,7 @@
 在项目的 GitHub **Releases** 页面（点仓库右侧 Releases）下载对应平台的二进制包，解压/安装后双击即可使用：
 
 - **Windows**：`RustFox-*-setup.exe` 安装包（自动创建开始菜单与桌面快捷方式）或便携 zip
-- **macOS**：zip 内含 `RustFox.app`，拖入「应用程序」即可
+- **macOS**：`RustFox-*-macos-*.dmg`（拖拽安装，推荐）或 zip（内含 `RustFox.app`，拖入「应用程序」即可）
 - **Linux**：`tar.gz`，解压后运行 `./install_linux.sh` 添加到应用菜单
 
 ### 基本使用流程
@@ -45,7 +45,7 @@ scripts/package.bat   # Windows：便携 zip + NSIS 安装包
 | 平台 | 脚本 | 产物 |
 | --- | --- | --- |
 | Linux | `scripts/package.sh` | `dist/RustFox-<version>-linux-<arch>.tar.gz`（含安装脚本） |
-| macOS | `scripts/package.sh` | `dist/RustFox-<version>-macos-<arch>.zip`（内含 `RustFox.app`） |
+| macOS | `scripts/package.sh` | `dist/RustFox-<version>-macos-<arch>.zip` + `dist/RustFox-<version>-macos-<arch>.dmg`（内含 `RustFox.app`） |
 | Windows | `scripts/package.bat` | `dist/RustFox-<version>-windows-x86_64.zip`（便携版） + `dist/RustFox-<version>-setup.exe`（NSIS 安装包） |
 
 注意事项：

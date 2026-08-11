@@ -1,6 +1,6 @@
 [package]
 name = "fox-tauri"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 description = "fox-core / fox-storage 的 Tauri 2 插件封装：Vue 3 前端通过 IPC 调用的 Command 层"
 

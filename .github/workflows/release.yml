@@ -116,7 +116,7 @@ jobs:
             无需安装 Rust，下载对应平台压缩包解压即用。
 
             - **Windows**: `RustFox-*-setup.exe`（安装包，自动创建开始菜单与桌面快捷方式）或 `RustFox-*-windows-x86_64.zip`（便携版）
-            - **macOS**: `RustFox-*-macos-*.zip`（内含 RustFox.app，拖入「应用程序」即可）
+            - **macOS**: `RustFox-*-macos-*.dmg`（拖拽安装，推荐）或 `RustFox-*-macos-*.zip`（内含 RustFox.app，拖入「应用程序」即可）
             - **Linux**: `RustFox-*-linux-*.tar.gz`（解压后运行 `./install_linux.sh` 添加到应用菜单）
 
             使用手册：[docs/USER_GUIDE.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/USER_GUIDE.md)

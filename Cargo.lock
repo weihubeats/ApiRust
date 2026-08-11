@@ -1647,7 +1647,7 @@ dependencies = [
 
 [[package]]
 name = "fox-backup"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bytes",
  "chrono",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "fox-codegen"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "base64 0.22.1",
  "fox-core",
@@ -1669,7 +1669,7 @@ dependencies = [
 
 [[package]]
 name = "fox-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1686,7 +1686,7 @@ dependencies = [
 
 [[package]]
 name = "fox-desktop"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1716,7 +1716,7 @@ dependencies = [
 
 [[package]]
 name = "fox-http"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "fox-mock"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "axum",
  "bytes",
@@ -1759,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "fox-openapi"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "chrono",
  "fox-core",
@@ -1774,7 +1774,7 @@ dependencies = [
 
 [[package]]
 name = "fox-secret"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -1785,7 +1785,7 @@ dependencies = [
 
 [[package]]
 name = "fox-smoke"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "chrono",
  "fox-backup",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "fox-storage"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -1820,7 +1820,7 @@ dependencies = [
 
 [[package]]
 name = "fox-test"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "axum",
  "bytes",

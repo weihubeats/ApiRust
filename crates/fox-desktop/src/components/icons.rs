@@ -71,6 +71,15 @@ pub fn ImportIcon() -> Element {
     })
 }
 
+/// 更多操作（竖排三点）。
+pub fn MoreIcon() -> Element {
+    svg_base(rsx! {
+        circle { cx: "12", cy: "5", r: "1.6" }
+        circle { cx: "12", cy: "12", r: "1.6" }
+        circle { cx: "12", cy: "19", r: "1.6" }
+    })
+}
+
 /// 反馈（气泡）。
 pub fn BugIcon() -> Element {
     svg_base(rsx! {

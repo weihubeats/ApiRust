@@ -2,6 +2,8 @@
 
 use sqlx::SqlitePool;
 
+use std::collections::HashMap;
+
 use fox_storage::db::memory_pool;
 use fox_storage::repository as repo;
 
@@ -172,7 +174,7 @@ async fn environment_crud() {
     let db = pool().await;
     let project = repo::create_project(&db, "P", "").await.unwrap();
 
-    let env = repo::create_environment(&db, project.id, "local")
+    let env = repo::create_environment(&db, project.id, "local", &HashMap::new())
         .await
         .unwrap();
     assert_eq!(env.name, "local");
@@ -225,7 +227,7 @@ async fn cascade_delete_project() {
     let ep = repo::create_endpoint(&db, project.id, Some(folder.id), "E")
         .await
         .unwrap();
-    let env = repo::create_environment(&db, project.id, "E")
+    let env = repo::create_environment(&db, project.id, "E", &HashMap::new())
         .await
         .unwrap();
     assert_eq!(

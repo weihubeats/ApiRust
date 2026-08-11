@@ -565,13 +565,14 @@ pub async fn create_environment(
     db: &SqlitePool,
     project_id: Uuid,
     name: &str,
+    variables: &HashMap<String, String>,
 ) -> Result<Environment> {
     let now = Utc::now();
     let model = Environment {
         id: Uuid::new_v4(),
         project_id,
         name: name.to_string(),
-        variables: HashMap::new(),
+        variables: variables.clone(),
         created_at: now,
         updated_at: now,
     };

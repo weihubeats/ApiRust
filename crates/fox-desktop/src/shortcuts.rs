@@ -48,11 +48,48 @@ const SHORTCUTS_JS: &str = r#"
 })();
 "#;
 
+/// 注入的 JS：拦截 element 为 null 的 user_event。
+/// dioxus-desktop 上游缺陷（DioxusLabs/dioxus#2566）：事件目标位于 dioxus 树外
+/// （无 data-dioxus-id）时，解释器会发出 element:null，宿主端反序列化
+/// ElementId(usize) 失败并打印 "invalid type: null, expected usize"。
+/// 此类事件的监听器本就不存在，直接丢弃即可（等价于上游处理结果）。
+///
+/// 注意：不能改写 window.ipc.postMessage —— wry 用 Object.freeze 冻结了该对象，
+/// 赋值静默失败，守卫形同虚设（历史 bug）。正确做法是包一层
+/// window.interpreter.handleEvent：它是所有 DOM 事件序列化进 IPC 的唯一入口，
+/// 且其原型对象可写。
+const USER_EVENT_GUARD_JS: &str = r#"
+(function () {
+  var interp = window.interpreter;
+  if (!interp) return;
+  var proto = Object.getPrototypeOf(interp);
+  var orig = proto && proto.handleEvent;
+  if (typeof orig !== 'function' || orig.__rfGuardInstalled) return;
+  var hasDioxusId = function (node) {
+    while (node) {
+      if (node.getAttribute && node.getAttribute('data-dioxus-id') !== null) {
+        return true;
+      }
+      node = node.parentNode;
+    }
+    return false;
+  };
+  proto.handleEvent = function (event, name, bubbles) {
+    if (event && event.target && !hasDioxusId(event.target)) {
+      return;
+    }
+    return orig.call(this, event, name, bubbles);
+  };
+  proto.handleEvent.__rfGuardInstalled = true;
+})();
+"#;
+
 /// 侧边栏树操作目标索引：无项目时由 state 方法兜底提示。
 #[component]
 pub fn KeyboardShortcuts() -> Element {
     let state = use_context::<AppState>();
     let handle = eval(SHORTCUTS_JS);
+    let _guard = eval(USER_EVENT_GUARD_JS);
     let st = state.clone();
 
     use_effect(move || {
@@ -147,7 +184,10 @@ mod tests {
             }
 
             // 干扰消息不应导致任何创建。
-            assert!(!state.folders.read().is_empty(), "Ctrl+Shift+F 应创建文件夹");
+            assert!(
+                !state.folders.read().is_empty(),
+                "Ctrl+Shift+F 应创建文件夹"
+            );
             assert!(!state.endpoints.read().is_empty(), "Ctrl+N 应创建接口");
         });
     }

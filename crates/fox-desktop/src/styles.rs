@@ -328,6 +328,33 @@ code, pre { font-family: var(--mono); }
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .rf-body-editor { width: 100%; min-height: 220px; height: 70%; }
+/* 请求 Body 语法高亮编辑区：透明 textarea + 底层高亮 pre 叠加 */
+.body-editor-fl { position: relative; width: 100%; }
+.body-editor-fl .rf-body-editor {
+  height: auto; min-height: 220px;
+  width: 100%;
+  color: transparent; caret-color: #e2e8f0;
+  background: transparent;
+  position: relative; z-index: 2;
+  font-size: 13px; line-height: 1.5;
+  border: 0;
+}
+.body-editor-hl {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  margin: 0; padding: 8px 12px;
+  font-family: var(--mono); font-size: 13px; line-height: 1.5;
+  color: transparent; user-select: none;
+  white-space: pre-wrap; word-break: break-word; word-wrap: break-word;
+  pointer-events: none; overflow: auto; z-index: 1;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.body-editor-hl::-webkit-scrollbar { display: none; }
+.body-editor-hl .hl-k { color: #7dd3fc; }
+.body-editor-hl .hl-s { color: #86efac; }
+.body-editor-hl .hl-n { color: #fbbf24; }
+.body-editor-hl .hl-b { color: #c084fc; }
+.body-editor-hl .hl-p { color: #94a3b8; }
+.body-editor-hl .hl-c { color: var(--muted); font-style: italic; }
 .rf-editor-desc { resize: none; }
 .rf-oapi-input { width: 100%; height: 180px; margin-top: var(--s-2); box-sizing: border-box; }
 .rf-mock-field { flex: 1; box-sizing: border-box; font-size: 12.5px; resize: vertical; }
@@ -463,6 +490,12 @@ code, pre { font-family: var(--mono); }
 .rf-tree-action:hover { color: var(--text); background: var(--white-weak); }
 .rf-tree-action:active { background: var(--accent-soft); }
 .kv-table .rf-tree-action:hover { color: var(--danger); background: var(--danger-weak); }
+/* 接口行「⋯」更多操作下拉 */
+.tree-more-wrap { position: relative; display: inline-flex; }
+.rf-tree-more { display: inline-flex; align-items: center; padding: 2px 6px; }
+.tree-more-menu { left: auto; right: 0; min-width: 128px; }
+.tree-more-menu .rf-dd-danger { color: var(--danger); }
+.tree-more-menu .rf-dd-danger:hover { background: var(--danger-weak); color: var(--danger); }
 
 /* HTTP 方法徽章 */
 .rf-method-chip { min-width: 46px; text-align: center; padding: 2px var(--s-1);
@@ -481,6 +514,7 @@ code, pre { font-family: var(--mono); }
   border: 1px solid var(--border-2); border-radius: var(--r-l); padding: var(--s-5);
   box-shadow: var(--sh-2); }
 .modal h3 { margin-bottom: var(--s-3); font-size: 15px; font-weight: 650; }
+.confirm-message { margin: 0 0 var(--s-2); color: var(--muted); font-size: 13px; line-height: 1.6; }
 .rf-modal-actions { display: flex; justify-content: flex-end; gap: var(--s-2);
   margin-top: var(--s-3); }
 .history-modal { display: flex; flex-direction: column; max-height: 74vh; width: 680px; }

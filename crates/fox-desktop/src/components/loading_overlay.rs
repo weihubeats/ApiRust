@@ -112,9 +112,15 @@ mod tests {
             assert!(
                 texts(&m2).iter().any(|t| t.contains("正在同步接口")),
                 "应渲染加载文案，实际 edits：{:?}",
-                m2.edits.iter().map(|m| format!("{m:?}")).collect::<Vec<_>>()
+                m2.edits
+                    .iter()
+                    .map(|m| format!("{m:?}"))
+                    .collect::<Vec<_>>()
             );
-            assert!(*state.is_loading.read(), "set_loading 后 is_loading 应为 true");
+            assert!(
+                *state.is_loading.read(),
+                "set_loading 后 is_loading 应为 true"
+            );
             assert_eq!(
                 state.loading_text.read().clone(),
                 "正在同步接口...",
@@ -130,11 +136,16 @@ mod tests {
                 .filter(|m| matches!(m, Mutation::ReplaceWith { .. }))
                 .count();
             assert!(removed > 0, "clear_loading 后应卸载遮罩");
-            assert!(!*state.is_loading.read(), "clear_loading 后 is_loading 应为 false");
+            assert!(
+                !*state.is_loading.read(),
+                "clear_loading 后 is_loading 应为 false"
+            );
         });
     }
 
     fn mouse() -> Rc<dyn std::any::Any> {
-        Rc::new(PlatformEventData::new(Box::new(SerializedMouseData::default())))
+        Rc::new(PlatformEventData::new(Box::new(
+            SerializedMouseData::default(),
+        )))
     }
 }

@@ -286,9 +286,7 @@ mod tests {
     #[test]
     fn empty_state_renders_three_action_buttons_without_modals() {
         with_pool(|| {
-            dioxus_html::set_event_converter(Box::new(
-                dioxus_html::SerializedHtmlEventConverter,
-            ));
+            dioxus_html::set_event_converter(Box::new(dioxus_html::SerializedHtmlEventConverter));
             let mut dom = VirtualDom::new_with_props(root, ());
             let m1 = dom.rebuild_to_vec();
             // 静态文案/类名随 LoadTemplate 内置，Mutation 中不可见；
@@ -308,9 +306,7 @@ mod tests {
     #[test]
     fn new_endpoint_button_creates_endpoint() {
         with_pool(|| {
-            dioxus_html::set_event_converter(Box::new(
-                dioxus_html::SerializedHtmlEventConverter,
-            ));
+            dioxus_html::set_event_converter(Box::new(dioxus_html::SerializedHtmlEventConverter));
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 let mut dom = VirtualDom::new_with_props(root, ());
@@ -326,7 +322,10 @@ mod tests {
                 let eps = state.endpoints.read().clone();
                 assert_eq!(eps.len(), 1, "应创建 1 个接口");
                 assert_eq!(eps[0].name, "未命名接口");
-                assert!(state.active_endpoint_id.peek().is_some(), "应打开新接口标签");
+                assert!(
+                    state.active_endpoint_id.peek().is_some(),
+                    "应打开新接口标签"
+                );
             });
         });
     }
@@ -334,9 +333,7 @@ mod tests {
     #[test]
     fn curl_import_creates_endpoint_from_command() {
         with_pool(|| {
-            dioxus_html::set_event_converter(Box::new(
-                dioxus_html::SerializedHtmlEventConverter,
-            ));
+            dioxus_html::set_event_converter(Box::new(dioxus_html::SerializedHtmlEventConverter));
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 let mut dom = VirtualDom::new_with_props(root, ());
@@ -392,9 +389,7 @@ mod tests {
     #[test]
     fn openapi_import_creates_endpoints_and_closes_modal() {
         with_pool(|| {
-            dioxus_html::set_event_converter(Box::new(
-                dioxus_html::SerializedHtmlEventConverter,
-            ));
+            dioxus_html::set_event_converter(Box::new(dioxus_html::SerializedHtmlEventConverter));
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 let mut dom = VirtualDom::new_with_props(root, ());

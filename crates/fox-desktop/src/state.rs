@@ -180,7 +180,7 @@ impl AppState {
         let toast = Toast { id, kind, message };
         // 4 秒后自动消失。
         let mut toasts_sink = toasts;
-        spawn(async move {
+        spawn_forever(async move {
             tokio::time::sleep(std::time::Duration::from_secs(4)).await;
             toasts_sink.write().retain(|t| t.id != id);
         });
@@ -192,7 +192,7 @@ impl AppState {
         let db = self.services.db.clone();
         let mut projects = self.projects;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::list_projects(&db).await {
                 Ok(list) => projects.set(list),
                 Err(e) => toasts.write().push(Toast {
@@ -214,7 +214,7 @@ impl AppState {
         let mut projects = self.projects;
         let mut toasts = self.toasts;
         let name = name.to_string();
-        spawn(async move {
+        spawn_forever(async move {
             match repo::create_project(&db, &name, &description).await {
                 Ok(p) => {
                     projects.write().push(p);
@@ -241,7 +241,7 @@ impl AppState {
         let mut current = self.current_project_id;
         let mut page = self.current_page;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::delete_project(&db, project_id).await {
                 Ok(()) => {
                     projects.write().retain(|p| p.id != project_id);
@@ -287,7 +287,7 @@ impl AppState {
         // 兜底：任务即使 panic / 提前 drop 也会在 Drop 时复位加载标记，
         // 避免界面永远卡在「正在加载项目数据…」。
         let _guard = LoadingReset(loading);
-        spawn(async move {
+        spawn_forever(async move {
             match repo::list_folders(&db, project_id).await {
                 Ok(list) => folders.set(list),
                 Err(e) => toasts.write().push(Toast {
@@ -331,7 +331,7 @@ impl AppState {
         // 超时兜底：即使刷新任务被中断/调度异常，最多 10 秒后也强制复位
         // 加载标记，保证界面不会永远卡在「正在加载项目数据…」。
         let mut watchdog_loading = self.is_loading;
-        spawn(async move {
+        spawn_forever(async move {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             if *watchdog_loading.read() {
                 tracing::warn!("refresh project data watchdog fired, is_loading forced reset");
@@ -353,7 +353,7 @@ impl AppState {
         let db = self.services.db.clone();
         let mut folders = self.folders;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::create_folder(&db, project_id, parent_id, &name).await {
                 Ok(folder) => {
                     folders.write().push(folder);
@@ -382,7 +382,7 @@ impl AppState {
         let mut endpoints = self.endpoints;
         let mut toasts = self.toasts;
         let st = self.clone();
-        spawn(async move {
+        spawn_forever(async move {
             match repo::create_endpoint(&db, project_id, folder_id, &name).await {
                 Ok(ep) => {
                     endpoints.write().push(ep.clone());
@@ -439,7 +439,7 @@ impl AppState {
         let mut endpoints = self.endpoints;
         let mut toasts = self.toasts;
         let st = self.clone();
-        spawn(async move {
+        spawn_forever(async move {
             match repo::save_endpoint(&db, &model).await {
                 Ok(()) => {
                     endpoints.write().push(model.clone());
@@ -464,7 +464,7 @@ impl AppState {
         let db = self.services.db.clone();
         let mut folders = self.folders;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::get_folder(&db, folder_id).await {
                 Ok(mut folder) => {
                     folder.name = name;
@@ -501,7 +501,7 @@ impl AppState {
         let db = self.services.db.clone();
         let mut endpoints = self.endpoints;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::get_endpoint(&db, endpoint_id).await {
                 Ok(mut ep) => {
                     ep.name = name;
@@ -538,7 +538,7 @@ impl AppState {
         let db = self.services.db.clone();
         let mut folders = self.folders;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::delete_folder(&db, folder_id).await {
                 Ok(()) => {
                     folders.write().retain(|f| f.id != folder_id);
@@ -564,7 +564,7 @@ impl AppState {
         let mut active = self.active_endpoint_id;
         let mut open_tabs = self.open_tabs;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::delete_endpoint(&db, endpoint_id).await {
                 Ok(()) => {
                     endpoints.write().retain(|e| e.id != endpoint_id);
@@ -587,32 +587,6 @@ impl AppState {
         });
     }
 
-    /// 复制接口。
-    pub fn duplicate_endpoint(&self, endpoint_id: Uuid) {
-        let db = self.services.db.clone();
-        let mut endpoints = self.endpoints;
-        let mut toasts = self.toasts;
-        let st = self.clone();
-        spawn(async move {
-            match repo::duplicate_endpoint(&db, endpoint_id).await {
-                Ok(ep) => {
-                    endpoints.write().push(ep.clone());
-                    st.open_endpoint_tab(ep.id);
-                    toasts.write().push(Toast {
-                        id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                        kind: ToastKind::Success,
-                        message: "接口已复制".into(),
-                    });
-                }
-                Err(e) => toasts.write().push(Toast {
-                    id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                    kind: ToastKind::Error,
-                    message: format!("复制接口失败：{}", e.user_message()),
-                }),
-            }
-        });
-    }
-
     /// 打开接口 Tab 并进入工作区。
     pub fn open_endpoint_tab(&self, endpoint_id: Uuid) {
         let mut page = self.current_page;
@@ -630,7 +604,7 @@ impl AppState {
         let db = self.services.db.clone();
         let mut endpoints = self.endpoints;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::update_endpoint(&db, &ep).await {
                 Ok(updated) => {
                     let mut list = endpoints.write();
@@ -653,7 +627,7 @@ impl AppState {
     }
 
     /// 新建环境并设为当前环境。
-    pub fn create_environment(&self, name: String) {
+    pub fn create_environment(&self, name: String, variables: HashMap<String, String>) {
         let Some(project_id) = self.current_project() else {
             self.toast_error("未选择项目");
             return;
@@ -662,8 +636,8 @@ impl AppState {
         let mut environments = self.environments;
         let mut current = self.current_environment_id;
         let mut toasts = self.toasts;
-        spawn(async move {
-            match repo::create_environment(&db, project_id, &name).await {
+        spawn_forever(async move {
+            match repo::create_environment(&db, project_id, &name, &variables).await {
                 Ok(env) => {
                     environments.write().push(env.clone());
                     current.set(Some(env.id));
@@ -688,7 +662,7 @@ impl AppState {
         let mut environments = self.environments;
         let mut current = self.current_environment_id;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::delete_environment(&db, environment_id).await {
                 Ok(()) => {
                     environments.write().retain(|e| e.id != environment_id);
@@ -715,7 +689,7 @@ impl AppState {
         let db = self.services.db.clone();
         let mut environments = self.environments;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::update_environment(&db, &environment).await {
                 Ok(updated) => {
                     let mut list = environments.write();
@@ -741,6 +715,15 @@ impl AppState {
     pub fn select_environment(&self, id: Option<Uuid>) {
         let mut current = self.current_environment_id;
         current.set(id);
+        let db = self.services.db.clone();
+        spawn_forever(async move {
+            let _ = repo::set_setting(
+                &db,
+                "current_environment_id",
+                &id.map(|u| u.to_string()).unwrap_or_default(),
+            )
+            .await;
+        });
     }
 
     /// 保存项目变量。
@@ -763,7 +746,7 @@ impl AppState {
         let db = self.services.db.clone();
         let mut projects = self.projects;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::update_project(&db, &project).await {
                 Ok(updated) => {
                     let mut list = projects.write();
@@ -808,7 +791,7 @@ impl AppState {
         let mut toasts = self.toasts;
         let steps = self.steps;
         let count = imported.len();
-        spawn(async move {
+        spawn_forever(async move {
             let mut created = 0usize;
             let mut updated_count = 0usize;
             let mut skipped = 0usize;
@@ -924,7 +907,7 @@ impl AppState {
         let eps = self.endpoints.read().clone();
         let db = self.services.db.clone();
         let steps = self.steps;
-        spawn(async move {
+        spawn_forever(async move {
             let mut examples: HashMap<Uuid, Vec<ResponseExample>> = HashMap::new();
             for ep in &eps {
                 match repo::list_response_examples(&db, ep.id).await {
@@ -967,7 +950,7 @@ impl AppState {
         let mut handle = self.mock_handle;
         let mut toasts = self.toasts;
         let steps = self.steps;
-        spawn(async move {
+        spawn_forever(async move {
             // 1. 加载响应示例。
             let mut examples_by_ep: HashMap<Uuid, Vec<ResponseExample>> = HashMap::new();
             for ep in &eps {
@@ -1040,7 +1023,7 @@ impl AppState {
         let mut handle = self.mock_handle;
         let mut toasts = self.toasts;
         let steps = self.steps;
-        spawn(async move {
+        spawn_forever(async move {
             if let Some(inner) = handle.write().take() {
                 let taken = inner.lock().await.take();
                 if let Some(server) = taken {
@@ -1080,7 +1063,7 @@ impl AppState {
         let db = self.services.db.clone();
         let st = self.clone();
         let steps = self.steps;
-        spawn(async move {
+        spawn_forever(async move {
             let mut examples: Vec<fox_core::model::ResponseExample> = Vec::new();
             for ep in &endpoints {
                 match repo::list_response_examples(&db, ep.id).await {
@@ -1144,7 +1127,7 @@ impl AppState {
         let db = self.services.db.clone();
         let st = self.clone();
         let steps = self.steps;
-        spawn(async move {
+        spawn_forever(async move {
             let restored = fox_backup::restore_backup(&file);
             // 新项目先入库，再按引用关系写入子对象。
             if let Err(e) = repo::save_project(&db, &restored.project).await {
@@ -1255,7 +1238,7 @@ impl AppState {
         let db = self.services.db.clone();
         let mut rules = self.mock_rules;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::create_mock_rule(&db, project_id, &rule).await {
                 Ok(saved) => {
                     rules.write().push(saved);
@@ -1279,7 +1262,7 @@ impl AppState {
         let db = self.services.db.clone();
         let mut rules = self.mock_rules;
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             match repo::delete_mock_rule(&db, rule_id).await {
                 Ok(()) => {
                     rules.write().retain(|r| r.id != rule_id);
@@ -1310,7 +1293,7 @@ impl AppState {
         let mut st = self.clone();
         let db = self.services.db.clone();
         st.update_error.set(None);
-        spawn(async move {
+        spawn_forever(async move {
             let result = crate::updater::fetch_latest_release().await;
             checking.set(false);
             match result {
@@ -1341,9 +1324,7 @@ impl AppState {
                     toasts.write().push(Toast {
                         id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                         kind: ToastKind::Info,
-                        message: format!(
-                            "发现新版本 v{latest}（设置 → 关于 可查看详情并更新）"
-                        ),
+                        message: format!("发现新版本 v{latest}（设置 → 关于 可查看详情并更新）"),
                     });
                 }
                 Err(e) => {
@@ -1388,7 +1369,7 @@ impl AppState {
         downloaded.set(None);
         let url = info.download_url.clone();
         let file_name = info.file_name.clone();
-        spawn(async move {
+        spawn_forever(async move {
             let mut progress_sink = progress;
             let result = crate::updater::download_update(&url, &file_name, |p| {
                 progress_sink.set(Some(p));
@@ -1408,10 +1389,7 @@ impl AppState {
                     toasts.write().push(Toast {
                         id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                         kind: ToastKind::Success,
-                        message: format!(
-                            "更新包下载完成，已自动打开：{}",
-                            path.display()
-                        ),
+                        message: format!("更新包下载完成，已自动打开：{}", path.display()),
                     });
                 }
                 Err(e) => {
@@ -1435,7 +1413,7 @@ impl AppState {
         let db = self.services.db.clone();
         let st = self.clone();
         let mut toasts = self.toasts;
-        spawn(async move {
+        spawn_forever(async move {
             let version = info.version.clone();
             if let Err(e) = repo::set_setting(&db, "skip_update_version", &version).await {
                 toasts.write().push(Toast {
@@ -1445,7 +1423,9 @@ impl AppState {
                 });
                 return;
             }
-            st.toast_info(format!("已跳过 v{version}，后续启动不再提示（可在设置中重新检查）"));
+            st.toast_info(format!(
+                "已跳过 v{version}，后续启动不再提示（可在设置中重新检查）"
+            ));
             st.close_update_modal();
         });
     }
@@ -1457,7 +1437,7 @@ impl AppState {
             return;
         };
         let st = self.clone();
-        spawn(async move {
+        spawn_forever(async move {
             match crate::updater::open_path(std::path::Path::new(&path)) {
                 Ok(()) => {}
                 Err(e) => {

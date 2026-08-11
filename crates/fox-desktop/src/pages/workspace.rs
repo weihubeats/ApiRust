@@ -23,10 +23,18 @@ use fox_test::runner::{order_endpoints, run_endpoint, EndpointResult};
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::components::confirm_dialog::{ConfirmDialog, ConfirmInfo};
 use crate::components::dropdown::Dropdown;
 use crate::components::icons::{ImportIcon, XIcon};
 use crate::state::AppState;
 use crate::views::empty_state::EmptyState;
+
+/// 删除目标类型（区分测试历史 / 响应示例）。
+#[derive(Clone, Copy)]
+enum DeleteTarget {
+    TestHistory { run_id: Uuid, project_id: Uuid },
+    ResponseExample { example_id: Uuid, endpoint_id: Uuid },
+}
 
 /// 编辑器分组。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +121,36 @@ fn switch_body_mode(current: &BodySpec, mode: &str) -> BodySpec {
         },
         _ => BodySpec::None,
     }
+}
+
+/// 切换 Body 模式并记忆/恢复可编辑内容。
+/// 切到「无」/表单 再切回 JSON/文本 时，raw 与表单字段会经
+/// switch_body_mode 丢弃，这里把离开前的 raw/fields 记入内存，
+/// 切回时若目标内容为空则恢复，避免用户已输入的 JSON 内容凭空消失。
+fn switch_body_mode_keep(
+    current: &BodySpec,
+    mode: &str,
+    raw_keep: &mut String,
+    fields_keep: &mut Vec<KeyValue>,
+) -> BodySpec {
+    match current {
+        BodySpec::Json { raw } | BodySpec::Text { raw } => *raw_keep = raw.clone(),
+        BodySpec::UrlEncoded { fields } => *fields_keep = fields.clone(),
+        _ => {}
+    }
+    let mut next = switch_body_mode(current, mode);
+    match &mut next {
+        BodySpec::Json { raw } | BodySpec::Text { raw }
+            if raw.is_empty() && !raw_keep.is_empty() =>
+        {
+            *raw = raw_keep.clone();
+        }
+        BodySpec::UrlEncoded { fields } if fields.is_empty() && !fields_keep.is_empty() => {
+            *fields = fields_keep.clone();
+        }
+        _ => {}
+    }
+    next
 }
 
 /// 切换认证方式，尽量保留已有字段。
@@ -223,6 +261,136 @@ fn history_item(h: &RequestHistory, selected: Signal<Option<RequestHistory>>) ->
                 }
             }
             div { class: "history-time", "{history_time(h)}" }
+        }
+    }
+}
+
+/// 高亮 token 节点
+#[derive(Clone)]
+struct HiNode {
+    cls: &'static str,
+    text: String,
+}
+
+/// JSON 词法分析器：输出带颜色类的 token 列表。
+fn tokenize_json(text: &str) -> Vec<HiNode> {
+    let mut out = Vec::new();
+    let mut chars = text.char_indices().peekable();
+
+    while let Some((_, c)) = chars.next() {
+        match c {
+            '"' => {
+                // 读字符串（含转义）
+                let mut s = String::from('"');
+                loop {
+                    match chars.next() {
+                        Some((_, '\\')) => {
+                            s.push('\\');
+                            if let Some((_, esc)) = chars.next() {
+                                s.push(esc);
+                            }
+                        }
+                        Some((_, '"')) => {
+                            s.push('"');
+                            break;
+                        }
+                        Some((_, ch)) => s.push(ch),
+                        None => break,
+                    }
+                }
+                out.push(HiNode {
+                    cls: "hl-s",
+                    text: s,
+                });
+            }
+            '0'..='9' | '-' => {
+                let mut s = String::from(c);
+                while let Some((_, ch)) = chars.peek() {
+                    if ch.is_ascii_digit()
+                        || *ch == '.'
+                        || *ch == '-'
+                        || *ch == '+'
+                        || *ch == 'e'
+                        || *ch == 'E'
+                    {
+                        s.push(*ch);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                out.push(HiNode {
+                    cls: "hl-n",
+                    text: s,
+                });
+            }
+            't' | 'f' | 'n' => {
+                let mut word = String::from(c);
+                for (_, ch) in chars.by_ref() {
+                    if ch.is_alphabetic() {
+                        word.push(ch);
+                    } else {
+                        break;
+                    }
+                }
+                if matches!(word.as_str(), "true" | "false" | "null") {
+                    out.push(HiNode {
+                        cls: "hl-b",
+                        text: word,
+                    });
+                } else {
+                    out.push(HiNode {
+                        cls: "",
+                        text: word,
+                    });
+                }
+            }
+            '{' | '}' | '[' | ']' | ':' | ',' => {
+                out.push(HiNode {
+                    cls: "hl-p",
+                    text: c.to_string(),
+                });
+            }
+            ' ' | '\t' | '\n' | '\r' => {
+                out.push(HiNode {
+                    cls: "",
+                    text: c.to_string(),
+                });
+            }
+            _ => {
+                out.push(HiNode {
+                    cls: "",
+                    text: c.to_string(),
+                });
+            }
+        }
+    }
+
+    // 第二遍：把紧跟在冒号前的字符串标为 key
+    for i in 0..out.len() {
+        if out[i].cls == "hl-s" {
+            let mut j = i + 1;
+            while j < out.len() && out[j].cls.is_empty() {
+                j += 1;
+            }
+            if j < out.len() && out[j].text == ":" {
+                out[i].cls = "hl-k";
+            }
+        }
+    }
+
+    out
+}
+
+/// 高亮 JSON 文本组件（供 pre 包裹使用）
+fn highlight_json(text: String) -> Element {
+    if text.is_empty() {
+        return rsx! {};
+    }
+    let nodes = tokenize_json(&text);
+    rsx! {
+        for node in nodes {
+            span { class: "{node.cls}", "{node.text}" }
         }
     }
 }
@@ -891,7 +1059,7 @@ fn render_request(ep: &Endpoint, vars: &HashMap<String, String>) -> (String, Req
 }
 
 /// M13：生成客户端代码（变量替换后的完整请求）。
-fn build_codegen_code(st: &AppState, ep: &Endpoint, lang: Lang) -> Option<String> {
+pub(crate) fn build_codegen_code(st: &AppState, ep: &Endpoint, lang: Lang) -> Option<String> {
     let project_id = (*st.current_project_id.peek())?;
     let vars = merged_vars(st, project_id);
     let (url, spec) = render_request(ep, &vars);
@@ -905,6 +1073,14 @@ fn build_codegen_code(st: &AppState, ep: &Endpoint, lang: Lang) -> Option<String
     Some(render_code(lang, &req))
 }
 
+/// 忽略 updated_at 比较接口是否一致：数据库保存时会刷新 updated_at，
+/// 而草稿里保留旧值，若全字段比较则保存后脏标记永不消失。
+fn eq_ignoring_updated_at(a: &Endpoint, b: &Endpoint) -> bool {
+    let mut a = a.clone();
+    let b = b.clone();
+    a.updated_at = b.updated_at;
+    a == b
+}
 /// 历史摘要保存。
 fn build_history(
     ep: &Endpoint,
@@ -1207,9 +1383,14 @@ pub fn WorkspacePage() -> Element {
     // M15：多标签草稿缓存（按接口 id 保留每个标签页的未保存修改）。
     let tab_drafts: Signal<HashMap<Uuid, Endpoint>> = use_signal(HashMap::new);
     let dirty: Signal<HashSet<Uuid>> = use_signal(HashSet::new);
+    // Body 模式切换记忆：切到「无」/表单 时暂存，切回 JSON/文本 时恢复。
+    let raw_keep: Signal<String> = use_signal(String::new);
+    let fields_keep: Signal<Vec<KeyValue>> = use_signal(Vec::new);
     // M17：cURL 导入。
     let curl_open: Signal<bool> = use_signal(|| false);
     let curl_input: Signal<String> = use_signal(String::new);
+    // 删除二次确认弹窗（测试历史 / 响应示例）。
+    let confirm: Signal<Option<(ConfirmInfo, DeleteTarget)>> = use_signal(|| None);
 
     // M9：draft 变化时同步 tests 配置文本。
     {
@@ -1233,6 +1414,8 @@ pub fn WorkspacePage() -> Element {
         let st = state.clone();
         let mut d = draft;
         let mut tds = tab_drafts;
+        let mut rk = raw_keep;
+        let mut fk = fields_keep;
         use_effect(move || {
             let active = *st.active_endpoint_id.read();
             // 切换前把当前草稿写回缓存（保证未保存修改不丢失）。
@@ -1243,6 +1426,9 @@ pub fn WorkspacePage() -> Element {
                 Some(id) => {
                     let current_id = d.peek().as_ref().map(|e| e.id);
                     if current_id != Some(id) {
+                        // 标签切换：清空 Body 模式切换暂存，避免暂存数据串到其他接口。
+                        rk.write().clear();
+                        fk.write().clear();
                         let ep = tds.peek().get(&id).cloned().or_else(|| {
                             let list = st.endpoints.read().clone();
                             list.into_iter().find(|e| e.id == id)
@@ -1271,7 +1457,7 @@ pub fn WorkspacePage() -> Element {
             tds.write().insert(ep.id, ep.clone());
             let saved = st.endpoints.read().iter().find(|e| e.id == ep.id).cloned();
             match saved {
-                Some(s) if s == ep => {
+                Some(s) if eq_ignoring_updated_at(&s, &ep) => {
                     dirty.write().remove(&ep.id);
                 }
                 _ => {
@@ -1322,58 +1508,56 @@ pub fn WorkspacePage() -> Element {
 
     if let Some(ep) = ep_opt {
         let method_str = ep.method.to_string();
-    // 环境展示与拼接 URL 预览：变量经 项目 < 环境 合并后由 base_url 拼出完整地址。
-    let env_id = *state.current_environment_id.read();
-    let env_name: Option<String> = env_id.and_then(|id| {
-        state
-            .environments
-            .read()
-            .iter()
-            .find(|e| e.id == id)
-            .map(|e| e.name.clone())
-    });
-    let vars = state
-        .current_project_id
-        .peek()
-        .map(|pid| merged_vars(&state, pid))
-        .unwrap_or_default();
-    let (full_url, _) = render_request(&ep, &vars);
-    let base_prefix = full_url
-        .starts_with(vars.get("base_url").map(String::as_str).unwrap_or_default())
-        .then(|| {
-            let base = vars.get("base_url").cloned().unwrap_or_default();
-            let rest: String = full_url[base.len()..].to_string();
-            (base, rest)
+        // 环境展示与拼接 URL 预览：变量经 项目 < 环境 合并后由 base_url 拼出完整地址。
+        let env_id = *state.current_environment_id.read();
+        let env_name: Option<String> = env_id.and_then(|id| {
+            state
+                .environments
+                .read()
+                .iter()
+                .find(|e| e.id == id)
+                .map(|e| e.name.clone())
         });
-    let body_mode = ep.request.body.mode_name();
-    let auth_type = auth_mode(&ep.request.auth);
-    let raw_body = body_raw(&ep);
-    let active = *active_tab.read();
-    let sending_visible = *sending.peek();
-    let resp = response.peek().clone();
-    let show_history_flag = *show_history.peek();
-    let history_list = histories.read().clone();
-    // M9 渲染局部。
-    let tests_parse_error_str = tests_parse_error.peek().clone();
-    let tests_running_flag = *tests_running.peek();
-    let test_run_view = test_result.peek().clone();
-    let test_run_rows: Vec<TestRowView> = test_run_view
-        .as_ref()
-        .map(|v| v.rows.clone())
-        .unwrap_or_default();
-    let test_run_summary: (usize, usize, usize) = test_run_view
-        .as_ref()
-        .map(|v| (v.passed, v.failed, v.skipped))
-        .unwrap_or((0, 0, 0));
-    // M11 渲染局部。
-    let expanded = *expanded_run.peek();
-    let history_nodes: Vec<Element> = {
-        let st_h = state.clone();
-        let entries = test_history.read().clone();
-        entries
+        let vars = state
+            .current_project_id
+            .peek()
+            .map(|pid| merged_vars(&state, pid))
+            .unwrap_or_default();
+        let (full_url, _) = render_request(&ep, &vars);
+        let base_prefix = full_url
+            .starts_with(vars.get("base_url").map(String::as_str).unwrap_or_default())
+            .then(|| {
+                let base = vars.get("base_url").cloned().unwrap_or_default();
+                let rest: String = full_url[base.len()..].to_string();
+                (base, rest)
+            });
+        let body_mode = ep.request.body.mode_name();
+        let auth_type = auth_mode(&ep.request.auth);
+        let raw_body = body_raw(&ep);
+        let active = *active_tab.read();
+        let sending_visible = *sending.peek();
+        let resp = response.peek().clone();
+        let show_history_flag = *show_history.peek();
+        let history_list = histories.read().clone();
+        // M9 渲染局部。
+        let tests_parse_error_str = tests_parse_error.peek().clone();
+        let tests_running_flag = *tests_running.peek();
+        let test_run_view = test_result.peek().clone();
+        let test_run_rows: Vec<TestRowView> = test_run_view
+            .as_ref()
+            .map(|v| v.rows.clone())
+            .unwrap_or_default();
+        let test_run_summary: (usize, usize, usize) = test_run_view
+            .as_ref()
+            .map(|v| (v.passed, v.failed, v.skipped))
+            .unwrap_or((0, 0, 0));
+        // M11 渲染局部。
+        let expanded = *expanded_run.peek();
+        let history_nodes: Vec<Element> = {
+            let entries = test_history.read().clone();
+            entries
             .into_iter()
             .map(|entry| {
-                let st_i = st_h.clone();
                 let time_str = entry.run.started_at.format("%m-%d %H:%M:%S").to_string();
                 let rows_display = entry.view.rows.clone();
                 let failure_lines: Vec<String> = rows_display
@@ -1405,7 +1589,14 @@ pub fn WorkspacePage() -> Element {
                         button {
                             class: "rf-btn rf-btn-sm",
                             onclick: move |_| {
-                                delete_test_history_entry(st_i.clone(), rid, pid, test_history);
+                                let mut cd = confirm;
+                                cd.set(Some((
+                                    ConfirmInfo::new(
+                                        "删除测试历史",
+                                        "确定要删除这条测试历史吗？此操作不可恢复。",
+                                    ),
+                                    DeleteTarget::TestHistory { run_id: rid, project_id: pid },
+                                )));
                             },
                             "删除"
                         }
@@ -1433,89 +1624,89 @@ pub fn WorkspacePage() -> Element {
                 }
             })
             .collect()
-    };
-    // M10 渲染局部。
-    let st = state.clone();
-    let st_export = st.clone();
-    let st_save = st.clone();
-    let resp_view = resp.clone();
-    // M13 渲染局部。
-    let st_cg = state.clone();
-    let st_btn = state.clone();
-    let codegen_open_flag = *codegen_open.read();
-    // M17 渲染局部。
-    let curl_open_flag = *curl_open.read();
-    let codegen_lang_str = codegen_lang.peek().clone();
-    let codegen_code_str = codegen_code.peek().clone();
-    // M14 渲染局部。
-    let st_load = state.clone();
-    let load_concurrency_str = load_concurrency.peek().clone();
-    let load_total_str = load_total.peek().clone();
-    let load_running_flag = *load_running.peek();
-    let load_result_flag = load_result.peek().clone();
-    // M15 渲染局部。
-    let tab_ids: Vec<Uuid> = state.open_tabs.read().clone();
-    let active_id_flag: Option<Uuid> = *state.active_endpoint_id.peek();
-    let dirty_flag: HashSet<Uuid> = dirty.peek().clone();
-    let tab_infos: Vec<(Uuid, String, bool)> = tab_ids
-        .iter()
-        .map(|id| {
-            let title = tab_drafts
-                .peek()
-                .get(id)
-                .map(|e| {
-                    if e.name.trim().is_empty() {
-                        format!("{} {}", e.method, e.path)
-                    } else {
-                        e.name.clone()
-                    }
-                })
-                .unwrap_or_else(|| "接口".to_string());
-            (*id, title, dirty_flag.contains(id))
-        })
-        .collect();
-    let tab_nodes: Vec<Element> = tab_infos
-        .iter()
-        .map(|(tid, title, is_dirty)| {
-            let st_row = state.clone();
-            let st_close = state.clone();
-            let tid = *tid;
-            let title = title.clone();
-            let is_dirty = *is_dirty;
-            let is_active = active_id_flag == Some(tid);
-            rsx! {
-                div {
-                    class: if is_active { "editor-tab active" } else { "editor-tab" },
-                    key: "{tid}",
-                    onclick: move |_| st_row.open_endpoint_tab(tid),
-                    span { "{title}" }
-                    if is_dirty {
-                        span { class: "tab-dirty", "●" }
-                    }
-                    button {
-                        class: "rf-tab-close",
-                        onclick: move |e| {
-                            e.stop_propagation();
-                            close_tab_impl(
-                                st_close.clone(),
-                                tid,
-                                st_close.open_tabs,
-                                tab_drafts,
-                                dirty,
-                                st_close.active_endpoint_id,
-                                draft,
-                            );
-                        },
-                        "×"
+        };
+        // M10 渲染局部。
+        let st = state.clone();
+        let st_export = st.clone();
+        let st_save = st.clone();
+        let resp_view = resp.clone();
+        // M13 渲染局部。
+        let st_cg = state.clone();
+        let st_btn = state.clone();
+        let codegen_open_flag = *codegen_open.read();
+        // M17 渲染局部。
+        let curl_open_flag = *curl_open.read();
+        let codegen_lang_str = codegen_lang.peek().clone();
+        let codegen_code_str = codegen_code.peek().clone();
+        // M14 渲染局部。
+        let st_load = state.clone();
+        let load_concurrency_str = load_concurrency.peek().clone();
+        let load_total_str = load_total.peek().clone();
+        let load_running_flag = *load_running.peek();
+        let load_result_flag = load_result.peek().clone();
+        // M15 渲染局部。
+        let tab_ids: Vec<Uuid> = state.open_tabs.read().clone();
+        let active_id_flag: Option<Uuid> = *state.active_endpoint_id.peek();
+        let dirty_flag: HashSet<Uuid> = dirty.peek().clone();
+        let tab_infos: Vec<(Uuid, String, bool)> = tab_ids
+            .iter()
+            .map(|id| {
+                let title = tab_drafts
+                    .peek()
+                    .get(id)
+                    .map(|e| {
+                        if e.name.trim().is_empty() {
+                            format!("{} {}", e.method, e.path)
+                        } else {
+                            e.name.clone()
+                        }
+                    })
+                    .unwrap_or_else(|| "接口".to_string());
+                (*id, title, dirty_flag.contains(id))
+            })
+            .collect();
+        let tab_nodes: Vec<Element> = tab_infos
+            .iter()
+            .map(|(tid, title, is_dirty)| {
+                let st_row = state.clone();
+                let st_close = state.clone();
+                let tid = *tid;
+                let title = title.clone();
+                let is_dirty = *is_dirty;
+                let is_active = active_id_flag == Some(tid);
+                rsx! {
+                    div {
+                        class: if is_active { "editor-tab active" } else { "editor-tab" },
+                        key: "{tid}",
+                        onclick: move |_| st_row.open_endpoint_tab(tid),
+                        span { "{title}" }
+                        if is_dirty {
+                            span { class: "tab-dirty", "●" }
+                        }
+                        button {
+                            class: "rf-tab-close",
+                            onclick: move |e| {
+                                e.stop_propagation();
+                                close_tab_impl(
+                                    st_close.clone(),
+                                    tid,
+                                    st_close.open_tabs,
+                                    tab_drafts,
+                                    dirty,
+                                    st_close.active_endpoint_id,
+                                    draft,
+                                );
+                            },
+                            "×"
+                        }
                     }
                 }
-            }
-        })
-        .collect();
-    let examples_list = examples.read().clone();
-    let example_nodes: Vec<Element> = examples_list.iter().map(|ex_item| {
-        let st_i = st.clone();
+            })
+            .collect();
+        let examples_list = examples.read().clone();
+        let example_nodes: Vec<Element> = examples_list.iter().map(|ex_item| {
         let eid = ex_item.id;
+        let ex_name = ex_item.name.clone();
         rsx! {
             div { class: "ex-row", key: "{eid}",
                 span { class: if ex_item.status < 400 { "status-ok" } else { "status-err" }, "{ex_item.status}" }
@@ -1524,959 +1715,1016 @@ pub fn WorkspacePage() -> Element {
                 div { class: "spacer" }
                 button {
                     class: "rf-btn rf-btn-sm",
-                    onclick: move |_| delete_example(st_i.clone(), eid, ep.id, examples),
+                    onclick: move |_| {
+                        let mut cd = confirm;
+                        cd.set(Some((
+                            ConfirmInfo::new(
+                                "删除响应示例",
+                                format!("确定要删除响应示例「{ex_name}」吗？此操作不可恢复。"),
+                            ),
+                            DeleteTarget::ResponseExample { example_id: eid, endpoint_id: ep.id },
+                        )));
+                    },
                     "删除"
                 }
             }
         }
     }).collect();
-    let enabled_params: Vec<KeyValue> = ep
-        .request
-        .params
-        .iter()
-        .filter(|k| k.enabled)
-        .cloned()
-        .collect();
-    let enabled_headers: Vec<KeyValue> = ep
-        .request
-        .headers
-        .iter()
-        .filter(|k| k.enabled)
-        .cloned()
-        .collect();
+        let enabled_params: Vec<KeyValue> = ep
+            .request
+            .params
+            .iter()
+            .filter(|k| k.enabled)
+            .cloned()
+            .collect();
+        let enabled_headers: Vec<KeyValue> = ep
+            .request
+            .headers
+            .iter()
+            .filter(|k| k.enabled)
+            .cloned()
+            .collect();
 
-    let mut set_tests_input = {
-        let mut d = draft;
-        let mut t = tests_input;
-        let mut err = tests_parse_error;
-        move |v: String| {
-            t.set(v.clone());
-            if v.trim().is_empty() {
-                err.set(None);
-                let mut guard = d.write();
-                if let Some(ep) = guard.as_mut() {
-                    ep.request.tests = None;
-                }
-                return;
-            }
-            match serde_json::from_str::<serde_json::Value>(&v) {
-                Ok(val) => {
+        let mut set_tests_input = {
+            let mut d = draft;
+            let mut t = tests_input;
+            let mut err = tests_parse_error;
+            move |v: String| {
+                t.set(v.clone());
+                if v.trim().is_empty() {
                     err.set(None);
                     let mut guard = d.write();
                     if let Some(ep) = guard.as_mut() {
-                        ep.request.tests = Some(val);
+                        ep.request.tests = None;
                     }
-                }
-                Err(e) => err.set(Some(format!("测试配置 JSON 无效：{e}"))),
-            }
-        }
-    };
-
-    // M9：运行单接口测试（用当前草稿）。
-    let run_current_tests = {
-        let st = state.clone();
-        let d = draft;
-        let tr = test_result;
-        let run = tests_running;
-        move || {
-            let Some(ep) = d.peek().clone() else {
-                st.toast_error("没有可测试的接口");
-                return;
-            };
-            run_tests(st.clone(), vec![ep], "接口测试".into(), tr, run);
-        }
-    };
-    // M9：运行当前文件夹测试。
-    let run_folder_tests = {
-        let st = state.clone();
-        let d = draft;
-        let tr = test_result;
-        let run = tests_running;
-        move || {
-            let Some(ep) = d.peek().clone() else {
-                st.toast_error("没有可测试的接口");
-                return;
-            };
-            let Some(fid) = ep.folder_id else {
-                st.toast_error("当前接口不在文件夹中");
-                return;
-            };
-            let list: Vec<Endpoint> = st
-                .endpoints
-                .read()
-                .iter()
-                .filter(|e| e.folder_id == Some(fid))
-                .cloned()
-                .collect();
-            run_tests(st.clone(), list, "文件夹测试".into(), tr, run);
-        }
-    };
-    // M9：运行整个项目测试。
-    let run_project_tests = {
-        let st = state.clone();
-        let tr = test_result;
-        let run = tests_running;
-        move || {
-            let Some(project_id) = *st.current_project_id.peek() else {
-                st.toast_error("未选择项目");
-                return;
-            };
-            let list: Vec<Endpoint> = st
-                .endpoints
-                .read()
-                .iter()
-                .filter(|e| e.project_id == project_id)
-                .cloned()
-                .collect();
-            run_tests(st.clone(), list, "项目测试".into(), tr, run);
-        }
-    };
-
-    let mut save = {
-        let st = state.clone();
-        let d = draft;
-        let mut dirty = dirty;
-        move || {
-            let Some(ep) = d.peek().clone() else {
-                st.toast_error("没有可保存的接口");
-                return;
-            };
-            if ep.name.trim().is_empty() {
-                st.toast_error("接口名称不能为空");
-                return;
-            }
-            let id = ep.id;
-            let name = ep.name.clone();
-            tracing::info!("用户保存接口 id={} name={}", id, name);
-            st.record_step(format!("保存接口「{name}」"));
-            st.save_endpoint(ep);
-            dirty.write().remove(&id);
-        }
-    };
-
-    // M15：新建标签。
-    let mut new_tab = {
-        let st = state.clone();
-        let mut tds = tab_drafts;
-        let mut d = draft;
-        let mut ts = st.open_tabs;
-        let mut active = st.active_endpoint_id;
-        move || {
-            let Some(project_id) = *st.current_project_id.peek() else {
-                st.toast_error("未选择项目");
-                return;
-            };
-            let ep = blank_endpoint(project_id);
-            tds.write().insert(ep.id, ep.clone());
-            ts.write().push(ep.id);
-            active.set(Some(ep.id));
-            d.set(Some(ep));
-        }
-    };
-
-    // M15：关闭标签由自由函数 close_tab_impl 处理（标签栏循环内调用）。
-
-    let mut fmt_json = {
-        let st = state.clone();
-        let mut d = draft;
-        move || {
-            let raw = d.peek().as_ref().and_then(|ep| match &ep.request.body {
-                BodySpec::Json { raw } => Some(raw.clone()),
-                _ => None,
-            });
-            match raw {
-                Some(raw) => match format_json(&raw) {
-                    Ok(pretty) => {
-                        let mut guard = d.write();
-                        if let Some(ep) = guard.as_mut() {
-                            if let BodySpec::Json { raw } = &mut ep.request.body {
-                                *raw = pretty;
-                            }
-                        }
-                    }
-                    Err(e) => st.toast_error(format!("JSON 格式错误：{}", e.user_message())),
-                },
-                None => st.toast_error("当前不是 JSON Body"),
-            }
-        }
-    };
-
-    let mut set_body_raw = {
-        let mut d = draft;
-        move |v: String| {
-            let mut guard = d.write();
-            if let Some(ep) = guard.as_mut() {
-                match &mut ep.request.body {
-                    BodySpec::Json { raw } | BodySpec::Text { raw } => *raw = v,
-                    _ => {}
-                }
-            }
-        }
-    };
-
-    // M5：发送请求。
-    let mut do_send = {
-        let st = state.clone();
-        let d = draft;
-        let mut sending = sending;
-        let mut abort_tx = abort_tx;
-        move || {
-            if *sending.peek() {
-                return;
-            }
-            let Some(ep) = d.peek().clone() else {
-                st.toast_error("没有可发送的接口");
-                return;
-            };
-            let Some(project_id) = *st.current_project_id.peek() else {
-                st.toast_error("未选择项目");
-                return;
-            };
-            let vars = merged_vars(&st, project_id);
-            let (url, spec) = render_request(&ep, &vars);
-            // URL 校验：完整 URL 直接用；相对路径且缺少 base_url 时明确提示。
-            if !is_absolute_url(&url) {
-                tracing::warn!("[HTTP] URL 不是完整地址，且未配置 base_url: {url}");
-                st.toast_error("请输入完整的 URL，或在环境变量中配置 base_url");
-                return;
-            }
-            let method = ep.method;
-            tracing::info!("[HTTP] 准备发送请求: {} {}", method, url);
-            st.record_step(format!("发送请求 {} {}", method, url));
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            abort_tx.set(Some(tx));
-            sending.set(true);
-            let db = st.services.db.clone();
-            let st_task = st.clone();
-            let mut sg = sending;
-            let mut rv = response;
-            let mut ht = histories;
-            spawn(async move {
-                // 无论成功 / 失败 / 取消，最后统一恢复按钮状态。
-                let outcome = tokio::select! {
-                    _ = rx => None,
-                    result = send_request(method, &url, &spec, None) => Some(result),
-                };
-                sg.set(false);
-                match outcome {
-                    None => {
-                        st_task.toast_info("请求已取消");
-                    }
-                    Some(Ok(data)) => {
-                        tracing::info!(
-                            "[HTTP] 请求完成: status={}, duration={}ms",
-                            data.status,
-                            data.duration_ms
-                        );
-                        let history = build_history(&ep, project_id, &url, &data);
-                        rv.set(to_response_view(data));
-                        let db = db.clone();
-                        if let Err(e) = repo::save_request_history(&db, &history).await {
-                            st_task.toast_error(format!("保存历史失败：{}", e.user_message()));
-                        } else {
-                            st_task.toast_success("请求完成，已保存历史");
-                        }
-                        if let Ok(list) = repo::list_request_histories(&db, project_id, 50).await {
-                            ht.set(list);
-                        }
-                    }
-                    Some(Err(e)) => {
-                        tracing::error!("[HTTP] 请求失败: {}", e);
-                        let msg = match &e {
-                            AppError::Http(re) => describe_http_error(re),
-                            _ => e.user_message(),
-                        };
-                        st_task.toast_error(format!("请求失败：{msg}"));
-                    }
-                }
-            });
-        }
-    };
-
-    // M5：取消请求。
-    let mut cancel_send = {
-        let mut abort_tx = abort_tx;
-        let mut sending = sending;
-        move || {
-            if let Some(tx) = abort_tx.write().take() {
-                let _ = tx.send(());
-            }
-            sending.set(false);
-        }
-    };
-
-    // M17：导入 cURL 命令 —— 解析后覆盖当前草稿。
-    let mut import_curl = {
-        let st = state.clone();
-        let mut d = draft;
-        let mut tds = tab_drafts;
-        let mut dirty = dirty;
-        let mut co = curl_open;
-        let mut ci = curl_input;
-        move || {
-            let Some(ep) = d.peek().clone() else {
-                st.toast_error("未选择接口，无法导入");
-                return;
-            };
-            let raw = ci.peek().clone();
-            let parsed = match parse_curl(&raw) {
-                Ok(p) => p,
-                Err(e) => {
-                    st.toast_error(format!("cURL 格式无法识别：{}", e.user_message()));
                     return;
                 }
-            };
-            let mut guard = d.write();
-            if let Some(ep) = guard.as_mut() {
-                apply_curl(ep, &parsed);
+                match serde_json::from_str::<serde_json::Value>(&v) {
+                    Ok(val) => {
+                        err.set(None);
+                        let mut guard = d.write();
+                        if let Some(ep) = guard.as_mut() {
+                            ep.request.tests = Some(val);
+                        }
+                    }
+                    Err(e) => err.set(Some(format!("测试配置 JSON 无效：{e}"))),
+                }
             }
-            drop(guard);
-            tds.write().insert(ep.id, ep.clone());
-            dirty.write().insert(ep.id);
-            co.set(false);
-            ci.set(String::new());
-            st.toast_success("导入成功");
-        }
-    };
+        };
 
-    rsx! {
-            div { class: "editor",
-                // M15：多标签栏。
-                div { class: "tab-bar",
-                    for node in tab_nodes {
-                        { node }
-                    }
-                    button { class: "rf-btn rf-btn-sm", onclick: move |_| new_tab(), "＋ 新建" }
+        // M9：运行单接口测试（用当前草稿）。
+        let run_current_tests = {
+            let st = state.clone();
+            let d = draft;
+            let tr = test_result;
+            let run = tests_running;
+            move || {
+                let Some(ep) = d.peek().clone() else {
+                    st.toast_error("没有可测试的接口");
+                    return;
+                };
+                run_tests(st.clone(), vec![ep], "接口测试".into(), tr, run);
+            }
+        };
+        // M9：运行当前文件夹测试。
+        let run_folder_tests = {
+            let st = state.clone();
+            let d = draft;
+            let tr = test_result;
+            let run = tests_running;
+            move || {
+                let Some(ep) = d.peek().clone() else {
+                    st.toast_error("没有可测试的接口");
+                    return;
+                };
+                let Some(fid) = ep.folder_id else {
+                    st.toast_error("当前接口不在文件夹中");
+                    return;
+                };
+                let list: Vec<Endpoint> = st
+                    .endpoints
+                    .read()
+                    .iter()
+                    .filter(|e| e.folder_id == Some(fid))
+                    .cloned()
+                    .collect();
+                run_tests(st.clone(), list, "文件夹测试".into(), tr, run);
+            }
+        };
+        // M9：运行整个项目测试。
+        let run_project_tests = {
+            let st = state.clone();
+            let tr = test_result;
+            let run = tests_running;
+            move || {
+                let Some(project_id) = *st.current_project_id.peek() else {
+                    st.toast_error("未选择项目");
+                    return;
+                };
+                let list: Vec<Endpoint> = st
+                    .endpoints
+                    .read()
+                    .iter()
+                    .filter(|e| e.project_id == project_id)
+                    .cloned()
+                    .collect();
+                run_tests(st.clone(), list, "项目测试".into(), tr, run);
+            }
+        };
+
+        let mut save = {
+            let st = state.clone();
+            let d = draft;
+            let mut dirty = dirty;
+            move || {
+                let Some(ep) = d.peek().clone() else {
+                    st.toast_error("没有可保存的接口");
+                    return;
+                };
+                if ep.name.trim().is_empty() {
+                    st.toast_error("接口名称不能为空");
+                    return;
                 }
-                div { class: "url-bar",
-                    Dropdown {
-                        class: "rf-dd-method",
-                        options: HttpMethod::all()
-                            .iter()
-                            .map(|m| (m.to_string(), m.to_string()))
-                            .collect(),
-                        selected: method_str.clone(),
-                        on_select: move |v: String| {
-                            if let Ok(m) = v.parse::<HttpMethod>() {
-                                let mut d = draft;
-                                let mut guard = d.write();
-                                if let Some(ep) = guard.as_mut() { ep.method = m; }
+                let id = ep.id;
+                let name = ep.name.clone();
+                tracing::info!("用户保存接口 id={} name={}", id, name);
+                st.record_step(format!("保存接口「{name}」"));
+                st.save_endpoint(ep);
+                dirty.write().remove(&id);
+            }
+        };
+
+        // M15：新建标签。
+        let mut new_tab = {
+            let st = state.clone();
+            let mut tds = tab_drafts;
+            let mut d = draft;
+            let mut ts = st.open_tabs;
+            let mut active = st.active_endpoint_id;
+            move || {
+                let Some(project_id) = *st.current_project_id.peek() else {
+                    st.toast_error("未选择项目");
+                    return;
+                };
+                let ep = blank_endpoint(project_id);
+                tds.write().insert(ep.id, ep.clone());
+                ts.write().push(ep.id);
+                active.set(Some(ep.id));
+                d.set(Some(ep));
+            }
+        };
+
+        // M15：关闭标签由自由函数 close_tab_impl 处理（标签栏循环内调用）。
+
+        let mut fmt_json = {
+            let st = state.clone();
+            let mut d = draft;
+            move || {
+                let raw = d.peek().as_ref().and_then(|ep| match &ep.request.body {
+                    BodySpec::Json { raw } => Some(raw.clone()),
+                    _ => None,
+                });
+                match raw {
+                    Some(raw) => match format_json(&raw) {
+                        Ok(pretty) => {
+                            let mut guard = d.write();
+                            if let Some(ep) = guard.as_mut() {
+                                if let BodySpec::Json { raw } = &mut ep.request.body {
+                                    *raw = pretty;
+                                }
                             }
-                        },
-                    }
-                    button { class: "rf-btn rf-btn-sm", onclick: move |_| {
-                        let mut co = curl_open;
-                        co.set(true);
-                    }, ImportIcon {}, "导入 cURL" }
-                    input {
-                        class: "rf-input grow",
-                        value: "{ep.path}",
-                        placeholder: "请求路径，如 /api/users 或 {{base_url}}/api/users",
-                        oninput: move |e| {
-                            let v = e.data().value();
-                            let mut d = draft;
-                            let mut guard = d.write();
-                            if let Some(ep) = guard.as_mut() { ep.path = v; }
-                        },
-                    }
-                    button { class: "rf-btn rf-btn-primary", onclick: move |_| save(), "保存" }
-                    button { class: "rf-btn", onclick: move |_| {
-                        let Some(ep) = draft.peek().clone() else {
-                            return;
-                        };
-                        let lang_str = codegen_lang.peek().clone();
-                        let lang = Lang::from_str_cn(&lang_str).unwrap_or(Lang::Curl);
-                        if let Some(code) = build_codegen_code(&st_btn, &ep, lang) {
-                            let mut cc = codegen_code;
-                            cc.set(code);
                         }
-                        let mut co = codegen_open;
-                        co.set(true);
-                    }, "生成代码" }
-                    button { class: "rf-btn rf-btn-send", onclick: move |_| do_send(), "发送" }
-                    if sending_visible {
-                        button { class: "rf-btn rf-btn-danger", onclick: move |_| cancel_send(), "取消" }
+                        Err(e) => st.toast_error(format!("JSON 格式错误：{}", e.user_message())),
+                    },
+                    None => st.toast_error("当前不是 JSON Body"),
+                }
+            }
+        };
+
+        let mut set_body_raw = {
+            let mut d = draft;
+            move |v: String| {
+                let mut guard = d.write();
+                if let Some(ep) = guard.as_mut() {
+                    match &mut ep.request.body {
+                        BodySpec::Json { raw } | BodySpec::Text { raw } => *raw = v,
+                        _ => {}
                     }
                 }
-                div { class: "url-preview",
-                    if let Some(name) = &env_name {
-                        span { class: "url-preview-env", "环境：{name}" }
-                    } else {
-                        span { class: "url-preview-env none", "未选环境" }
-                    }
-                    if let Some((base, rest)) = &base_prefix {
-                        span { class: "url-preview-base", "{base}" }
-                        span { class: "url-preview-rest", "{rest}" }
-                    } else {
-                        span { class: "url-preview-rest", "{full_url}" }
-                    }
+            }
+        };
+
+        // M5：发送请求。
+        let mut do_send = {
+            let st = state.clone();
+            let d = draft;
+            let mut sending = sending;
+            let mut abort_tx = abort_tx;
+            move || {
+                if *sending.peek() {
+                    return;
                 }
-                div { class: "editor-meta",
-                    input {
-                        class: "rf-input grow",
-                        value: "{ep.name}",
-                        placeholder: "接口名称",
-                        oninput: move |e| {
-                            let v = e.data().value();
-                            let mut d = draft;
-                            let mut guard = d.write();
-                            if let Some(ep) = guard.as_mut() { ep.name = v; }
-                        },
-                    }
-                    textarea {
-                        rows: "2",
-                        class: "rf-textarea rf-editor-desc grow",
-                        value: "{ep.description}",
-                        placeholder: "接口描述",
-                        oninput: move |e| {
-                            let v = e.data().value();
-                            let mut d = draft;
-                            let mut guard = d.write();
-                            if let Some(ep) = guard.as_mut() { ep.description = v; }
-                        },
-                    }
+                let Some(ep) = d.peek().clone() else {
+                    st.toast_error("没有可发送的接口");
+                    return;
+                };
+                let Some(project_id) = *st.current_project_id.peek() else {
+                    st.toast_error("未选择项目");
+                    return;
+                };
+                let vars = merged_vars(&st, project_id);
+                let (url, spec) = render_request(&ep, &vars);
+                // URL 校验：完整 URL 直接用；相对路径且缺少 base_url 时明确提示。
+                if !is_absolute_url(&url) {
+                    tracing::warn!("[HTTP] URL 不是完整地址，且未配置 base_url: {url}");
+                    st.toast_error("请输入完整的 URL，或在环境变量中配置 base_url");
+                    return;
                 }
-                div { class: "tabs",
-                    for (tab_enum, label) in [
-                        (EditorTab::Params, "Params"),
-                        (EditorTab::Headers, "Headers"),
-                        (EditorTab::Body, "Body"),
-                        (EditorTab::Auth, "Auth"),
-                        (EditorTab::Tests, "Tests"),
-                        (EditorTab::Docs, "Docs"),
-                    ] {
-                        button {
-                            class: if active == tab_enum { "rf-tab active" } else { "rf-tab" },
-                            onclick: move |_| {
-                                let mut t = active_tab;
-                                t.set(tab_enum);
-                            },
-                            "{label}"
+                let method = ep.method;
+                tracing::info!("[HTTP] 准备发送请求: {} {}", method, url);
+                st.record_step(format!("发送请求 {} {}", method, url));
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                abort_tx.set(Some(tx));
+                sending.set(true);
+                let db = st.services.db.clone();
+                let st_task = st.clone();
+                let mut sg = sending;
+                let mut rv = response;
+                let mut ht = histories;
+                spawn(async move {
+                    // 无论成功 / 失败 / 取消，最后统一恢复按钮状态。
+                    let outcome = tokio::select! {
+                        _ = rx => None,
+                        result = send_request(method, &url, &spec, None) => Some(result),
+                    };
+                    sg.set(false);
+                    match outcome {
+                        None => {
+                            st_task.toast_info("请求已取消");
+                        }
+                        Some(Ok(data)) => {
+                            tracing::info!(
+                                "[HTTP] 请求完成: status={}, duration={}ms",
+                                data.status,
+                                data.duration_ms
+                            );
+                            let history = build_history(&ep, project_id, &url, &data);
+                            rv.set(to_response_view(data));
+                            let db = db.clone();
+                            if let Err(e) = repo::save_request_history(&db, &history).await {
+                                st_task.toast_error(format!("保存历史失败：{}", e.user_message()));
+                            } else {
+                                st_task.toast_success("请求完成，已保存历史");
+                            }
+                            if let Ok(list) =
+                                repo::list_request_histories(&db, project_id, 50).await
+                            {
+                                ht.set(list);
+                            }
+                        }
+                        Some(Err(e)) => {
+                            tracing::error!("[HTTP] 请求失败: {}", e);
+                            let msg = match &e {
+                                AppError::Http(re) => describe_http_error(re),
+                                _ => e.user_message(),
+                            };
+                            st_task.toast_error(format!("请求失败：{msg}"));
                         }
                     }
-                    div { class: "spacer" }
-                    button {
-                        class: "rf-tab",
-                        onclick: move |_| {
-                            load_history_list(state.clone(), histories);
-                            let mut sh = show_history;
-                            sh.set(true);
-                        },
-                        "历史"
-                    }
+                });
+            }
+        };
+
+        // M5：取消请求。
+        let mut cancel_send = {
+            let mut abort_tx = abort_tx;
+            let mut sending = sending;
+            move || {
+                if let Some(tx) = abort_tx.write().take() {
+                    let _ = tx.send(());
                 }
-                div { class: "tab-body",
-                    match active {
-                        EditorTab::Params => rsx! {
-                            button { class: "rf-btn rf-btn-sm", onclick: move |_| {
-                                let mut d = draft;
-                                let mut guard = d.write();
-                                if let Some(ep) = guard.as_mut() {
-                                    kv_list(ep, KvSection::Params).push(KeyValue::new("", ""));
-                                }
-                            }, "添加参数" }
-                            { kv_table(draft, KvSection::Params) }
-                        },
-                        EditorTab::Headers => rsx! {
-                            button { class: "rf-btn rf-btn-sm", onclick: move |_| {
-                                let mut d = draft;
-                                let mut guard = d.write();
-                                if let Some(ep) = guard.as_mut() {
-                                    kv_list(ep, KvSection::Headers).push(KeyValue::new("", ""));
-                                }
-                            }, "添加请求头" }
-                            { kv_table(draft, KvSection::Headers) }
-                        },
-                        EditorTab::Body => rsx! {
-                            div { class: "row rf-mb-2",
-                                Dropdown {
-                                    options: vec![
-                                        ("none".into(), "无".into()),
-                                        ("json".into(), "JSON".into()),
-                                        ("text".into(), "文本".into()),
-                                        ("urlencoded".into(), "表单 (x-www-form-urlencoded)".into()),
-                                    ],
-                                    selected: body_mode,
-                                    on_select: move |v: String| {
+                sending.set(false);
+            }
+        };
+
+        // M17：导入 cURL 命令 —— 解析后覆盖当前草稿。
+        let mut import_curl = {
+            let st = state.clone();
+            let mut d = draft;
+            let mut tds = tab_drafts;
+            let mut dirty = dirty;
+            let mut co = curl_open;
+            let mut ci = curl_input;
+            move || {
+                let Some(ep) = d.peek().clone() else {
+                    st.toast_error("未选择接口，无法导入");
+                    return;
+                };
+                let raw = ci.peek().clone();
+                let parsed = match parse_curl(&raw) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        st.toast_error(format!("cURL 格式无法识别：{}", e.user_message()));
+                        return;
+                    }
+                };
+                let mut guard = d.write();
+                if let Some(ep) = guard.as_mut() {
+                    apply_curl(ep, &parsed);
+                }
+                drop(guard);
+                tds.write().insert(ep.id, ep.clone());
+                dirty.write().insert(ep.id);
+                co.set(false);
+                ci.set(String::new());
+                st.toast_success("导入成功");
+            }
+        };
+
+        rsx! {
+                    div { class: "editor",
+                        // M15：多标签栏。
+                        div { class: "tab-bar",
+                            for node in tab_nodes {
+                                { node }
+                            }
+                            button { class: "rf-btn rf-btn-sm", onclick: move |_| new_tab(), "＋ 新建" }
+                        }
+                        div { class: "url-bar",
+                            Dropdown {
+                                class: "rf-dd-method",
+                                options: HttpMethod::all()
+                                    .iter()
+                                    .map(|m| (m.to_string(), m.to_string()))
+                                    .collect(),
+                                selected: method_str.clone(),
+                                on_select: move |v: String| {
+                                    if let Ok(m) = v.parse::<HttpMethod>() {
                                         let mut d = draft;
                                         let mut guard = d.write();
-                                        if let Some(ep) = guard.as_mut() {
-                                            let next = switch_body_mode(&ep.request.body, &v);
-                                            ep.request.body = next;
-                                        }
-                                    },
-                                }
-                                if body_mode == "json" {
-                                    button { class: "rf-btn rf-btn-sm", onclick: move |_| fmt_json(), "格式化 JSON" }
-                                }
+                                        if let Some(ep) = guard.as_mut() { ep.method = m; }
+                                    }
+                                },
                             }
-                            if body_mode == "none" {
-                                div { class: "empty", "暂无请求体" }
-                            } else if body_mode == "urlencoded" {
-                                button { class: "rf-btn rf-btn-sm", onclick: move |_| {
+                            button { class: "rf-btn rf-btn-sm", onclick: move |_| {
+                                let mut co = curl_open;
+                                co.set(true);
+                            }, ImportIcon {}, "导入 cURL" }
+                            input {
+                                class: "rf-input grow",
+                                value: "{ep.path}",
+                                placeholder: "请求路径，如 /api/users 或 {{base_url}}/api/users",
+                                oninput: move |e| {
+                                    let v = e.data().value();
                                     let mut d = draft;
                                     let mut guard = d.write();
-                                    if let Some(ep) = guard.as_mut() {
-                                        kv_list(ep, KvSection::UrlEncoded).push(KeyValue::new("", ""));
-                                    }
-                                }, "添加字段" }
-                                { kv_table(draft, KvSection::UrlEncoded) }
+                                    if let Some(ep) = guard.as_mut() { ep.path = v; }
+                                },
+                            }
+                            button { class: "rf-btn rf-btn-primary", onclick: move |_| save(), "保存" }
+                            button { class: "rf-btn", onclick: move |_| {
+                                let Some(ep) = draft.peek().clone() else {
+                                    return;
+                                };
+                                let lang_str = codegen_lang.peek().clone();
+                                let lang = Lang::from_str_cn(&lang_str).unwrap_or(Lang::Curl);
+                                if let Some(code) = build_codegen_code(&st_btn, &ep, lang) {
+                                    let mut cc = codegen_code;
+                                    cc.set(code);
+                                }
+                                let mut co = codegen_open;
+                                co.set(true);
+                            }, "生成代码" }
+                            button { class: "rf-btn rf-btn-send", onclick: move |_| do_send(), "发送" }
+                            if sending_visible {
+                                button { class: "rf-btn rf-btn-danger", onclick: move |_| cancel_send(), "取消" }
+                            }
+                        }
+                        div { class: "url-preview",
+                            if let Some(name) = &env_name {
+                                span { class: "url-preview-env", "环境：{name}" }
                             } else {
-                                textarea {
-                                    class: "rf-textarea rf-body-editor",
-                                    placeholder: if body_mode == "json" { "{  // JSON 请求体 }" } else { "文本请求体" },
-                                    value: "{raw_body}",
-                                    oninput: move |e| set_body_raw(e.data().value()),
+                                span { class: "url-preview-env none", "未选环境" }
+                            }
+                            if let Some((base, rest)) = &base_prefix {
+                                span { class: "url-preview-base", "{base}" }
+                                span { class: "url-preview-rest", "{rest}" }
+                            } else {
+                                span { class: "url-preview-rest", "{full_url}" }
+                            }
+                        }
+                        div { class: "editor-meta",
+                            input {
+                                class: "rf-input grow",
+                                value: "{ep.name}",
+                                placeholder: "接口名称",
+                                oninput: move |e| {
+                                    let v = e.data().value();
+                                    let mut d = draft;
+                                    let mut guard = d.write();
+                                    if let Some(ep) = guard.as_mut() { ep.name = v; }
+                                },
+                            }
+                            textarea {
+                                rows: "2",
+                                class: "rf-textarea rf-editor-desc grow",
+                                value: "{ep.description}",
+                                placeholder: "接口描述",
+                                oninput: move |e| {
+                                    let v = e.data().value();
+                                    let mut d = draft;
+                                    let mut guard = d.write();
+                                    if let Some(ep) = guard.as_mut() { ep.description = v; }
+                                },
+                            }
+                        }
+                        div { class: "tabs",
+                            for (tab_enum, label) in [
+                                (EditorTab::Params, "Params"),
+                                (EditorTab::Headers, "Headers"),
+                                (EditorTab::Body, "Body"),
+                                (EditorTab::Auth, "Auth"),
+                                (EditorTab::Tests, "Tests"),
+                                (EditorTab::Docs, "Docs"),
+                            ] {
+                                button {
+                                    class: if active == tab_enum { "rf-tab active" } else { "rf-tab" },
+                                    onclick: move |_| {
+                                        let mut t = active_tab;
+                                        t.set(tab_enum);
+                                    },
+                                    "{label}"
                                 }
                             }
-                        },
-                        EditorTab::Auth => rsx! {
-                            div { class: "row rf-mb-2",
-                                Dropdown {
-                                    options: vec![
-                                        ("none".into(), "无认证".into()),
-                                        ("bearer".into(), "Bearer Token".into()),
-                                        ("basic".into(), "Basic Auth".into()),
-                                        ("apikey".into(), "API Key".into()),
-                                    ],
-                                    selected: auth_type,
-                                    on_select: move |v: String| {
+                            div { class: "spacer" }
+                            button {
+                                class: "rf-tab",
+                                onclick: move |_| {
+                                    load_history_list(state.clone(), histories);
+                                    let mut sh = show_history;
+                                    sh.set(true);
+                                },
+                                "历史"
+                            }
+                        }
+                        div { class: "tab-body",
+                            match active {
+                                EditorTab::Params => rsx! {
+                                    button { class: "rf-btn rf-btn-sm", onclick: move |_| {
                                         let mut d = draft;
                                         let mut guard = d.write();
                                         if let Some(ep) = guard.as_mut() {
-                                            let cur = switch_auth(&ep.request.auth, &v);
-                                            ep.request.auth = cur;
+                                            kv_list(ep, KvSection::Params).push(KeyValue::new("", ""));
                                         }
-                                    },
-                                }
-                            }
-                            match &ep.request.auth {
-                                AuthSpec::None => rsx! { div { class: "empty", "无认证" } },
-                                AuthSpec::Bearer { .. } => rsx! {
-                                    { label_field("Token", draft, AuthField::BearerToken) }
+                                    }, "添加参数" }
+                                    { kv_table(draft, KvSection::Params) }
                                 },
-                                AuthSpec::Basic { .. } => rsx! {
-                                    { label_field("用户名", draft, AuthField::BasicUser) }
-                                    { label_field("密码", draft, AuthField::BasicPass) }
+                                EditorTab::Headers => rsx! {
+                                    button { class: "rf-btn rf-btn-sm", onclick: move |_| {
+                                        let mut d = draft;
+                                        let mut guard = d.write();
+                                        if let Some(ep) = guard.as_mut() {
+                                            kv_list(ep, KvSection::Headers).push(KeyValue::new("", ""));
+                                        }
+                                    }, "添加请求头" }
+                                    { kv_table(draft, KvSection::Headers) }
                                 },
-                                AuthSpec::ApiKey { location, .. } => rsx! {
-                                    { label_field("Key 名称", draft, AuthField::ApiKeyName) }
-                                    { label_field("Key 值", draft, AuthField::ApiKeyValue) }
-                                    div { class: "row rf-mt-2",
-                                        span { class: "label-hint", "放置位置：" }
+                                EditorTab::Body => rsx! {
+                                    div { class: "row rf-mb-2",
                                         Dropdown {
                                             options: vec![
-                                                ("header".into(), "请求头".into()),
-                                                ("query".into(), "查询参数".into()),
+                                                ("none".into(), "无".into()),
+                                                ("json".into(), "JSON".into()),
+                                                ("text".into(), "文本".into()),
+                                                ("urlencoded".into(), "表单 (x-www-form-urlencoded)".into()),
                                             ],
-                                            selected: loc_name(*location).to_string(),
+                                            selected: body_mode,
+                                            on_select: move |v: String| {
+                                                let mut d = draft;
+                                                let mut rk = raw_keep;
+                                                let mut fk = fields_keep;
+                                                let mut guard = d.write();
+                                                if let Some(ep) = guard.as_mut() {
+                                                    let mut rk_guard = rk.write();
+                                                    let mut fk_guard = fk.write();
+                                                    let next = switch_body_mode_keep(
+                                                        &ep.request.body,
+                                                        &v,
+                                                        &mut *rk_guard,
+                                                        &mut *fk_guard,
+                                                    );
+                                                    ep.request.body = next;
+                                                }
+                                            },
+                                        }
+                                        if body_mode == "json" {
+                                            button { class: "rf-btn rf-btn-sm", onclick: move |_| fmt_json(), "格式化 JSON" }
+                                        }
+                                    }
+                                    if body_mode == "none" {
+                                        div { class: "empty", "暂无请求体" }
+                                    } else if body_mode == "urlencoded" {
+                                        button { class: "rf-btn rf-btn-sm", onclick: move |_| {
+                                            let mut d = draft;
+                                            let mut guard = d.write();
+                                            if let Some(ep) = guard.as_mut() {
+                                                kv_list(ep, KvSection::UrlEncoded).push(KeyValue::new("", ""));
+                                            }
+                                        }, "添加字段" }
+                                        { kv_table(draft, KvSection::UrlEncoded) }
+                                    } else {
+                                        div { class: "body-editor-fl",
+                                            pre { id: "body-pre-hl", class: "body-editor-hl", {highlight_json(raw_body.clone())} }
+                                            textarea {
+                                                id: "body-textarea-input",
+                                                class: "rf-textarea rf-body-editor",
+                                                placeholder: "文本请求体",
+                                                value: "{raw_body}",
+                                                oninput: move |e| set_body_raw(e.data().value()),
+                                                onscroll: move |_e| {
+                                                    eval(
+                                                        "(function(){var ta=document.getElementById('body-textarea-input');var hl=document.getElementById('body-pre-hl');if(ta&&hl){hl.scrollTop=ta.scrollTop;hl.scrollLeft=ta.scrollLeft;}})();",
+                                                    );
+                                                },
+                                            }
+                                        }
+                                    }
+                                },
+                                EditorTab::Auth => rsx! {
+                                    div { class: "row rf-mb-2",
+                                        Dropdown {
+                                            options: vec![
+                                                ("none".into(), "无认证".into()),
+                                                ("bearer".into(), "Bearer Token".into()),
+                                                ("basic".into(), "Basic Auth".into()),
+                                                ("apikey".into(), "API Key".into()),
+                                            ],
+                                            selected: auth_type,
                                             on_select: move |v: String| {
                                                 let mut d = draft;
                                                 let mut guard = d.write();
                                                 if let Some(ep) = guard.as_mut() {
-                                                    if let AuthSpec::ApiKey { location, .. } = &mut ep.request.auth {
-                                                        *location = if v == "query" { ApiKeyLocation::Query } else { ApiKeyLocation::Header };
+                                                    let cur = switch_auth(&ep.request.auth, &v);
+                                                    ep.request.auth = cur;
+                                                }
+                                            },
+                                        }
+                                    }
+                                    match &ep.request.auth {
+                                        AuthSpec::None => rsx! { div { class: "empty", "无认证" } },
+                                        AuthSpec::Bearer { .. } => rsx! {
+                                            { label_field("Token", draft, AuthField::BearerToken) }
+                                        },
+                                        AuthSpec::Basic { .. } => rsx! {
+                                            { label_field("用户名", draft, AuthField::BasicUser) }
+                                            { label_field("密码", draft, AuthField::BasicPass) }
+                                        },
+                                        AuthSpec::ApiKey { location, .. } => rsx! {
+                                            { label_field("Key 名称", draft, AuthField::ApiKeyName) }
+                                            { label_field("Key 值", draft, AuthField::ApiKeyValue) }
+                                            div { class: "row rf-mt-2",
+                                                span { class: "label-hint", "放置位置：" }
+                                                Dropdown {
+                                                    options: vec![
+                                                        ("header".into(), "请求头".into()),
+                                                        ("query".into(), "查询参数".into()),
+                                                    ],
+                                                    selected: loc_name(*location).to_string(),
+                                                    on_select: move |v: String| {
+                                                        let mut d = draft;
+                                                        let mut guard = d.write();
+                                                        if let Some(ep) = guard.as_mut() {
+                                                            if let AuthSpec::ApiKey { location, .. } = &mut ep.request.auth {
+                                                                *location = if v == "query" { ApiKeyLocation::Query } else { ApiKeyLocation::Header };
+                                                            }
+                                                        }
+                                                    },
+                                                }
+                                            }
+                                        },
+                                    }
+                                },
+                                EditorTab::Docs => rsx! {
+                                    div { class: "docs-meta",
+                                        span { class: "method-badge", "{ep.method}" }
+                                        span { class: "doc-path", "{ep.path}" }
+                                        div { class: "spacer" }
+                                        button {
+                                            class: "rf-btn rf-btn-sm rf-btn-primary",
+                                            onclick: move |_| export_markdown_file(st_export.clone()),
+                                            "导出项目 Markdown"
+                                        }
+                                    }
+                                    if ep.description.is_empty() {
+                                        div { class: "empty", "暂无描述" }
+                                    } else {
+                                        div { class: "doc-desc", "{ep.description}" }
+                                    }
+                                    div { class: "docs-block",
+                                        h4 { "查询参数" }
+                                        if enabled_params.is_empty() {
+                                            div { class: "hint", "无启用的查询参数" }
+                                        } else {
+                                            for kv in enabled_params {
+                                                div { class: "kv-row",
+                                                    code { "{kv.key}" }
+                                                    span { "{kv.value}" }
+                                                }
+                                            }
+                                        }
+                                        h4 { "请求头" }
+                                        if enabled_headers.is_empty() {
+                                            div { class: "hint", "无启用的请求头" }
+                                        } else {
+                                            for kv in enabled_headers {
+                                                div { class: "kv-row",
+                                                    code { "{kv.key}" }
+                                                    span { "{kv.value}" }
+                                                }
+                                            }
+                                        }
+                                        h4 { "请求体" }
+                                        match &ep.request.body {
+                                            BodySpec::Json { raw, .. } => rsx! { pre { class: "doc-body", {highlight_json(raw.clone())} } },
+                                            BodySpec::UrlEncoded { .. } => rsx! { div { class: "hint", "URL 编码表单参数" } },
+                                            BodySpec::Text { raw, .. } => rsx! { pre { class: "doc-body", "{raw}" } },
+                                            BodySpec::Multipart { .. } => rsx! { div { class: "hint", "Multipart 表单" } },
+                                            BodySpec::None => rsx! { div { class: "hint", "无请求体" } },
+                                        }
+                                        h4 { "认证" }
+                                        div { class: "kv-row", span { class: "hint", "{auth_type}" } }
+                                        h4 { "响应示例" }
+                                        if example_nodes.is_empty() {
+                                            div { class: "hint", "暂无响应示例（发送请求后点击「保存为示例」）" }
+                                        } else {
+                                            for node in example_nodes {
+                                                { node }
+                                            }
+                                        }
+                                    }
+            },
+                                EditorTab::Tests => rsx! {
+                                    div { class: "row rf-mb-2",
+                                        button {
+                                            class: "rf-btn rf-btn-sm rf-btn-primary",
+                                            disabled: tests_running,
+                                            onclick: move |_| run_current_tests(),
+                                            "运行测试"
+                                        }
+                                        button {
+                                            class: "rf-btn rf-btn-sm",
+                                            disabled: tests_running,
+                                            onclick: move |_| run_folder_tests(),
+                                            "运行文件夹测试"
+                                        }
+                                        button {
+                                            class: "rf-btn rf-btn-sm",
+                                            disabled: tests_running,
+                                            onclick: move |_| run_project_tests(),
+                                            "运行项目测试"
+                                        }
+                                        div { class: "spacer" }
+                                        span { class: "hint-inline", "配置写入 request_json.tests 后保存接口生效" }
+                                    }
+                                    textarea {
+                                        class: "rf-textarea rf-oapi-input",
+                                        placeholder: "测试配置 JSON：pre_request / extract / assertions（保存接口后生效）",
+                                        value: "{tests_input}",
+                                        oninput: move |e| set_tests_input(e.data().value()),
+                                    }
+                                    if let Some(e) = &tests_parse_error_str {
+                                        div { class: "warn-text", "{e}" }
+                                    }
+                                    if !tests_running_flag {
+                                        div { class: "hint", "变量提取结果会在本次运行中按顺序传递给后续接口" }
+                                    }
+                                    div { class: "history-box",
+                                        div { class: "kv-title", "历史测试（最近 20 次）" }
+                                        if history_nodes.is_empty() {
+                                            div { class: "hint", "暂无测试历史，运行测试后自动记录" }
+                                        } else {
+                                            for node in history_nodes {
+                                                { node }
+                                            }
+                                        }
+                                    }
+                                    // M14：压测区。
+                                    div { class: "load-box",
+                                        div { class: "row rf-mb-2",
+                                            span { class: "hint-inline", "压测（并发基准）" }
+                                            input {
+                                                class: "rf-input rf-input-sm rf-in-72",
+                                                value: "{load_concurrency_str}",
+                                                oninput: move |e| {
+                                                    let v = e.data().value();
+                                                    let mut lc = load_concurrency;
+                                                    lc.set(v);
+                                                },
+                                            }
+                                            span { class: "hint-inline", "并发" }
+                                            input {
+                                                class: "rf-input rf-input-sm rf-in-96",
+                                                value: "{load_total_str}",
+                                                oninput: move |e| {
+                                                    let v = e.data().value();
+                                                    let mut lt = load_total;
+                                                    lt.set(v);
+                                                },
+                                            }
+                                            span { class: "hint-inline", "总次数" }
+                                            button {
+                                                class: "rf-btn rf-btn-sm rf-btn-primary",
+                                                disabled: load_running_flag,
+                                                onclick: move |_| {
+        let Some(ep) = draft.read().clone() else {
+                                                        return;
+                                                    };
+                                                    let concurrency: usize = load_concurrency
+                                                        .peek()
+                                                        .trim()
+                                                        .parse()
+                                                        .unwrap_or(10)
+                                                        .max(1);
+                                                    let total: usize = load_total
+                                                        .peek()
+                                                        .trim()
+                                                        .parse()
+                                                        .unwrap_or(100)
+                                                        .max(1);
+                                                    run_load_benchmark(
+                                                        st_load.clone(),
+                                                        ep,
+                                                        concurrency,
+                                                        total,
+                                                        load_result,
+                                                        load_running,
+                                                        test_result,
+                                                    );
+                                                },
+                                                if load_running_flag { "压测中……" } else { "开始压测" }
+                                            }
+                                        }
+                                        if let Some(lr) = &load_result_flag {
+                                            div { class: "load-result",
+                                                div { class: "kv-title", "压测结果" }
+                                                div { class: "load-grid",
+                                                    span { "请求总数" }
+                                                    span { "{lr.total}" }
+                                                    span { "成功 / 失败" }
+                                                    span { class: if lr.failed == 0 { "load-ok" } else { "load-bad" },
+                                                        "{lr.ok} / {lr.failed}"
+                                                    }
+                                                    span { "总耗时" }
+                                                    span { "{lr.total_ms} ms" }
+                                                    span { "QPS" }
+                                                    span { "{lr.rps:.1}" }
+                                                    span { "平均耗时" }
+                                                    span { "{lr.avg_ms:.1} ms" }
+                                                    span { "P50 / P90 / P99" }
+                                                    span { "{lr.p50_ms} / {lr.p90_ms} / {lr.p99_ms} ms" }
+                                                }
+                                                if !lr.errors.is_empty() {
+                                                    div { class: "warn-text", "错误示例：" }
+                                                    for e in &lr.errors {
+                                                        div { class: "load-err", "{e}" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                            }
+                        }
+                        // M9：测试结果区（失败高亮）。
+                        if test_run_view.is_some() {
+                            div { class: "test-run",
+                                div { class: "resp-head",
+                                    span { class: "label-hint", "测试结果" }
+                                    span { class: "test-summary ok", "通过 {test_run_summary.0}" }
+                                    span { class: "test-summary bad", "失败 {test_run_summary.1}" }
+                                    if test_run_summary.2 > 0 {
+                                        span { class: "test-summary skip", "跳过 {test_run_summary.2}" }
+                                    }
+                                }
+                                for (idx, row) in test_run_rows.clone().into_iter().enumerate() {
+                                    div { key: "{idx}", class: if !row.ok && !row.skipped { "test-row fail" } else if row.skipped { "test-row skip" } else { "test-row" },
+                                        div { class: "test-row-main",
+                                            span { class: "rf-method rf-method-chip rf-method-chip-{row.method.to_lowercase()}", "{row.method}" }
+                                            span { class: "url", "{row.path}" }
+                                            span { class: "test", "{row.name}" }
+                                            div { class: "spacer" }
+                                            if !row.ok && !row.skipped {
+                                                span { class: "test-badge bad", "失败" }
+                                            } else if row.skipped {
+                                                span { class: "test-badge skip", "跳过" }
+                                            } else {
+                                                span { class: "test-badge ok", "通过" }
+                                            }
+                                            span { "{row.duration_ms.unwrap_or(0)} ms" }
+                                        }
+                                        if let Some(err) = row.error {
+                                            div { class: "test-fail", "{err}" }
+                                        }
+                                        for f in row.failures {
+                                            div { class: "test-fail", XIcon {} "{f}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // M5：响应区。
+                        if sending_visible || resp.is_some() {
+                            div {
+                                id: "rf-resizer",
+                                class: "rf-resizer",
+                                title: "拖动调整响应区高度",
+                                onmounted: move |_| {
+                                    let _ = eval(RESIZER_JS);
+                                },
+                            }
+                            div { class: "response",
+                                div { class: "resp-head",
+                                    if let Some(r) = &resp {
+                                        span { class: if r.status < 400 { "status-ok" } else { "status-err" }, "{r.status}" }
+                                        span { "{r.duration_ms} ms" }
+                                        span { "{r.size_bytes} B" }
+                                        if r.truncated {
+                                            span { class: "warn-pill", "已截断（>20MB）" }
+                                        }
+                                        span { "{r.content_type}" }
+                                        div { class: "spacer" }
+                                        button {
+                                            class: "rf-btn rf-btn-sm",
+                                            onclick: move |_| save_response_example(
+                                                st_save.clone(),
+                                                ep.id,
+                                                resp_view.clone().expect("响应存在"),
+                                                examples,
+                                            ),
+                                            "保存为示例"
+                                        }
+                                    }
+                                    if sending_visible {
+                                        span { class: "hint-inline", "发送中……" }
+                                    }
+                                }
+                                if let Some(r) = resp {
+                                    div { class: "resp-summary",
+                                        label { "响应头" }
+                                        for (k, v) in r.headers.clone() {
+                                            div { class: "resp-hdr-row",
+                                                code { "{k}" }
+                                                span { "{v}" }
+                                            }
+                                        }
+                                    }
+                                    pre { "{r.body}" }
+                                }
+                            }
+                        }
+                        // M5：历史面板。
+                        if show_history_flag {
+                            div {
+                                class: "modal-backdrop",
+                                onclick: move |_| {
+                                    let mut sh = show_history;
+                                    sh.set(false);
+                                },
+                                div {
+                                    class: "modal history-modal",
+                                    onclick: |e| { e.stop_propagation(); },
+                                    h3 { "请求历史" }
+                                    div { class: "history-list",
+                                        for h in history_list.clone() {
+                                            { history_item(&h, selected_history) }
+                                        }
+                                        if history_list.is_empty() {
+                                            div { class: "empty", "暂无历史记录" }
+                                        }
+                                    }
+                                    if let Some(h) = selected_history.peek().clone() {
+                                        div { class: "history-detail",
+                                            pre {
+                                                "{prettify_summary(&h.response_summary_json)}"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // M13：代码生成弹窗。
+                        if codegen_open_flag {
+                            div {
+                                class: "modal-backdrop",
+                                onclick: move |_| {
+                                    let mut co = codegen_open;
+                                    co.set(false);
+                                },
+                                div {
+                                    class: "modal codegen-modal",
+                                    onclick: |e| { e.stop_propagation(); },
+                                    div { class: "row rf-mb-2",
+                                        span { class: "kv-title", "生成客户端代码" }
+                                        div { class: "spacer" }
+                                        Dropdown {
+                                            class: "rf-dd-lang",
+                                            options: vec![
+                                                ("curl".into(), "curl".into()),
+                                                ("python".into(), "Python (requests)".into()),
+                                                ("js".into(), "JavaScript (fetch)".into()),
+                                                ("go".into(), "Go (net/http)".into()),
+                                                ("java".into(), "Java (OkHttp)".into()),
+                                                ("php".into(), "PHP (cURL)".into()),
+                                            ],
+                                            selected: codegen_lang_str.clone(),
+                                            on_select: move |v: String| {
+                                                let lang = Lang::from_str_cn(&v).unwrap_or(Lang::Curl);
+                                                let mut cl = codegen_lang;
+                                                cl.set(v);
+                                                let mut cc = codegen_code;
+                                                if let Some(ep) = draft.peek().clone() {
+                                                    if let Some(code) = build_codegen_code(&st_cg, &ep, lang) {
+                                                        cc.set(code);
                                                     }
                                                 }
                                             },
                                         }
                                     }
-                                },
-                            }
-                        },
-                        EditorTab::Docs => rsx! {
-                            div { class: "docs-meta",
-                                span { class: "method-badge", "{ep.method}" }
-                                span { class: "doc-path", "{ep.path}" }
-                                div { class: "spacer" }
-                                button {
-                                    class: "rf-btn rf-btn-sm rf-btn-primary",
-                                    onclick: move |_| export_markdown_file(st_export.clone()),
-                                    "导出项目 Markdown"
-                                }
-                            }
-                            if ep.description.is_empty() {
-                                div { class: "empty", "暂无描述" }
-                            } else {
-                                div { class: "doc-desc", "{ep.description}" }
-                            }
-                            div { class: "docs-block",
-                                h4 { "查询参数" }
-                                if enabled_params.is_empty() {
-                                    div { class: "hint", "无启用的查询参数" }
-                                } else {
-                                    for kv in enabled_params {
-                                        div { class: "kv-row",
-                                            code { "{kv.key}" }
-                                            span { "{kv.value}" }
-                                        }
-                                    }
-                                }
-                                h4 { "请求头" }
-                                if enabled_headers.is_empty() {
-                                    div { class: "hint", "无启用的请求头" }
-                                } else {
-                                    for kv in enabled_headers {
-                                        div { class: "kv-row",
-                                            code { "{kv.key}" }
-                                            span { "{kv.value}" }
-                                        }
-                                    }
-                                }
-                                h4 { "请求体" }
-                                match &ep.request.body {
-                                    BodySpec::Json { raw, .. } => rsx! { pre { class: "doc-body", "{raw}" } },
-                                    BodySpec::UrlEncoded { .. } => rsx! { div { class: "hint", "URL 编码表单参数" } },
-                                    BodySpec::Text { raw, .. } => rsx! { pre { class: "doc-body", "{raw}" } },
-                                    BodySpec::Multipart { .. } => rsx! { div { class: "hint", "Multipart 表单" } },
-                                    BodySpec::None => rsx! { div { class: "hint", "无请求体" } },
-                                }
-                                h4 { "认证" }
-                                div { class: "kv-row", span { class: "hint", "{auth_type}" } }
-                                h4 { "响应示例" }
-                                if example_nodes.is_empty() {
-                                    div { class: "hint", "暂无响应示例（发送请求后点击「保存为示例」）" }
-                                } else {
-                                    for node in example_nodes {
-                                        { node }
-                                    }
-                                }
-                            }
-    },
-                        EditorTab::Tests => rsx! {
-                            div { class: "row rf-mb-2",
-                                button {
-                                    class: "rf-btn rf-btn-sm rf-btn-primary",
-                                    disabled: tests_running,
-                                    onclick: move |_| run_current_tests(),
-                                    "运行测试"
-                                }
-                                button {
-                                    class: "rf-btn rf-btn-sm",
-                                    disabled: tests_running,
-                                    onclick: move |_| run_folder_tests(),
-                                    "运行文件夹测试"
-                                }
-                                button {
-                                    class: "rf-btn rf-btn-sm",
-                                    disabled: tests_running,
-                                    onclick: move |_| run_project_tests(),
-                                    "运行项目测试"
-                                }
-                                div { class: "spacer" }
-                                span { class: "hint-inline", "配置写入 request_json.tests 后保存接口生效" }
-                            }
-                            textarea {
-                                class: "rf-textarea rf-oapi-input",
-                                placeholder: "测试配置 JSON：pre_request / extract / assertions（保存接口后生效）",
-                                value: "{tests_input}",
-                                oninput: move |e| set_tests_input(e.data().value()),
-                            }
-                            if let Some(e) = &tests_parse_error_str {
-                                div { class: "warn-text", "{e}" }
-                            }
-                            if !tests_running_flag {
-                                div { class: "hint", "变量提取结果会在本次运行中按顺序传递给后续接口" }
-                            }
-                            div { class: "history-box",
-                                div { class: "kv-title", "历史测试（最近 20 次）" }
-                                if history_nodes.is_empty() {
-                                    div { class: "hint", "暂无测试历史，运行测试后自动记录" }
-                                } else {
-                                    for node in history_nodes {
-                                        { node }
-                                    }
-                                }
-                            }
-                            // M14：压测区。
-                            div { class: "load-box",
-                                div { class: "row rf-mb-2",
-                                    span { class: "hint-inline", "压测（并发基准）" }
-                                    input {
-                                        class: "rf-input rf-input-sm rf-in-72",
-                                        value: "{load_concurrency_str}",
-                                        oninput: move |e| {
-                                            let v = e.data().value();
-                                            let mut lc = load_concurrency;
-                                            lc.set(v);
-                                        },
-                                    }
-                                    span { class: "hint-inline", "并发" }
-                                    input {
-                                        class: "rf-input rf-input-sm rf-in-96",
-                                        value: "{load_total_str}",
-                                        oninput: move |e| {
-                                            let v = e.data().value();
-                                            let mut lt = load_total;
-                                            lt.set(v);
-                                        },
-                                    }
-                                    span { class: "hint-inline", "总次数" }
-                                    button {
-                                        class: "rf-btn rf-btn-sm rf-btn-primary",
-                                        disabled: load_running_flag,
-                                        onclick: move |_| {
-let Some(ep) = draft.read().clone() else {
-                                                return;
-                                            };
-                                            let concurrency: usize = load_concurrency
-                                                .peek()
-                                                .trim()
-                                                .parse()
-                                                .unwrap_or(10)
-                                                .max(1);
-                                            let total: usize = load_total
-                                                .peek()
-                                                .trim()
-                                                .parse()
-                                                .unwrap_or(100)
-                                                .max(1);
-                                            run_load_benchmark(
-                                                st_load.clone(),
-                                                ep,
-                                                concurrency,
-                                                total,
-                                                load_result,
-                                                load_running,
-                                                test_result,
-                                            );
-                                        },
-                                        if load_running_flag { "压测中……" } else { "开始压测" }
-                                    }
-                                }
-                                if let Some(lr) = &load_result_flag {
-                                    div { class: "load-result",
-                                        div { class: "kv-title", "压测结果" }
-                                        div { class: "load-grid",
-                                            span { "请求总数" }
-                                            span { "{lr.total}" }
-                                            span { "成功 / 失败" }
-                                            span { class: if lr.failed == 0 { "load-ok" } else { "load-bad" },
-                                                "{lr.ok} / {lr.failed}"
-                                            }
-                                            span { "总耗时" }
-                                            span { "{lr.total_ms} ms" }
-                                            span { "QPS" }
-                                            span { "{lr.rps:.1}" }
-                                            span { "平均耗时" }
-                                            span { "{lr.avg_ms:.1} ms" }
-                                            span { "P50 / P90 / P99" }
-                                            span { "{lr.p50_ms} / {lr.p90_ms} / {lr.p99_ms} ms" }
-                                        }
-                                        if !lr.errors.is_empty() {
-                                            div { class: "warn-text", "错误示例：" }
-                                            for e in &lr.errors {
-                                                div { class: "load-err", "{e}" }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                    }
-                }
-                // M9：测试结果区（失败高亮）。
-                if test_run_view.is_some() {
-                    div { class: "test-run",
-                        div { class: "resp-head",
-                            span { class: "label-hint", "测试结果" }
-                            span { class: "test-summary ok", "通过 {test_run_summary.0}" }
-                            span { class: "test-summary bad", "失败 {test_run_summary.1}" }
-                            if test_run_summary.2 > 0 {
-                                span { class: "test-summary skip", "跳过 {test_run_summary.2}" }
-                            }
-                        }
-                        for (idx, row) in test_run_rows.clone().into_iter().enumerate() {
-                            div { key: "{idx}", class: if !row.ok && !row.skipped { "test-row fail" } else if row.skipped { "test-row skip" } else { "test-row" },
-                                div { class: "test-row-main",
-                                    span { class: "rf-method rf-method-chip rf-method-chip-{row.method.to_lowercase()}", "{row.method}" }
-                                    span { class: "url", "{row.path}" }
-                                    span { class: "test", "{row.name}" }
-                                    div { class: "spacer" }
-                                    if !row.ok && !row.skipped {
-                                        span { class: "test-badge bad", "失败" }
-                                    } else if row.skipped {
-                                        span { class: "test-badge skip", "跳过" }
-                                    } else {
-                                        span { class: "test-badge ok", "通过" }
-                                    }
-                                    span { "{row.duration_ms.unwrap_or(0)} ms" }
-                                }
-                                if let Some(err) = row.error {
-                                    div { class: "test-fail", "{err}" }
-                                }
-                                for f in row.failures {
-                                    div { class: "test-fail", XIcon {} "{f}" }
-                                }
-                            }
-                        }
-                    }
-                }
-                // M5：响应区。
-                if sending_visible || resp.is_some() {
-                    div {
-                        id: "rf-resizer",
-                        class: "rf-resizer",
-                        title: "拖动调整响应区高度",
-                        onmounted: move |_| {
-                            let _ = eval(RESIZER_JS);
-                        },
-                    }
-                    div { class: "response",
-                        div { class: "resp-head",
-                            if let Some(r) = &resp {
-                                span { class: if r.status < 400 { "status-ok" } else { "status-err" }, "{r.status}" }
-                                span { "{r.duration_ms} ms" }
-                                span { "{r.size_bytes} B" }
-                                if r.truncated {
-                                    span { class: "warn-pill", "已截断（>20MB）" }
-                                }
-                                span { "{r.content_type}" }
-                                div { class: "spacer" }
-                                button {
-                                    class: "rf-btn rf-btn-sm",
-                                    onclick: move |_| save_response_example(
-                                        st_save.clone(),
-                                        ep.id,
-                                        resp_view.clone().expect("响应存在"),
-                                        examples,
-                                    ),
-                                    "保存为示例"
-                                }
-                            }
-                            if sending_visible {
-                                span { class: "hint-inline", "发送中……" }
-                            }
-                        }
-                        if let Some(r) = resp {
-                            div { class: "resp-summary",
-                                label { "响应头" }
-                                for (k, v) in r.headers.clone() {
-                                    div { class: "resp-hdr-row",
-                                        code { "{k}" }
-                                        span { "{v}" }
-                                    }
-                                }
-                            }
-                            pre { "{r.body}" }
-                        }
-                    }
-                }
-                // M5：历史面板。
-                if show_history_flag {
-                    div {
-                        class: "modal-backdrop",
-                        onclick: move |_| {
-                            let mut sh = show_history;
-                            sh.set(false);
-                        },
-                        div {
-                            class: "modal history-modal",
-                            onclick: |e| { e.stop_propagation(); },
-                            h3 { "请求历史" }
-                            div { class: "history-list",
-                                for h in history_list.clone() {
-                                    { history_item(&h, selected_history) }
-                                }
-                                if history_list.is_empty() {
-                                    div { class: "empty", "暂无历史记录" }
-                                }
-                            }
-                            if let Some(h) = selected_history.peek().clone() {
-                                div { class: "history-detail",
                                     pre {
-                                        "{prettify_summary(&h.response_summary_json)}"
+                                        class: "codegen-out",
+                                        "{codegen_code_str}"
                                     }
                                 }
                             }
                         }
-                    }
-                }
-                // M13：代码生成弹窗。
-                if codegen_open_flag {
-                    div {
-                        class: "modal-backdrop",
-                        onclick: move |_| {
-                            let mut co = codegen_open;
-                            co.set(false);
-                        },
-                        div {
-                            class: "modal codegen-modal",
-                            onclick: |e| { e.stop_propagation(); },
-                            div { class: "row rf-mb-2",
-                                span { class: "kv-title", "生成客户端代码" }
-                                div { class: "spacer" }
-                                Dropdown {
-                                    class: "rf-dd-lang",
-                                    options: vec![
-                                        ("curl".into(), "curl".into()),
-                                        ("python".into(), "Python (requests)".into()),
-                                        ("js".into(), "JavaScript (fetch)".into()),
-                                        ("go".into(), "Go (net/http)".into()),
-                                        ("java".into(), "Java (OkHttp)".into()),
-                                        ("php".into(), "PHP (cURL)".into()),
-                                    ],
-                                    selected: codegen_lang_str.clone(),
-                                    on_select: move |v: String| {
-                                        let lang = Lang::from_str_cn(&v).unwrap_or(Lang::Curl);
-                                        let mut cl = codegen_lang;
-                                        cl.set(v);
-                                        let mut cc = codegen_code;
-                                        if let Some(ep) = draft.peek().clone() {
-                                            if let Some(code) = build_codegen_code(&st_cg, &ep, lang) {
-                                                cc.set(code);
-                                            }
-                                        }
-                                    },
-                                }
-                            }
-                            pre {
-                                class: "codegen-out",
-                                "{codegen_code_str}"
-                            }
-                        }
-                    }
-                }
-                // M17：导入 cURL 弹窗。
-                if curl_open_flag {
-                    div {
-                        class: "modal-backdrop",
-                        onclick: move |_| {
-                            let mut co = curl_open;
-                            co.set(false);
-                        },
-                        div {
-                            class: "modal curl-modal",
-                            onclick: |e| { e.stop_propagation(); },
-                            div { class: "kv-title", "从 cURL 命令导入" }
+                        // M17：导入 cURL 弹窗。
+                        if curl_open_flag {
                             div {
-                                class: "hint",
-                                "粘贴浏览器开发者工具「Copy as cURL」复制的命令，自动识别方法、URL、请求头、请求体与 Basic 认证。",
-                            }
-                            textarea {
-                                class: "rf-textarea curl-input",
-                                rows: "10",
-                                placeholder: "例如：\ncurl -X POST https://api.example.com/users \\\n  -H \"Content-Type: application/json\" \\\n  -u user:pass \\\n  -d \"{{\"name\":\"test\"}}\"",
-                                value: "{curl_input}",
-                                oninput: move |e| {
-                                    let v = e.data().value();
-                                    let mut ci = curl_input;
-                                    ci.set(v);
-                                },
-                            }
-                            div { class: "rf-modal-actions",
-                                button { class: "rf-btn", onclick: move |_| {
+                                class: "modal-backdrop",
+                                onclick: move |_| {
                                     let mut co = curl_open;
                                     co.set(false);
-                                }, "取消" }
-                                button { class: "rf-btn rf-btn-primary", onclick: move |_| import_curl(), "解析并导入" }
+                                },
+                                div {
+                                    class: "modal curl-modal",
+                                    onclick: |e| { e.stop_propagation(); },
+                                    div { class: "kv-title", "从 cURL 命令导入" }
+                                    div {
+                                        class: "hint",
+                                        "粘贴浏览器开发者工具「Copy as cURL」复制的命令，自动识别方法、URL、请求头、请求体与 Basic 认证。",
+                                    }
+                                    textarea {
+                                        class: "rf-textarea curl-input",
+                                        rows: "10",
+                                        placeholder: "例如：\ncurl -X POST https://api.example.com/users \\\n  -H \"Content-Type: application/json\" \\\n  -u user:pass \\\n  -d \"{{\"name\":\"test\"}}\"",
+                                        value: "{curl_input}",
+                                        oninput: move |e| {
+                                            let v = e.data().value();
+                                            let mut ci = curl_input;
+                                            ci.set(v);
+                                        },
+                                    }
+                                    div { class: "rf-modal-actions",
+                                        button { class: "rf-btn", onclick: move |_| {
+                                            let mut co = curl_open;
+                                            co.set(false);
+                                        }, "取消" }
+                                        button { class: "rf-btn rf-btn-primary", onclick: move |_| import_curl(), "解析并导入" }
+                                    }
+                                }
                             }
                         }
                     }
+                    if let Some((info, _)) = confirm.read().as_ref() {
+                        ConfirmDialog {
+                            info: Some(info.clone()),
+                            on_confirm: move |_| {
+                                if let Some((_, target)) = confirm.peek().as_ref() {
+                                    match *target {
+                                        DeleteTarget::TestHistory { run_id, project_id } => {
+                                            delete_test_history_entry(
+                                                st.clone(),
+                                                run_id,
+                                                project_id,
+                                                test_history,
+                                            )
+                                        }
+                                        DeleteTarget::ResponseExample { example_id, endpoint_id } => {
+                                            delete_example(st.clone(), example_id, endpoint_id, examples)
+                                        }
+                                    }
+                                }
+                                let mut c = confirm;
+                                c.set(None);
+                            },
+                            on_cancel: move |_| {
+                                let mut c = confirm;
+                                c.set(None);
+                            },
+                        }
+                    }
+                    {loading_overlay}
                 }
-            }
-            {loading_overlay}
-        }
     } else {
         rsx! {
             if loading_flag {
@@ -2506,6 +2754,44 @@ mod tests {
         assert!(matches!(none, BodySpec::None));
         let ue = switch_body_mode(&cur, "urlencoded");
         assert!(matches!(ue, BodySpec::UrlEncoded { fields } if fields.is_empty()));
+    }
+
+    #[test]
+    fn body_mode_switch_keeps_raw_across_none() {
+        let mut raw_keep = String::new();
+        let mut fields_keep: Vec<KeyValue> = Vec::new();
+        let cur = BodySpec::Json {
+            raw: "{\"a\":1}".into(),
+        };
+        let none = switch_body_mode_keep(&cur, "none", &mut raw_keep, &mut fields_keep);
+        assert!(matches!(none, BodySpec::None));
+        let back = switch_body_mode_keep(&none, "json", &mut raw_keep, &mut fields_keep);
+        assert!(matches!(back, BodySpec::Json { raw } if raw == "{\"a\":1}"));
+        let text = switch_body_mode_keep(&cur, "text", &mut raw_keep, &mut fields_keep);
+        assert!(matches!(&text, BodySpec::Text { raw } if raw == "{\"a\":1}"));
+        let none2 = switch_body_mode_keep(&text, "none", &mut raw_keep, &mut fields_keep);
+        let text_back = switch_body_mode_keep(&none2, "text", &mut raw_keep, &mut fields_keep);
+        assert!(matches!(text_back, BodySpec::Text { raw } if raw == "{\"a\":1}"));
+    }
+
+    #[test]
+    fn body_mode_switch_keeps_fields_across_none() {
+        let mut raw_keep = String::new();
+        let mut fields_keep: Vec<KeyValue> = Vec::new();
+        let cur = BodySpec::UrlEncoded {
+            fields: vec![KeyValue {
+                key: "name".into(),
+                value: "fox".into(),
+                enabled: true,
+                description: String::new(),
+            }],
+        };
+        let none = switch_body_mode_keep(&cur, "none", &mut raw_keep, &mut fields_keep);
+        let back = switch_body_mode_keep(&none, "urlencoded", &mut raw_keep, &mut fields_keep);
+        assert!(matches!(
+            back,
+            BodySpec::UrlEncoded { fields } if fields.len() == 1 && fields[0].key == "name" && fields[0].value == "fox"
+        ));
     }
 
     #[test]
@@ -2591,7 +2877,10 @@ mod tests {
     #[test]
     fn render_request_absolute_url_wins_over_base_url() {
         let ep = ep_with_path("https://httpbin.org/get");
-        let vars = HashMap::from([("base_url".to_string(), "https://other.example.com".to_string())]);
+        let vars = HashMap::from([(
+            "base_url".to_string(),
+            "https://other.example.com".to_string(),
+        )]);
         let (url, _) = render_request(&ep, &vars);
         assert_eq!(url, "https://httpbin.org/get");
     }
@@ -2599,7 +2888,10 @@ mod tests {
     #[test]
     fn render_request_joins_relative_path_with_base_url() {
         let ep = ep_with_path("/api/users");
-        let vars = HashMap::from([("base_url".to_string(), "https://api.example.com".to_string())]);
+        let vars = HashMap::from([(
+            "base_url".to_string(),
+            "https://api.example.com".to_string(),
+        )]);
         let (url, _) = render_request(&ep, &vars);
         assert_eq!(url, "https://api.example.com/api/users");
     }

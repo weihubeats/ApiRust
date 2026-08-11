@@ -69,9 +69,14 @@ pub async fn fetch_latest_release() -> Result<UpdateInfo, String> {
         .map_err(|e| format!("读取响应失败：{e}"))?;
     if !status.is_success() {
         // GitHub API 限流会返回 403 + 明确 message。
-        return Err(format!("检查更新失败（HTTP {}）：{}", status.as_u16(), hint(&text)));
+        return Err(format!(
+            "检查更新失败（HTTP {}）：{}",
+            status.as_u16(),
+            hint(&text)
+        ));
     }
-    let release: GhRelease = serde_json::from_str(&text).map_err(|e| format!("解析更新信息失败：{e}"))?;
+    let release: GhRelease =
+        serde_json::from_str(&text).map_err(|e| format!("解析更新信息失败：{e}"))?;
     let asset = pick_asset(&release.assets).ok_or_else(|| {
         format!(
             "当前平台（{}）暂无可用安装包，请前往 GitHub Releases 手动下载",
@@ -178,10 +183,7 @@ pub async fn download_update(
     if !resp.status().is_success() {
         return Err(format!("下载失败（HTTP {}）", resp.status().as_u16()));
     }
-    let total = resp
-        .content_length()
-        .unwrap_or(0)
-        .max(1);
+    let total = resp.content_length().unwrap_or(0).max(1);
     let mut stream = resp.bytes_stream();
     let mut received: u64 = 0;
     let mut out = tokio::fs::File::create(&path)
@@ -231,9 +233,7 @@ pub fn open_path(path: &Path) -> Result<(), String> {
     } else {
         std::process::Command::new("xdg-open").arg(s).spawn()
     };
-    result
-        .map(|_| ())
-        .map_err(|e| format!("打开文件失败：{e}"))
+    result.map(|_| ()).map_err(|e| format!("打开文件失败：{e}"))
 }
 
 /// 应用信息（设置页「关于」展示）。
@@ -253,8 +253,14 @@ pub fn about_meta() -> Vec<(String, String)> {
             "操作系统".into(),
             format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
         ),
-        ("数据目录".into(), fox_storage::db::data_dir().display().to_string()),
-        ("代码仓库".into(), "https://github.com/weihubeats/ApiRust".into()),
+        (
+            "数据目录".into(),
+            fox_storage::db::data_dir().display().to_string(),
+        ),
+        (
+            "代码仓库".into(),
+            "https://github.com/weihubeats/ApiRust".into(),
+        ),
     ];
     if let Ok(cpu) = std::env::var("RUSTFOX_BUILD_DATE") {
         rows.push(("构建时间".into(), cpu));
@@ -450,7 +456,10 @@ mod tests {
         if std::env::consts::OS == "windows" {
             assert!(pick_asset(&assets).is_some());
         } else {
-            assert!(pick_asset(&assets).is_none(), "不应为当前平台选中 Windows 包");
+            assert!(
+                pick_asset(&assets).is_none(),
+                "不应为当前平台选中 Windows 包"
+            );
         }
     }
 
@@ -458,7 +467,10 @@ mod tests {
     fn sanitize_removes_path_separators() {
         assert_eq!(sanitize_file_name("../evil.zip"), ".._evil.zip");
         assert_eq!(sanitize_file_name("a/b.zip"), "a_b.zip");
-        assert_eq!(sanitize_file_name("RustFox-1.0.0-macos-aarch64.zip"), "RustFox-1.0.0-macos-aarch64.zip");
+        assert_eq!(
+            sanitize_file_name("RustFox-1.0.0-macos-aarch64.zip"),
+            "RustFox-1.0.0-macos-aarch64.zip"
+        );
     }
 
     #[test]

@@ -3,13 +3,17 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use dioxus::events::eval;
 use dioxus::prelude::*;
+use fox_codegen::Lang;
 use fox_core::curl_parser::parse_curl;
 use fox_core::model::{Endpoint, Folder};
 use uuid::Uuid;
 
+use crate::components::confirm_dialog::{ConfirmDialog, ConfirmInfo};
 use crate::components::dropdown::Dropdown;
-use crate::components::icons::{CaretIcon, FolderIcon, SearchIcon};
+use crate::components::icons::{CaretIcon, FolderIcon, MoreIcon, SearchIcon};
+use crate::pages::workspace::build_codegen_code;
 use crate::state::AppState;
 
 /// 树操作动作。
@@ -22,7 +26,6 @@ pub enum TreeAction {
     RenameEndpoint { id: Uuid, current: String },
     DeleteFolder { id: Uuid },
     DeleteEndpoint { id: Uuid },
-    DuplicateEndpoint { id: Uuid },
 }
 
 /// 树操作分发器。
@@ -69,14 +72,16 @@ pub fn SideBar() -> Element {
     let curl_open: Signal<bool> = use_signal(|| false);
     let curl_target: Signal<Option<Uuid>> = use_signal(|| None);
     let curl_input: Signal<String> = use_signal(String::new);
+    // 删除二次确认弹窗（保存待删除的动作，确认后才真正执行）。
+    let confirm: Signal<Option<(ConfirmInfo, TreeAction)>> = use_signal(|| None);
 
     let dispatcher: Dispatcher = Rc::new(RefCell::new({
-        let st = state.clone();
         let mut modal_sig = modal;
         let mut input = modal_input;
         let mut co = curl_open;
         let mut target = curl_target;
         let mut ci = curl_input;
+        let mut confirm_sig = confirm;
         move |action| match action {
             TreeAction::CreateFolder { .. }
             | TreeAction::CreateEndpoint { .. }
@@ -97,9 +102,17 @@ pub fn SideBar() -> Element {
                 target.set(folder_id);
                 co.set(true);
             }
-            TreeAction::DeleteFolder { id } => st.delete_folder(id),
-            TreeAction::DeleteEndpoint { id } => st.delete_endpoint(id),
-            TreeAction::DuplicateEndpoint { id } => st.duplicate_endpoint(id),
+            TreeAction::DeleteFolder { id } => confirm_sig.set(Some((
+                ConfirmInfo::new(
+                    "删除文件夹",
+                    "确定要删除该文件夹吗？其下的所有子文件夹和接口将一并删除，且不可恢复。",
+                ),
+                TreeAction::DeleteFolder { id },
+            ))),
+            TreeAction::DeleteEndpoint { id } => confirm_sig.set(Some((
+                ConfirmInfo::new("删除接口", "确定要删除该接口吗？此操作不可恢复。"),
+                TreeAction::DeleteEndpoint { id },
+            ))),
         }
     }));
     let dispatcher_provided = dispatcher.clone();
@@ -171,6 +184,7 @@ pub fn SideBar() -> Element {
     };
     let curl_open_flag = *curl_open.read();
     let add_menu_open_flag = *add_menu_open.read();
+    let st_del = state.clone();
     let mut ok_a = dialog_ok.clone();
     let mut ok_b = dialog_ok.clone();
     let mut cancel_a = dialog_cancel;
@@ -359,6 +373,26 @@ pub fn SideBar() -> Element {
                 }
             }
         }
+        if let Some((info, _)) = confirm.read().as_ref() {
+            ConfirmDialog {
+                info: Some(info.clone()),
+                on_confirm: move |_| {
+                    if let Some((_, action)) = confirm.peek().as_ref() {
+                        match action {
+                            TreeAction::DeleteFolder { id } => st_del.delete_folder(*id),
+                            TreeAction::DeleteEndpoint { id } => st_del.delete_endpoint(*id),
+                            _ => {}
+                        }
+                    }
+                    let mut c = confirm;
+                    c.set(None);
+                },
+                on_cancel: move |_| {
+                    let mut c = confirm;
+                    c.set(None);
+                },
+            }
+        }
     }
 }
 
@@ -446,21 +480,33 @@ pub fn FolderNode(
     }
 }
 
+/// 复制文本到剪贴板（webview 内 execCommand 兜底，兼容非安全上下文）。
+fn copy_text(text: &str) {
+    let quoted = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+    eval(&format!(
+        "(function(){{var ta=document.createElement('textarea');ta.value={quoted};ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();try{{document.execCommand('copy');}}catch(e){{}}document.body.removeChild(ta);}})();"
+    ));
+}
+
 /// 接口行。
 #[component]
 pub fn EndpointRow(ep: Endpoint, depth: usize) -> Element {
     let state = use_context::<AppState>();
     let dispatcher = use_context::<Dispatcher>();
-    let d1 = dispatcher.clone();
-    let d2 = dispatcher.clone();
-    let d3 = dispatcher.clone();
-    let d4 = dispatcher.clone();
+    let d_rename = dispatcher.clone();
+    let d_delete = dispatcher.clone();
     let is_active = state
         .active_endpoint_id
         .read()
         .is_some_and(|id| id == ep.id);
     let method_cls = ep.method.as_str().to_lowercase();
     let path = ep.path.clone();
+    let ep_id = ep.id;
+    let ep_name = ep.name.clone();
+    let ep_for_curl = ep.clone();
+    let st_curl = state.clone();
+    // 「⋯」更多操作下拉。
+    let more_open = use_signal(|| false);
 
     rsx! {
         div {
@@ -470,38 +516,62 @@ pub fn EndpointRow(ep: Endpoint, depth: usize) -> Element {
             div { class: "rf-method rf-method-chip rf-method-chip-{method_cls}", "{ep.method}" }
             div { class: "name", title: "{path}", "{ep.name}" }
             div { class: "tree-actions",
-                button {
-                    class: "rf-tree-action",
-                    id: "import-curl-{ep.id}",
-                    onclick: move |e| {
-                        e.stop_propagation();
-                        (d1.borrow_mut())(TreeAction::ImportCurl { folder_id: ep.folder_id });
-                    },
-                    "导入cURL"
-                }
-                button {
-                    class: "rf-tree-action",
-                    onclick: move |e| {
-                        e.stop_propagation();
-                        (d2.borrow_mut())(TreeAction::DuplicateEndpoint { id: ep.id });
-                    },
-                    "复制"
-                }
-                button {
-                    class: "rf-tree-action",
-                    onclick: move |e| {
-                        e.stop_propagation();
-                        (d3.borrow_mut())(TreeAction::RenameEndpoint { id: ep.id, current: ep.name.clone() });
-                    },
-                    "改名"
-                }
-                button {
-                    class: "rf-tree-action",
-                    onclick: move |e| {
-                        e.stop_propagation();
-                        (d4.borrow_mut())(TreeAction::DeleteEndpoint { id: ep.id });
-                    },
-                    "删除"
+                div { class: "tree-more-wrap",
+                    button {
+                        class: "rf-tree-action rf-tree-more",
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            let mut o = more_open;
+                            let cur = *o.peek();
+                            o.set(!cur);
+                        },
+                        MoreIcon {}
+                    }
+                    if *more_open.read() {
+                        div {
+                            class: "rf-dropdown-backdrop",
+                            onclick: move |e| {
+                                e.stop_propagation();
+                                let mut o = more_open;
+                                o.set(false);
+                            },
+                        }
+                        div { class: "rf-dropdown-menu tree-more-menu",
+                            div {
+                                class: "rf-dropdown-item",
+                                onclick: move |e| {
+                                    e.stop_propagation();
+                                    let mut o = more_open;
+                                    o.set(false);
+                                    (d_rename.borrow_mut())(TreeAction::RenameEndpoint { id: ep_id, current: ep_name.clone() });
+                                },
+                                "重命名"
+                            }
+                            div {
+                                class: "rf-dropdown-item",
+                                onclick: move |e| {
+                                    e.stop_propagation();
+                                    let mut o = more_open;
+                                    o.set(false);
+                                    if let Some(code) = build_codegen_code(&st_curl, &ep_for_curl, Lang::Curl) {
+                                        copy_text(&code);
+                                        st_curl.toast_success("cURL 命令已复制到剪贴板");
+                                    }
+                                },
+                                "复制 Curl"
+                            }
+                            div {
+                                class: "rf-dropdown-item rf-dd-danger",
+                                onclick: move |e| {
+                                    e.stop_propagation();
+                                    let mut o = more_open;
+                                    o.set(false);
+                                    (d_delete.borrow_mut())(TreeAction::DeleteEndpoint { id: ep_id });
+                                },
+                                "删除"
+                            }
+                        }
+                    }
                 }
             }
         }

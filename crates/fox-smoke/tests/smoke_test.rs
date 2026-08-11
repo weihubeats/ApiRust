@@ -38,7 +38,7 @@ async fn full_user_flow() {
         .unwrap();
 
     // 2. 创建环境（变量稍后通过 update_environment 写入）。
-    let mut env = repo::create_environment(&db, project.id, "本地")
+    let mut env = repo::create_environment(&db, project.id, "本地", &HashMap::new())
         .await
         .unwrap();
 

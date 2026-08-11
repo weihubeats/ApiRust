@@ -4,12 +4,20 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 
+use crate::components::confirm_dialog::{ConfirmDialog, ConfirmInfo};
 use crate::components::dropdown::Dropdown;
 use crate::components::icons::XIcon;
 use crate::state::{AppState, Page};
 use fox_core::model::Environment;
 use fox_openapi::import::ConflictStrategy;
 use uuid::Uuid;
+
+/// 删除目标类型（区分环境 / Mock 规则）。
+#[derive(Clone, Copy, PartialEq)]
+enum ConfirmAction {
+    Env(Uuid),
+    MockRule(Uuid),
+}
 
 /// 环境编辑草稿（名称 + 变量行）。
 #[derive(Clone, PartialEq)]
@@ -74,6 +82,7 @@ fn var_row(draft: Signal<Option<EnvDraft>>, index: usize, key: String, value: St
 }
 
 /// 单个环境条目。
+#[allow(clippy::too_many_arguments)]
 fn env_item(
     env: &Environment,
     state: AppState,
@@ -82,6 +91,7 @@ fn env_item(
     draft: Option<EnvDraft>,
     mut env_draft: Signal<Option<EnvDraft>>,
     edit_id: Signal<Option<Uuid>>,
+    confirm: Signal<Option<(ConfirmInfo, ConfirmAction)>>,
 ) -> Element {
     let env_id = env.id;
     let env_project_id = env.project_id;
@@ -90,8 +100,8 @@ fn env_item(
     let env_created_at = env.created_at;
     let env_updated_at = env.updated_at;
     let env_name_display = env.name.clone();
+    let env_name_for_delete = env.name.clone();
     let select_btn = state.clone();
-    let delete_btn = state.clone();
     let save_btn = state.clone();
 
     rsx! {
@@ -125,7 +135,18 @@ fn env_item(
                 }
                 button {
                     class: "rf-btn rf-btn-sm",
-                    onclick: move |_| delete_btn.delete_environment(env_id),
+                    onclick: move |_| {
+                        let mut cd = confirm;
+                        cd.set(Some((
+                            ConfirmInfo::new(
+                                "删除环境",
+                                format!(
+                                    "确定要删除环境「{env_name_for_delete}」吗？此操作不可恢复。"
+                                ),
+                            ),
+                            ConfirmAction::Env(env_id),
+                        )));
+                    },
                     "删除"
                 }
             }
@@ -214,6 +235,7 @@ pub fn SettingsPage() -> Element {
     let state = use_context::<AppState>();
 
     let mut new_env_name: Signal<String> = use_signal(String::new);
+    let mut new_env_base_url: Signal<String> = use_signal(String::new);
     let edit_id: Signal<Option<Uuid>> = use_signal(|| None);
     let env_draft: Signal<Option<EnvDraft>> = use_signal(|| None);
     let proj_vars: Signal<Vec<(String, String)>> = use_signal(Vec::new);
@@ -230,6 +252,8 @@ pub fn SettingsPage() -> Element {
     let mut mock_headers: Signal<String> = use_signal(String::new);
     let mut mock_body: Signal<String> = use_signal(String::new);
     let mut backup_text: Signal<String> = use_signal(String::new);
+    // 删除二次确认弹窗（环境 / Mock 规则）。
+    let confirm: Signal<Option<(ConfirmInfo, ConfirmAction)>> = use_signal(|| None);
 
     {
         let st = state.clone();
@@ -267,6 +291,7 @@ pub fn SettingsPage() -> Element {
     let restore_btn = state.clone();
     let check_btn = state.clone();
     let view_btn = state.clone();
+    let st_del = state.clone();
     let close_btn = state.clone();
     let update_info = state.update_info.read().clone();
     let update_checking = *state.update_checking.read();
@@ -287,7 +312,7 @@ pub fn SettingsPage() -> Element {
         .map(|p| format!("http://127.0.0.1:{p}"))
         .unwrap_or_default();
     let mock_rule_list = state.mock_rules.read().clone();
-    type MockRow = (Uuid, String, String, String, u16, i64, u64, AppState);
+    type MockRow = (Uuid, String, String, String, u16, i64, u64, String);
     let mock_rows: Vec<MockRow> = mock_rule_list
         .iter()
         .map(|r| {
@@ -299,7 +324,7 @@ pub fn SettingsPage() -> Element {
                 r.response_status,
                 r.priority,
                 r.delay_ms,
-                state.clone(),
+                format!("{} {}", r.method.as_str(), r.path),
             )
         })
         .collect();
@@ -340,6 +365,12 @@ pub fn SettingsPage() -> Element {
                             value: "{new_env_name}",
                             oninput: move |e| new_env_name.set(e.data().value()),
                         }
+                        input {
+                            class: "rf-input grow",
+                            placeholder: "baseURL，如：https://api.example.com",
+                            value: "{new_env_base_url}",
+                            oninput: move |e| new_env_base_url.set(e.data().value()),
+                        }
                         button {
                             class: "rf-btn rf-btn-primary",
                             onclick: move |_| {
@@ -348,8 +379,15 @@ pub fn SettingsPage() -> Element {
                                     create_btn.toast_error("环境名称不能为空");
                                     return;
                                 }
-                                create_btn.create_environment(name);
+                                let base_url = new_env_base_url.peek().trim().to_string();
+                                let vars = if base_url.is_empty() {
+                                    HashMap::new()
+                                } else {
+                                    HashMap::from([("base_url".into(), base_url)])
+                                };
+                                create_btn.create_environment(name, vars);
                                 new_env_name.set(String::new());
+                                new_env_base_url.set(String::new());
                             },
                             "新建环境"
                         }
@@ -358,7 +396,7 @@ pub fn SettingsPage() -> Element {
                         div { class: "hint", "暂无环境。新建环境后可在顶部选择器切换，发送请求时将自动替换 {{base_url}} 等变量。" }
                     }
                     for env in env_list {
-                        { env_item(&env, state.clone(), current_env_id, editing == Some(env.id), draft.clone(), env_draft, edit_id) }
+                        { env_item(&env, state.clone(), current_env_id, editing == Some(env.id), draft.clone(), env_draft, edit_id, confirm) }
                     }
                 }
                 div { class: "rf-divider" }
@@ -564,7 +602,7 @@ pub fn SettingsPage() -> Element {
                                 "新建规则"
                             }
                         }
-                        for (id, method, method_cls, path, response_status, priority, delay_ms, row_state) in mock_rows.clone() {
+                        for (id, method, method_cls, path, response_status, priority, delay_ms, m_msg) in mock_rows.clone() {
                             div { class: "mock-rule-row",
                                 div { class: "row",
                                     span { class: "rf-method rf-method-chip rf-method-chip-{method_cls}", "{method}" }
@@ -573,7 +611,16 @@ pub fn SettingsPage() -> Element {
                                     div { class: "spacer" }
                                     button {
                                         class: "rf-btn rf-btn-sm",
-                                        onclick: move |_| row_state.delete_mock_rule(id),
+                                        onclick: move |_| {
+                                            let mut cd = confirm;
+                                            cd.set(Some((
+                                                ConfirmInfo::new(
+                                                    "删除 Mock 规则",
+                                                    format!("确定要删除 Mock 规则（{m_msg}）吗？此操作不可恢复。"),
+                                                ),
+                                                ConfirmAction::MockRule(id),
+                                            )));
+                                        },
                                         "删除"
                                     }
                                 }
@@ -639,6 +686,25 @@ pub fn SettingsPage() -> Element {
                         "返回首页"
                     }
                 }
+            }
+        }
+        if let Some((info, _)) = confirm.read().as_ref() {
+            ConfirmDialog {
+                info: Some(info.clone()),
+                on_confirm: move |_| {
+                    if let Some((_, action)) = confirm.peek().as_ref() {
+                        match action {
+                            ConfirmAction::Env(id) => st_del.delete_environment(*id),
+                            ConfirmAction::MockRule(id) => st_del.delete_mock_rule(*id),
+                        }
+                    }
+                    let mut c = confirm;
+                    c.set(None);
+                },
+                on_cancel: move |_| {
+                    let mut c = confirm;
+                    c.set(None);
+                },
             }
         }
     }

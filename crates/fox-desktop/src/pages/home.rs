@@ -7,6 +7,7 @@ use fox_core::model::Project;
 use fox_storage::repository as repo;
 use uuid::Uuid;
 
+use crate::components::confirm_dialog::{ConfirmDialog, ConfirmInfo};
 use crate::components::icons::{FolderIcon, PlusIcon};
 use crate::state::AppState;
 
@@ -37,6 +38,8 @@ pub fn HomePage() -> Element {
     let mut new_name = use_signal(String::new);
     let mut new_desc = use_signal(String::new);
     let counts: Signal<HashMap<Uuid, usize>> = use_signal(HashMap::new);
+    // 删除项目二次确认弹窗（保存待删除的项目 id，确认后才真正执行）。
+    let confirm_del: Signal<Option<(ConfirmInfo, Uuid)>> = use_signal(|| None);
 
     {
         let st = state.clone();
@@ -46,12 +49,13 @@ pub fn HomePage() -> Element {
     }
 
     // 每张卡片持有自己的克隆，避免闭包竞争。
-    let handles: Vec<(Project, AppState, AppState, Uuid)> = projects
+    let handles: Vec<(Project, AppState, Uuid, String)> = projects
         .iter()
-        .map(|p| (p.clone(), state.clone(), state.clone(), p.id))
+        .map(|p| (p.clone(), state.clone(), p.id, p.name.clone()))
         .collect();
 
     let count_map = counts.read().clone();
+    let st_del = state.clone();
 
     rsx! {
         div { class: "rf-home",
@@ -67,7 +71,7 @@ pub fn HomePage() -> Element {
                 } else {
                     div { class: "rf-card-title", "项目列表" }
                     div { class: "rf-project-grid",
-                        for (p, st_open, st_del, pid) in handles {
+                        for (p, st_open, pid, p_name) in handles {
                             div {
                                 key: "{p.id}",
                                 class: "rf-project-card",
@@ -84,7 +88,14 @@ pub fn HomePage() -> Element {
                                         class: "rf-btn rf-btn-ghost rf-btn-sm",
                                         onclick: move |e| {
                                             e.stop_propagation();
-                                            st_del.delete_project(pid);
+                                            let mut cd = confirm_del;
+                                            cd.set(Some((
+                                                ConfirmInfo::new(
+                                                    "删除项目",
+                                                    format!("确定要删除项目「{p_name}」吗？其下的所有接口、环境、Mock 规则将一并删除，且不可恢复。"),
+                                                ),
+                                                pid,
+                                            )));
                                         },
                                         "删除"
                                     }
@@ -141,6 +152,22 @@ pub fn HomePage() -> Element {
                     span { "搜索" }
                 }
             }
+            if let Some((info, _)) = confirm_del.read().as_ref() {
+            ConfirmDialog {
+                info: Some(info.clone()),
+                on_confirm: move |_| {
+                    if let Some((_, id)) = confirm_del.peek().as_ref() {
+                        st_del.delete_project(*id);
+                    }
+                    let mut c = confirm_del;
+                    c.set(None);
+                },
+                on_cancel: move |_| {
+                    let mut c = confirm_del;
+                    c.set(None);
+                },
+            }
+        }
         }
     }
 }

@@ -5,7 +5,7 @@
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
-    use dioxus::dioxus_core::{AttributeValue, ElementId, Mutation, Mutations};
+    use dioxus::dioxus_core::{ElementId, Mutation, Mutations};
     use dioxus::prelude::*;
     use fox_core::model::{Endpoint, EndpointStatus, HttpMethod, Project, RequestSpec};
     use std::cell::RefCell;
@@ -80,27 +80,6 @@ mod tests {
         project_id
     }
 
-    /// 指定 attr id 元素的 click 监听元素 id。
-    fn listener_id_for(muts: &Mutations, attr_id: &str) -> Vec<ElementId> {
-        let mut elems = Vec::new();
-        for m in &muts.edits {
-            if let Mutation::SetAttribute { name, value, id, .. } = m {
-                if *name == "id" && value == &AttributeValue::Text(attr_id.to_string()) {
-                    elems.push(*id);
-                }
-            }
-        }
-        let mut out = Vec::new();
-        for m in &muts.edits {
-            if let Mutation::NewEventListener { name, id, .. } = m {
-                if name == "click" && elems.contains(id) {
-                    out.push(*id);
-                }
-            }
-        }
-        out
-    }
-
     fn mouse() -> Rc<dyn std::any::Any> {
         Rc::new(PlatformEventData::new(Box::new(
             SerializedMouseData::default(),
@@ -140,115 +119,170 @@ mod tests {
 
     #[test]
     fn sidebar_layout_and_modals() {
-        with_pool(|| { with_converter(|| {
-            let mut dom = VirtualDom::new_with_props(root, ());
+        with_pool(|| {
+            with_converter(|| {
+let mut dom = VirtualDom::new_with_props(root, ());
             let m1 = dom.rebuild_to_vec();
-            let state = ST.with(|s| s.borrow().clone()).expect("状态已就绪");
-            let ep_id = state.endpoints.read()[0].id;
 
-            // 初始 click 监听：项目/环境下拉 trigger + Toolbar 双按钮 + 接口行 open + 4 行内按钮。
-            let initial = event_listeners(&m1, "click");
-            assert_eq!(initial.len(), 9, "结构监听：2 下拉 + 2 工具栏 + 树(open+4) = 9，实际：{initial:?}");
-            // 初始 input 监听：仅搜索框。
-            assert_eq!(event_listeners(&m1, "input").len(), 1, "仅搜索框一个输入监听");
+            // 初始 click 监听：项目/环境下拉 trigger + Toolbar 双按钮 + 树行 open + 接口行「⋯」按钮。
+                let initial = event_listeners(&m1, "click");
+                assert_eq!(
+                    initial.len(),
+                    6,
+                    "结构监听：2 下拉 + 2 工具栏 + 树(open+more) = 6，实际：{initial:?}"
+                );
+                // 初始 input 监听：仅搜索框。
+                assert_eq!(
+                    event_listeners(&m1, "input").len(),
+                    1,
+                    "仅搜索框一个输入监听"
+                );
 
-            // Toolbar「＋ 接口」（[1]）：点击展开下拉（backdrop + HTTP 接口 + 从 cURL 导入）。
-            // 静态 id 随 LoadTemplate 内建，Mutation 不可见；按注册顺序取：
-            // [0] ＋ 文件夹 [1] ＋ 接口 [2] 环境下拉 [3] 树行 open [4..7] 行内按钮 [8] 项目下拉。
-            let add_ep = initial[1];
-            dom.handle_event("click", mouse(), add_ep, true);
-            let m_menu = dom.render_immediate_to_vec();
-            let fresh_menu: Vec<ElementId> = event_listeners(&m_menu, "click")
-                .iter()
-                .filter(|id| !initial.contains(id))
-                .copied()
-                .collect();
-            assert_eq!(fresh_menu.len(), 3, "下拉应为 backdrop + HTTP 接口 + 从 cURL 导入，实际：{fresh_menu:?}");
+                // Toolbar「＋ 接口」（[1]）：点击展开下拉（backdrop + HTTP 接口 + 从 cURL 导入）。
+                // 静态 id 随 LoadTemplate 内建，Mutation 不可见；按注册顺序取：
+                // [0] ＋ 文件夹 [1] ＋ 接口 [2] 环境下拉 [3] 树行 open [4] 接口行「⋯」 [5] 项目下拉。
+                let add_ep = initial[1];
+                dom.handle_event("click", mouse(), add_ep, true);
+                let m_menu = dom.render_immediate_to_vec();
+                let fresh_menu: Vec<ElementId> = event_listeners(&m_menu, "click")
+                    .iter()
+                    .filter(|id| !initial.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(
+                    fresh_menu.len(),
+                    3,
+                    "下拉应为 backdrop + HTTP 接口 + 从 cURL 导入，实际：{fresh_menu:?}"
+                );
 
-            // 点「HTTP 接口」→ 名称弹窗（backdrop + 弹窗体 + 取消 + 确定）。
-            dom.handle_event("click", mouse(), fresh_menu[1], true);
-            let m_dlg = dom.render_immediate_to_vec();
-            let fresh_dlg: Vec<ElementId> = event_listeners(&m_dlg, "click")
-                .iter()
-                .filter(|id| !initial.contains(id))
-                .copied()
-                .collect();
-            assert_eq!(fresh_dlg.len(), 4, "名称弹窗应为 backdrop+弹窗体+取消+确定，实际：{fresh_dlg:?}");
-            // 点 backdrop 关闭。
-            dom.handle_event("click", mouse(), fresh_dlg[0], true);
-            let _m_dlg_closed = dom.render_immediate_to_vec();
+                // 点「HTTP 接口」→ 名称弹窗（backdrop + 弹窗体 + 取消 + 确定）。
+                dom.handle_event("click", mouse(), fresh_menu[1], true);
+                let m_dlg = dom.render_immediate_to_vec();
+                let fresh_dlg: Vec<ElementId> = event_listeners(&m_dlg, "click")
+                    .iter()
+                    .filter(|id| !initial.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(
+                    fresh_dlg.len(),
+                    4,
+                    "名称弹窗应为 backdrop+弹窗体+取消+确定，实际：{fresh_dlg:?}"
+                );
+                // 点 backdrop 关闭。
+                dom.handle_event("click", mouse(), fresh_dlg[0], true);
+                let _m_dlg_closed = dom.render_immediate_to_vec();
 
-            // 再点「＋ 接口」展开，点「从 cURL 导入」→ cURL 导入弹窗，backdrop 关闭。
-            dom.handle_event("click", mouse(), add_ep, true);
-            let m_menu2 = dom.render_immediate_to_vec();
-            let fresh_menu2: Vec<ElementId> = event_listeners(&m_menu2, "click")
-                .iter()
-                .filter(|id| !initial.contains(id))
-                .copied()
-                .collect();
-            assert_eq!(fresh_menu2.len(), 3, "再次展开应有 3 个新监听");
-            dom.handle_event("click", mouse(), fresh_menu2[2], true);
-            let m_curl = dom.render_immediate_to_vec();
-            let fresh_curl: Vec<ElementId> = event_listeners(&m_curl, "click")
-                .iter()
-                .filter(|id| !initial.contains(id))
-                .copied()
-                .collect();
-            assert_eq!(fresh_curl.len(), 4, "cURL 导入弹窗应为 backdrop+弹窗体+取消+解析并导入，实际：{fresh_curl:?}");
-            dom.handle_event("click", mouse(), fresh_curl[0], true);
-            let _m_curl_closed = dom.render_immediate_to_vec();
+                // 再点「＋ 接口」展开，点「从 cURL 导入」→ cURL 导入弹窗，backdrop 关闭。
+                dom.handle_event("click", mouse(), add_ep, true);
+                let m_menu2 = dom.render_immediate_to_vec();
+                let fresh_menu2: Vec<ElementId> = event_listeners(&m_menu2, "click")
+                    .iter()
+                    .filter(|id| !initial.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(fresh_menu2.len(), 3, "再次展开应有 3 个新监听");
+                dom.handle_event("click", mouse(), fresh_menu2[2], true);
+                let m_curl = dom.render_immediate_to_vec();
+                let fresh_curl: Vec<ElementId> = event_listeners(&m_curl, "click")
+                    .iter()
+                    .filter(|id| !initial.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(
+                    fresh_curl.len(),
+                    4,
+                    "cURL 导入弹窗应为 backdrop+弹窗体+取消+解析并导入，实际：{fresh_curl:?}"
+                );
+                dom.handle_event("click", mouse(), fresh_curl[0], true);
+                let _m_curl_closed = dom.render_immediate_to_vec();
 
-            // 底部环境下拉（[2]）：展开应新增 backdrop（无环境项）。
-            let env_dd = initial[2];
-            dom.handle_event("click", mouse(), env_dd, true);
-            let m_env = dom.render_immediate_to_vec();
-            let fresh_env: Vec<ElementId> = event_listeners(&m_env, "click")
-                .iter()
-                .filter(|id| !initial.contains(id))
-                .copied()
-                .collect();
-            assert_eq!(fresh_env.len(), 1, "环境下拉应展开（仅 backdrop），实际：{fresh_env:?}");
-            dom.handle_event("click", mouse(), fresh_env[0], true);
-            let _m_env_closed = dom.render_immediate_to_vec();
+                // 底部环境下拉（[2]）：展开应新增 backdrop（无环境项）。
+                let env_dd = initial[2];
+                dom.handle_event("click", mouse(), env_dd, true);
+                let m_env = dom.render_immediate_to_vec();
+                let fresh_env: Vec<ElementId> = event_listeners(&m_env, "click")
+                    .iter()
+                    .filter(|id| !initial.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(
+                    fresh_env.len(),
+                    1,
+                    "环境下拉应展开（仅 backdrop），实际：{fresh_env:?}"
+                );
+                dom.handle_event("click", mouse(), fresh_env[0], true);
+                let _m_env_closed = dom.render_immediate_to_vec();
 
-            // 顶部项目下拉（[8]）：展开应新增 backdrop + 项目菜单项监听。
-            let proj_dd = initial[8];
-            dom.handle_event("click", mouse(), proj_dd, true);
-            let m_menu = dom.render_immediate_to_vec();
-            let fresh_menu: Vec<ElementId> = event_listeners(&m_menu, "click")
-                .iter()
-                .filter(|id| !initial.contains(id))
-                .copied()
-                .collect();
-            assert_eq!(fresh_menu.len(), 2, "项目下拉应展开（backdrop + 1 项目项），实际：{fresh_menu:?}");
-            dom.handle_event("click", mouse(), fresh_menu[0], true);
-            let _m_menu_closed = dom.render_immediate_to_vec();
+                // 顶部项目下拉（[5]）：展开应新增 backdrop + 项目菜单项监听。
+                let proj_dd = initial[5];
+                dom.handle_event("click", mouse(), proj_dd, true);
+                let m_menu = dom.render_immediate_to_vec();
+                let fresh_menu: Vec<ElementId> = event_listeners(&m_menu, "click")
+                    .iter()
+                    .filter(|id| !initial.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(
+                    fresh_menu.len(),
+                    2,
+                    "项目下拉应展开（backdrop + 1 项目项），实际：{fresh_menu:?}"
+                );
+                dom.handle_event("click", mouse(), fresh_menu[0], true);
+                let _m_menu_closed = dom.render_immediate_to_vec();
 
-            // 接口行的「导入cURL」打开导入弹窗，backdrop 关闭。
-            let row = listener_id_for(&m1, &format!("import-curl-{}", ep_id));
-            assert_eq!(row.len(), 1, "接口行应有「导入cURL」按钮");
-            dom.handle_event("click", mouse(), row[0], true);
-            let m4 = dom.render_immediate_to_vec();
-            let fresh_modal: Vec<ElementId> = event_listeners(&m4, "click")
-                .iter()
-                .filter(|id| !initial.contains(id))
-                .copied()
-                .collect();
-            assert_eq!(fresh_modal.len(), 4, "导入弹窗应为 backdrop+弹窗体+取消+解析并导入");
-            dom.handle_event("click", mouse(), fresh_modal[0], true);
-            let m5 = dom.render_immediate_to_vec();
-            let fresh_close: Vec<ElementId> = event_listeners(&m5, "click")
-                .iter()
-                .filter(|id| !initial.contains(id))
-                .copied()
-                .collect();
-            assert!(fresh_close.is_empty(), "backdrop 点击应关闭导入弹窗");
-        });
+                // 接口行的「⋯」（[4]）：展开更多操作下拉（backdrop + 重命名 + 复制 Curl + 删除）。
+                let row_more = initial[4];
+                dom.handle_event("click", mouse(), row_more, true);
+                let m_more = dom.render_immediate_to_vec();
+                let fresh_menu: Vec<ElementId> = event_listeners(&m_more, "click")
+                    .iter()
+                    .filter(|id| !initial.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(
+                    fresh_menu.len(),
+                    4,
+                    "「⋯」下拉应为 backdrop + 3 个菜单项，实际：{fresh_menu:?}"
+                );
+                // 点「重命名」→ 名称弹窗（backdrop + 弹窗体 + 取消 + 确定）。
+                dom.handle_event("click", mouse(), fresh_menu[1], true);
+                let m_rename = dom.render_immediate_to_vec();
+                let fresh_rename: Vec<ElementId> = event_listeners(&m_rename, "click")
+                    .iter()
+                    .filter(|id| !initial.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(
+                    fresh_rename.len(),
+                    4,
+                    "重命名弹窗应为 backdrop+弹窗体+取消+确定，实际：{fresh_rename:?}"
+                );
+                // 点 backdrop 关闭。
+                dom.handle_event("click", mouse(), fresh_rename[0], true);
+                let _m_rename_closed = dom.render_immediate_to_vec();
+                // 再点「⋯」展开，点 backdrop 关闭。
+                dom.handle_event("click", mouse(), row_more, true);
+                let m_more2 = dom.render_immediate_to_vec();
+                let fresh_more2: Vec<ElementId> = event_listeners(&m_more2, "click")
+                    .iter()
+                    .filter(|id| !initial.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(fresh_more2.len(), 4, "再次展开应有 4 个新监听");
+                dom.handle_event("click", mouse(), fresh_more2[0], true);
+                let m_close = dom.render_immediate_to_vec();
+                let fresh_close: Vec<ElementId> = event_listeners(&m_close, "click")
+                    .iter()
+                    .filter(|id| !initial.contains(id))
+                    .copied()
+                    .collect();
+                assert!(fresh_close.is_empty(), "backdrop 点击应关闭「⋯」下拉");
+            });
         });
     }
 
     #[test]
-    fn import_curl_from_row_creates_endpoint() {
+    fn import_curl_from_toolbar_creates_endpoint() {
         dioxus_html::set_event_converter(Box::new(dioxus_html::SerializedHtmlEventConverter));
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
@@ -270,14 +304,20 @@ mod tests {
             let mut dom = VirtualDom::new_with_props(root, ());
                 let m1 = dom.rebuild_to_vec();
                 let state = ST.with(|s| s.borrow().clone()).expect("状态已就绪");
-                let ep_id = state.endpoints.read()[0].id;
                 let clicks1 = event_listeners(&m1, "click");
                 let inputs1 = event_listeners(&m1, "input");
 
-                // 接口行「导入cURL」打开导入弹窗。
-                let row = listener_id_for(&m1, &format!("import-curl-{}", ep_id));
-                assert_eq!(row.len(), 1, "接口行应有「导入cURL」按钮");
-                dom.handle_event("click", mouse(), row[0], true);
+                // Toolbar「＋ 接口」（[1]）展开下拉 → 点「从 cURL 导入」（新增监听 [2]）打开导入弹窗。
+                let add_ep = clicks1[1];
+                dom.handle_event("click", mouse(), add_ep, true);
+                let m_menu = dom.render_immediate_to_vec();
+                let fresh_menu: Vec<ElementId> = event_listeners(&m_menu, "click")
+                    .iter()
+                    .filter(|id| !clicks1.contains(id))
+                    .copied()
+                    .collect();
+                assert_eq!(fresh_menu.len(), 3, "下拉应为 backdrop + HTTP 接口 + 从 cURL 导入，实际：{fresh_menu:?}");
+                dom.handle_event("click", mouse(), fresh_menu[2], true);
                 let m2 = dom.render_immediate_to_vec();
                 let clicks2 = event_listeners(&m2, "click");
                 let modal_ids: Vec<ElementId> = clicks2

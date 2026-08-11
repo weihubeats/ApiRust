@@ -1,9 +1,10 @@
-//! 顶部栏：logo | 分隔线 | 项目下拉 | 环境下拉 | spacer | 搜索框 | 反馈 | 设置。
+//! 顶部栏：三栏 Flex 布局。
+//! 左：Logo + 面包屑（项目名）；中：全局搜索（max-width 500px，含 ⌘K 快捷键标签）；
+//! 右：反馈 / 设置（图标 + 文字，hover 变色）。
 
 use dioxus::prelude::*;
 
-use crate::components::dropdown::Dropdown;
-use crate::components::icons::{SearchIcon, SlidersIcon};
+use crate::components::icons::{BugIcon, SearchIcon, SlidersIcon};
 use crate::feedback;
 use crate::state::{AppState, Page};
 
@@ -12,100 +13,86 @@ pub fn TopBar() -> Element {
     let state = use_context::<AppState>();
 
     let mut search = state.search;
-    let projects = state.projects;
-    let current_project_id = state.current_project_id;
-    let environments = state.environments;
-    let current_environment_id = state.current_environment_id;
-
-    let options: Vec<(String, String)> = projects
-        .read()
-        .iter()
-        .map(|p| (p.id.to_string(), p.name.clone()))
-        .collect();
-    let selected: String = current_project_id
-        .read()
-        .map(|id| id.to_string())
+    let current_project_id = *state.current_project_id.read();
+    let project_name: String = current_project_id
+        .and_then(|id| {
+            state
+                .projects
+                .read()
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| p.name.clone())
+        })
         .unwrap_or_default();
-    let st_dropdown = state.clone();
-
-    let env_options: Vec<(String, String)> = environments
-        .read()
-        .iter()
-        .map(|e| (e.id.to_string(), e.name.clone()))
-        .collect();
-    let env_selected: String = current_environment_id
-        .read()
-        .map(|id| id.to_string())
-        .unwrap_or_default();
-    let st_env = state.clone();
     let st_feedback = state.clone();
+
+    // 快捷键提示：macOS 显示 ⌘K，其余显示 Ctrl+K。
+    let shortcut = if std::env::consts::OS == "macos" {
+        "⌘K".to_string()
+    } else {
+        "Ctrl+K".to_string()
+    };
 
     rsx! {
         header { class: "rf-topbar",
-            div {
-                class: "rf-logo",
-                onclick: move |_| {
-                    let mut p = state.current_page;
-                    p.set(Page::Home);
-                },
-                "RustFox",
-            }
-            div { class: "rf-topbar-sep" }
-            Dropdown {
-                options,
-                selected,
-                placeholder: "未选择项目",
-                on_select: move |v: String| {
-                    if let Ok(id) = uuid::Uuid::parse_str(&v) {
-                        st_dropdown.select_project(id);
+            div { class: "tb-left",
+                div {
+                    class: "rf-logo",
+                    onclick: move |_| {
+                        let mut p = state.current_page;
+                        p.set(Page::Home);
+                    },
+                    "RustFox",
+                }
+                div { class: "rf-topbar-sep" }
+                div { class: "tb-breadcrumb",
+                    span { "项目" }
+                    if !project_name.is_empty() {
+                        span { class: "tb-breadcrumb-sep", "/" }
+                        span { class: "tb-breadcrumb-current", "{project_name}" }
                     }
-                },
-            }
-            div { class: "rf-topbar-sep" }
-            Dropdown {
-                class: "rf-dd-env",
-                options: env_options,
-                selected: env_selected,
-                placeholder: "未选环境",
-                on_select: move |v: String| {
-                    let id = uuid::Uuid::parse_str(&v).ok();
-                    st_env.select_environment(id);
-                },
-            }
-            div { class: "rf-topbar-spacer" }
-            div { class: "rf-search",
-                SearchIcon {}
-                input {
-                    class: "rf-input",
-                    placeholder: "搜索接口",
-                    value: "{search}",
-                    oninput: move |e| search.set(e.data().value()),
                 }
             }
-            button {
-                class: "rf-btn rf-btn-ghost",
-                onclick: move |_| {
-                    let st_fb = st_feedback.clone();
-                    spawn(async move {
-                        match feedback::generate_report(&st_fb) {
-                            Ok(path) => st_fb.toast_success(format!(
-                                "反馈报告已生成：{}（请将该文件内容提交到 GitHub Issue）",
-                                path.display()
-                            )),
-                            Err(e) => st_fb.toast_error(format!("生成反馈报告失败：{e}")),
-                        }
-                    });
-                },
-                "反馈"
+            div { class: "tb-center",
+                div { class: "tb-search",
+                    SearchIcon {}
+                    input {
+                        id: "global-search",
+                        class: "rf-input topbar-search-input",
+                        placeholder: "搜索接口",
+                        value: "{search}",
+                        oninput: move |e| search.set(e.data().value()),
+                    }
+                    span { class: "search-shortcut-tag", "{shortcut}" }
+                }
             }
-            button {
-                class: "rf-btn rf-btn-ghost",
-                onclick: move |_| {
-                    let mut p = state.current_page;
-                    p.set(Page::Settings);
-                },
-                SlidersIcon {}
-                "设置"
+            div { class: "tb-right",
+                button {
+                    class: "rf-btn rf-btn-ghost tb-btn",
+                    onclick: move |_| {
+                        let st_fb = st_feedback.clone();
+                        spawn(async move {
+                            match feedback::generate_report(&st_fb) {
+                                Ok(path) => st_fb.toast_success(format!(
+                                    "反馈报告已生成：{}（请将该文件内容提交到 GitHub Issue）",
+                                    path.display()
+                                )),
+                                Err(e) => st_fb.toast_error(format!("生成反馈报告失败：{e}")),
+                            }
+                        });
+                    },
+                    BugIcon {}
+                    "反馈"
+                }
+                button {
+                    class: "rf-btn rf-btn-ghost tb-btn",
+                    onclick: move |_| {
+                        let mut p = state.current_page;
+                        p.set(Page::Settings);
+                    },
+                    SlidersIcon {}
+                    "设置"
+                }
             }
         }
     }

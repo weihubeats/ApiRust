@@ -1,5 +1,6 @@
 //! HTTP 请求构建、发送、响应解析（SPEC §14）。
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use base64::Engine;
@@ -145,10 +146,29 @@ fn apply_auth(headers: &mut Vec<(String, String)>, query: &mut Vec<KeyValue>, au
     }
 }
 
+/// 全局共享的 reqwest::Client。
+///
+/// `Client` 内部维护连接池与 TLS 会话缓存，按请求新建会重复建连、
+/// 重新握手，性能低下；`OnceLock` 保证进程内只构建一次，
+/// 所有（含并发）请求安全复用同一实例。
+fn shared_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            // 禁用系统代理：本地开发（127.0.0.1 / localhost）不受代理干扰。
+            .no_proxy()
+            .build()
+            .expect("构建共享 HTTP 客户端失败")
+    })
+}
+
 /// 发送 HTTP 请求。
 ///
 /// - `url` 应为已渲染（含变量替换与路径变量）的完整地址。
 /// - `timeout_ms` 为超时毫秒数；None 时使用默认 30 秒。
+///
+/// 复用 [`shared_client`] 全局连接池；超时按请求设置，各请求互不影响，
+/// 并发调用是安全的。
 pub async fn send_request(
     method: HttpMethod,
     url: &str,
@@ -156,12 +176,7 @@ pub async fn send_request(
     timeout_ms: Option<u64>,
 ) -> Result<HttpResponseData, AppError> {
     let timeout_ms = timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
-    let client = Client::builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        // 禁用系统代理：本地开发（127.0.0.1 / localhost）不受代理干扰。
-        .no_proxy()
-        .build()
-        .map_err(AppError::Http)?;
+    let client = shared_client();
 
     let mut url = Url::parse(url).map_err(|e| AppError::Validation(format!("URL 无效：{e}")))?;
 
@@ -178,7 +193,9 @@ pub async fn send_request(
     append_query(&mut url, &query_extra);
 
     let payload = build_payload(spec);
-    let mut req = client.request(reqwest_method(method), url.clone());
+    let mut req = client
+        .request(reqwest_method(method), url.clone())
+        .timeout(Duration::from_millis(timeout_ms));
 
     for (k, v) in &headers {
         if k.is_empty() {
@@ -482,6 +499,27 @@ mod tests {
             .unwrap();
         assert!(resp.truncated);
         assert_eq!(resp.size_bytes, MAX_BODY_BYTES);
+    }
+
+    #[tokio::test]
+    async fn concurrent_requests_share_client() {
+        let base = start_server(|_, _| (200, "text/plain".to_string(), "ok".to_string()));
+        let spec = RequestSpec::default();
+        let url = format!("{base}/concurrent");
+        let mut tasks = Vec::new();
+        for _ in 0..10 {
+            let spec = spec.clone();
+            let url = url.clone();
+            tasks.push(tokio::spawn(async move {
+                let resp = send_request(HttpMethod::GET, &url, &spec, None)
+                    .await
+                    .unwrap();
+                assert_eq!(resp.status, 200);
+            }));
+        }
+        for t in tasks {
+            t.await.unwrap();
+        }
     }
 
     #[test]

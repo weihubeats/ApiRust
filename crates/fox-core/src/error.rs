@@ -35,6 +35,10 @@ pub enum AppError {
 
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// 环境变量解密失败（主密钥丢失 / 更换 / 密文损坏）。
+    #[error("decryption failed: {0}")]
+    Decryption(String),
 }
 
 impl AppError {
@@ -52,6 +56,7 @@ impl AppError {
             AppError::ScriptError(msg) => msg.clone(),
             AppError::WebSocket(msg) => msg.clone(),
             AppError::Json(_) => "JSON 解析失败".to_string(),
+            AppError::Decryption(msg) => msg.clone(),
         }
     }
 }

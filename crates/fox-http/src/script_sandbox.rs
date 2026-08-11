@@ -5,7 +5,7 @@
 //! 脚本在独立工作线程中执行，不会阻塞异步主线程。
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -111,13 +111,26 @@ struct Job {
 }
 
 impl ScriptSandbox {
-    /// 启动沙箱工作线程。每个实例内部串行执行脚本。
+    /// 启动沙箱工作线程（阻塞等待引擎初始化完成）。
+    /// 工作线程内只创建一次 QuickJS Runtime + Context，之后所有脚本复用。
     pub fn new() -> Result<Self, AppError> {
         let (tx, rx) = channel::<Job>();
+        let (init_tx, init_rx) = channel::<Result<(), AppError>>();
         let join = std::thread::Builder::new()
             .name("fox-script-sandbox".to_string())
-            .spawn(move || sandbox_worker(rx))
+            .spawn(move || sandbox_worker(rx, init_tx))
             .map_err(AppError::Io)?;
+        match init_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                let _ = join.join();
+                return Err(e);
+            }
+            Err(_) => {
+                let _ = join.join();
+                return Err(script_error("脚本沙箱启动失败"));
+            }
+        }
         Ok(ScriptSandbox {
             tx: Some(tx),
             join: Some(join),
@@ -126,7 +139,10 @@ impl ScriptSandbox {
 
     /// 异步执行脚本，等待执行结果或超时。
     pub async fn run(&self, input: ScriptInput) -> Result<ScriptResult, AppError> {
-        let tx = self.tx.as_ref().ok_or_else(|| script_error("脚本沙箱已停止"))?;
+        let tx = self
+            .tx
+            .as_ref()
+            .ok_or_else(|| script_error("脚本沙箱已停止"))?;
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         tx.send(Job {
             input,
@@ -153,26 +169,95 @@ impl Drop for ScriptSandbox {
 }
 
 /// 工作线程主循环：串行处理脚本任务，任一脚本最多占用 2 秒。
-fn sandbox_worker(rx: Receiver<Job>) {
+/// Runtime / Context 只在此线程内初始化一次，供所有脚本复用。
+fn sandbox_worker(rx: Receiver<Job>, init_tx: Sender<Result<(), AppError>>) {
+    let mut runner = match SandboxRunner::init() {
+        Ok(runner) => runner,
+        Err(e) => {
+            let _ = init_tx.send(Err(e));
+            return;
+        }
+    };
+    if init_tx.send(Ok(())).is_err() {
+        return;
+    }
     while let Ok(job) = rx.recv() {
-        let result = run_script(&job.input);
+        let result = runner.run_script(&job.input);
         let _ = job.reply.send(result);
     }
 }
 
-/// 执行单个脚本：每次创建全新的 Runtime + Context，天然隔离脚本状态。
-fn run_script(input: &ScriptInput) -> Result<ScriptResult, AppError> {
-    let deadline = Instant::now() + Duration::from_millis(SCRIPT_TIMEOUT_MS);
+/// 复用型 QuickJS 执行单元：工作线程内初始化一次，脚本间通过清理全局状态隔离。
+struct SandboxRunner {
+    /// 注意字段顺序：Context 先于 Runtime 声明，析构时先释放 Context 再释放 Runtime。
+    context: Context,
+    runtime: Runtime,
+    /// 初始化时的全局可枚举键快照：每次执行前删除运行期间新增的全局变量。
+    pristine_globals: HashSet<String>,
+}
 
-    let runtime = Runtime::new().map_err(init_error)?;
-    runtime.set_memory_limit(SCRIPT_MEMORY_LIMIT_BYTES);
-    // 中断处理器：由 QuickJS 在字节码执行期间周期性检查，兜底死循环。
-    runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
+impl SandboxRunner {
+    /// 初始化引擎（Runtime + Context），记录全局快照。
+    /// PRELUDE 依赖每次运行才注册的 `__*` 桥接函数，因此按次注入（见 [`execute`]）。
+    fn init() -> Result<Self, AppError> {
+        let runtime = Runtime::new().map_err(init_error)?;
+        runtime.set_memory_limit(SCRIPT_MEMORY_LIMIT_BYTES);
+        let context = Context::full(&runtime).map_err(init_error)?;
+        let pristine_globals = context.with(|ctx| collect_global_keys(&ctx).map_err(init_error))?;
+        Ok(SandboxRunner {
+            context,
+            runtime,
+            pristine_globals,
+        })
+    }
 
-    let context = Context::full(&runtime).map_err(init_error)?;
-    let script = build_script(&input.code);
-    context
-        .with(|ctx| execute(ctx, input, &script, deadline))
+    /// 执行单个脚本：复用引擎实例，每次执行前重置中断器 / 内存上限 / 全局状态。
+    fn run_script(&mut self, input: &ScriptInput) -> Result<ScriptResult, AppError> {
+        let deadline = Instant::now() + Duration::from_millis(SCRIPT_TIMEOUT_MS);
+
+        // 中断处理器携带本次 deadline：QuickJS 在字节码执行期间周期性检查，兜底死循环。
+        // 必须每次重置，否则上次的 deadline 过期后会误中断后续脚本。
+        self.runtime
+            .set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
+        // 重置内存上限：解除上次脚本触顶后的锁定，恢复 64 MiB 限制。
+        self.runtime.set_memory_limit(SCRIPT_MEMORY_LIMIT_BYTES);
+
+        let script = build_script(&input.code);
+        let result = self.context.with(|ctx| {
+            reset_globals(&ctx, &self.pristine_globals)?;
+            execute(ctx, input, &script, deadline)
+        });
+
+        // 脚本结束后主动 GC：回收循环引用等残留，为下一次执行释放内存。
+        self.runtime.run_gc();
+        result
+    }
+}
+
+/// 收集全局对象的全部可枚举键（含 PRELUDE 与引擎内置项）。
+fn collect_global_keys(ctx: &Ctx<'_>) -> Result<HashSet<String>, JsError> {
+    ctx.globals()
+        .keys::<String>()
+        .collect::<Result<HashSet<_>, _>>()
+}
+
+/// 重置全局状态，恢复脚本间隔离：删除上次运行新增的全局变量
+/// （`globalThis.*`、`__` 桥接函数、包装器变量等）。
+/// PRELUDE 声明（`pm` / `console` / 工具函数）由每次执行重新求值覆盖，
+/// 状态天然全新；且忽略删除失败（QuickJS 中 eval 出的函数声明不可删除）。
+fn reset_globals(ctx: &Ctx<'_>, pristine: &HashSet<String>) -> Result<(), AppError> {
+    let globals = ctx.globals();
+    let keys: Vec<String> = globals
+        .keys::<String>()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(init_error)?;
+    for key in keys {
+        if !pristine.contains(&key) {
+            // 不可配置属性（PRELUDE 函数声明等）删除会抛异常，跳过即可。
+            let _ = globals.remove(key);
+        }
+    }
+    Ok(())
 }
 
 /// 上下文初始化：注入状态、注册 Rust 桥接函数、执行并驱动脚本。
@@ -301,7 +386,11 @@ impl ScriptState {
     }
 
     fn header_upsert(&mut self, key: &str, value: &str) {
-        if let Some(pair) = self.headers.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(key)) {
+        if let Some(pair) = self
+            .headers
+            .iter_mut()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        {
             pair.1 = value.to_string();
         } else {
             self.headers.push((key.to_string(), value.to_string()));
@@ -341,10 +430,17 @@ fn register_bindings(ctx: &Ctx<'_>, state: &Rc<RefCell<ScriptState>>) -> Result<
     let s = Rc::clone(state);
     globals.set(
         "__test",
-        Function::new(ctx.clone(), move |name: String, passed: bool, error: String| {
-            let error = (!error.is_empty()).then_some(error);
-            s.borrow_mut().tests.push(TestResult { name, passed, error });
-        })?,
+        Function::new(
+            ctx.clone(),
+            move |name: String, passed: bool, error: String| {
+                let error = (!error.is_empty()).then_some(error);
+                s.borrow_mut().tests.push(TestResult {
+                    name,
+                    passed,
+                    error,
+                });
+            },
+        )?,
     )?;
 
     let s = Rc::clone(state);
@@ -474,7 +570,10 @@ fn register_bindings(ctx: &Ctx<'_>, state: &Rc<RefCell<ScriptState>>) -> Result<
     globals.set(
         "__resp_code",
         Function::new(ctx.clone(), move || {
-            s.borrow().response.as_ref().map_or(0, |r| i32::from(r.status))
+            s.borrow()
+                .response
+                .as_ref()
+                .map_or(0, |r| i32::from(r.status))
         })?,
     )?;
 
@@ -693,12 +792,31 @@ mod tests {
             "#,
         );
         let result = sandbox.run(input).await.unwrap();
-        assert_eq!(result.environment.get("token").map(String::as_str), Some("abc123"));
-        assert_eq!(result.environment.get("base_url").map(String::as_str), Some("http://localhost"));
-        assert!(result.headers.iter().any(|(k, v)| k == "X-Token" && v == "abc123"));
+        assert_eq!(
+            result.environment.get("token").map(String::as_str),
+            Some("abc123")
+        );
+        assert_eq!(
+            result.environment.get("base_url").map(String::as_str),
+            Some("http://localhost")
+        );
+        assert!(result
+            .headers
+            .iter()
+            .any(|(k, v)| k == "X-Token" && v == "abc123"));
         // 大小写不敏感 upsert：覆盖已有 Content-Type。
-        assert_eq!(result.headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("Content-Type")).count(), 1);
-        assert!(result.headers.iter().any(|(k, v)| k.eq_ignore_ascii_case("Content-Type") && v == "text/plain"));
+        assert_eq!(
+            result
+                .headers
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("Content-Type"))
+                .count(),
+            1
+        );
+        assert!(result
+            .headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("Content-Type") && v == "text/plain"));
         assert!(result.logs.iter().any(|l| l.contains("token = abc123")));
         assert!(result.tests.is_empty());
     }
@@ -717,11 +835,20 @@ mod tests {
         );
         let result = sandbox.run(input).await.unwrap();
         assert_eq!(result.tests.len(), 4);
-        let passed: Vec<&str> = result.tests.iter().filter(|t| t.passed).map(|t| t.name.as_str()).collect();
+        let passed: Vec<&str> = result
+            .tests
+            .iter()
+            .filter(|t| t.passed)
+            .map(|t| t.name.as_str())
+            .collect();
         assert_eq!(passed.len(), 3, "通过列表：{passed:?}");
         let failed = result.tests.iter().find(|t| !t.passed).unwrap();
         assert_eq!(failed.name, "断言失败示例");
-        assert!(failed.error.as_deref().unwrap().contains("cat"), "错误信息：{:?}", failed.error);
+        assert!(
+            failed.error.as_deref().unwrap().contains("cat"),
+            "错误信息：{:?}",
+            failed.error
+        );
     }
 
     #[tokio::test]
@@ -739,8 +866,14 @@ mod tests {
             "#,
         );
         let result = sandbox.run(input).await.unwrap();
-        assert_eq!(result.environment.get("before").map(String::as_str), Some("1"));
-        assert_eq!(result.environment.get("after").map(String::as_str), Some("2"));
+        assert_eq!(
+            result.environment.get("before").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            result.environment.get("after").map(String::as_str),
+            Some("2")
+        );
         assert_eq!(result.tests.len(), 1);
         assert!(result.tests[0].passed, "异步断言应通过：{:?}", result.tests);
     }
@@ -760,24 +893,59 @@ mod tests {
             "#,
         );
         let result = sandbox.run(input).await.unwrap();
-        assert!(result.logs.iter().any(|l| l.starts_with("[log]") && l.contains("hello 42")));
-        assert!(result.logs.iter().any(|l| l.starts_with("[warn]") && l.contains("has = false")));
-        assert!(result.logs.iter().any(|l| l.starts_with("[error]") && l.contains("http://localhost/api/users") && l.contains("GET")));
+        assert!(result
+            .logs
+            .iter()
+            .any(|l| l.starts_with("[log]") && l.contains("hello 42")));
+        assert!(result
+            .logs
+            .iter()
+            .any(|l| l.starts_with("[warn]") && l.contains("has = false")));
+        assert!(result.logs.iter().any(|l| l.starts_with("[error]")
+            && l.contains("http://localhost/api/users")
+            && l.contains("GET")));
         assert!(!result.environment.contains_key("base_url"));
         assert!(!result.environment.contains_key("x"));
+    }
+
+    #[tokio::test]
+    async fn globals_are_isolated_across_runs() {
+        let sandbox = ScriptSandbox::new().unwrap();
+        // 第一次运行：污染全局变量。
+        sandbox
+            .run(base_input(
+                "globalThis.__leak = 'stale'; pm.environment.set('k', 'v');",
+            ))
+            .await
+            .unwrap();
+        // 第二次运行（复用同一引擎）：不应看到上次泄漏的全局变量，pm 仍可用。
+        let result = sandbox
+            .run(base_input(
+                "pm.test('无泄漏', () => pm.expect(globalThis.__leak).to.eql(undefined));",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(result.tests.len(), 1);
+        assert!(result.tests[0].passed, "全局状态未隔离：{:?}", result.tests);
     }
 
     #[tokio::test]
     async fn sync_infinite_loop_times_out() {
         let sandbox = ScriptSandbox::new().unwrap();
         let start = Instant::now();
-        let err = sandbox.run(base_input("while (true) {}")).await.unwrap_err();
+        let err = sandbox
+            .run(base_input("while (true) {}"))
+            .await
+            .unwrap_err();
         let elapsed = start.elapsed();
         match err {
             AppError::ScriptError(msg) => assert!(msg.contains("超时"), "意外提示：{msg}"),
             other => panic!("期望 ScriptError，实际 {other}"),
         }
-        assert!(elapsed >= Duration::from_millis(1500), "中断过早：{elapsed:?}");
+        assert!(
+            elapsed >= Duration::from_millis(1500),
+            "中断过早：{elapsed:?}"
+        );
         assert!(elapsed < Duration::from_secs(6), "中断过晚：{elapsed:?}");
     }
 
@@ -785,17 +953,29 @@ mod tests {
     async fn async_infinite_loop_times_out() {
         let sandbox = ScriptSandbox::new().unwrap();
         let start = Instant::now();
-        let err = sandbox.run(base_input("while (true) { await Promise.resolve(); }")).await.unwrap_err();
-        assert!(matches!(&err, AppError::ScriptError(msg) if msg.contains("超时")), "意外错误：{err}");
+        let err = sandbox
+            .run(base_input("while (true) { await Promise.resolve(); }"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, AppError::ScriptError(msg) if msg.contains("超时")),
+            "意外错误：{err}"
+        );
         let elapsed = start.elapsed();
-        assert!(elapsed >= Duration::from_millis(1500), "中断过早：{elapsed:?}");
+        assert!(
+            elapsed >= Duration::from_millis(1500),
+            "中断过早：{elapsed:?}"
+        );
         assert!(elapsed < Duration::from_secs(6), "中断过晚：{elapsed:?}");
     }
 
     #[tokio::test]
     async fn runtime_error_is_mapped_to_script_error() {
         let sandbox = ScriptSandbox::new().unwrap();
-        let err = sandbox.run(base_input("throw new Error('boom');")).await.unwrap_err();
+        let err = sandbox
+            .run(base_input("throw new Error('boom');"))
+            .await
+            .unwrap_err();
         match err {
             AppError::ScriptError(msg) => assert!(msg.contains("boom"), "错误信息丢失：{msg}"),
             other => panic!("期望 ScriptError，实际 {other}"),
@@ -818,20 +998,18 @@ mod tests {
     #[test]
     fn from_spec_builds_request_snapshot() {
         let spec = RequestSpec {
-            headers: vec![
-                fox_core::model::KeyValue::new("A", "1"),
-                {
-                    let mut kv = fox_core::model::KeyValue::new("B", "2");
-                    kv.enabled = false;
-                    kv
-                },
-            ],
+            headers: vec![fox_core::model::KeyValue::new("A", "1"), {
+                let mut kv = fox_core::model::KeyValue::new("B", "2");
+                kv.enabled = false;
+                kv
+            }],
             body: BodySpec::Json {
                 raw: r#"{"a":1}"#.to_string(),
             },
             ..Default::default()
         };
-        let snapshot = ScriptRequestData::from_spec(HttpMethod::POST, "http://localhost/api", &spec);
+        let snapshot =
+            ScriptRequestData::from_spec(HttpMethod::POST, "http://localhost/api", &spec);
         assert_eq!(snapshot.method, "POST");
         assert_eq!(snapshot.headers.len(), 1);
         assert_eq!(snapshot.body, r#"{"a":1}"#);

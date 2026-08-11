@@ -1701,6 +1701,8 @@ dependencies = [
  "fox-openapi",
  "fox-storage",
  "fox-test",
+ "futures",
+ "reqwest",
  "rfd",
  "serde",
  "serde_json",

@@ -72,9 +72,46 @@ async fn folder_crud() {
     assert_eq!(fetched.name, "改名字目录");
 
     repo::delete_folder(&db, root.id).await.unwrap();
-    // 删除父文件夹后，子文件夹的 parent_id 应为 NULL。
-    let orphan = repo::get_folder(&db, child.id).await.unwrap();
-    assert!(orphan.parent_id.is_none());
+    // 删除父文件夹后，子文件夹（及整个子树）应一并级联删除。
+    assert!(repo::get_folder(&db, child.id).await.is_err());
+}
+
+#[tokio::test]
+async fn delete_folder_cascades_subtree() {
+    let db = pool().await;
+    let project = repo::create_project(&db, "P", "").await.unwrap();
+
+    let root = repo::create_folder(&db, project.id, None, "根").await.unwrap();
+    let child = repo::create_folder(&db, project.id, Some(root.id), "子").await.unwrap();
+    let grand = repo::create_folder(&db, project.id, Some(child.id), "孙").await.unwrap();
+
+    let ep_root = repo::create_endpoint(&db, project.id, Some(root.id), "R")
+        .await
+        .unwrap();
+    let ep_child = repo::create_endpoint(&db, project.id, Some(child.id), "C")
+        .await
+        .unwrap();
+    let ep_grand = repo::create_endpoint(&db, project.id, Some(grand.id), "G")
+        .await
+        .unwrap();
+    let ep_free = repo::create_endpoint(&db, project.id, None, "F")
+        .await
+        .unwrap();
+
+    repo::delete_folder(&db, root.id).await.unwrap();
+
+    // 子孙文件夹全部删除，不再有孤儿记录。
+    assert!(repo::get_folder(&db, root.id).await.is_err());
+    assert!(repo::get_folder(&db, child.id).await.is_err());
+    assert!(repo::get_folder(&db, grand.id).await.is_err());
+    // 子树下接口全部删除。
+    assert!(repo::get_endpoint(&db, ep_root.id).await.is_err());
+    assert!(repo::get_endpoint(&db, ep_child.id).await.is_err());
+    assert!(repo::get_endpoint(&db, ep_grand.id).await.is_err());
+    // 子树外接口不受影响。
+    assert!(repo::get_endpoint(&db, ep_free.id).await.is_ok());
+    // 删除不存在的文件夹返回 NotFound。
+    assert!(repo::delete_folder(&db, uuid::Uuid::new_v4()).await.is_err());
 }
 
 #[tokio::test]

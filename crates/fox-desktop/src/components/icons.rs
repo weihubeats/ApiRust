@@ -70,3 +70,12 @@ pub fn ImportIcon() -> Element {
         path { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }
     })
 }
+
+/// 反馈（气泡）。
+pub fn BugIcon() -> Element {
+    svg_base(rsx! {
+        path { d: "M8 2l1.88 1.88M14.12 3.88L16 2M9 7.13v-1a3 3 0 0 1 6 0v1" }
+        path { d: "M12 20c-3.3 0-6-2.7-6-6v-3a6 6 0 0 1 12 0v3c0 3.3-2.7 6-6 6z" }
+        path { d: "M12 20v2M6 13H2M22 13h-4M6 17l-4 1M22 18l-4-1" }
+    })
+}

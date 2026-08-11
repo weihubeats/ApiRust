@@ -22,6 +22,7 @@ export interface CommandError {
     | 'SCRIPT'
     | 'WEBSOCKET'
     | 'JSON'
+    | 'DECRYPT'
   message: string
 }
 

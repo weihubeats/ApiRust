@@ -171,7 +171,7 @@ impl EnvironmentRow {
             id: parse_uuid(&self.id)?,
             project_id: parse_uuid(&self.project_id)?,
             name: self.name,
-            variables: decrypt_env_json(&self.variables_json),
+            variables: decrypt_env_json(&self.variables_json)?,
             created_at: parse_time(&self.created_at)?,
             updated_at: parse_time(&self.updated_at)?,
         })
@@ -187,13 +187,17 @@ fn encrypt_env_json(vars: &HashMap<String, String>) -> String {
     }
 }
 
-/// 环境变量解密（旧数据 / 密钥不可用时保持明文可用）。
-fn decrypt_env_json(json: &str) -> HashMap<String, String> {
-    let plain = match fox_secret::ensure_master_key().and_then(|k| fox_secret::decrypt(&k, json)) {
-        Ok(p) => p,
-        Err(_) => json.to_string(),
-    };
-    serde_json::from_str(&plain).unwrap_or_default()
+/// 环境变量解密。
+///
+/// 旧版本明文数据原样返回；明确加密格式但解密失败（主密钥丢失 / 更换、
+/// 密文损坏）返回 `AppError::Decryption`，由 UI 层弹窗提示，
+/// 避免把 base64 密文当明文解析成空变量而静默丢失。
+fn decrypt_env_json(json: &str) -> Result<HashMap<String, String>> {
+    let plain = fox_secret::ensure_master_key()
+        .and_then(|k| fox_secret::decrypt(&k, json))
+        .map_err(|e| AppError::Decryption(e.to_string()))?;
+    serde_json::from_str(&plain)
+        .map_err(|_| AppError::Decryption("环境变量密文已损坏，无法解析".to_string()))
 }
 
 fn parse_uuid(s: &str) -> Result<Uuid> {
@@ -365,11 +369,42 @@ pub async fn update_folder(db: &SqlitePool, folder: &Folder) -> Result<Folder> {
     Ok(folder.clone())
 }
 
+/// 递归收集某文件夹的整个子树（含自身）的 CTE 前缀。
+///
+/// folders.parent_id / endpoints.folder_id 外键均为 `ON DELETE SET NULL`，
+/// 直接删除父文件夹会留下「孤儿」子文件夹与接口，因此删除时用该 CTE
+/// 显式收集全部后代并级联清理。
+const FOLDER_SUBTREE_SQL: &str = "WITH RECURSIVE subtree(id) AS (
+    SELECT ?
+    UNION ALL
+    SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id
+)";
+
+/// 删除文件夹及其全部子孙文件夹、子孙文件夹下的接口（事务内级联）。
 pub async fn delete_folder(db: &SqlitePool, folder_id: Uuid) -> Result<()> {
-    sqlx::query("DELETE FROM folders WHERE id = ?")
-        .bind(folder_id.to_string())
-        .execute(db)
-        .await?;
+    let id = folder_id.to_string();
+    let mut tx = db.begin().await?;
+
+    // 先清掉子树下全部接口（外键为 SET NULL，不会自动级联删除）。
+    sqlx::query(&format!(
+        "{FOLDER_SUBTREE_SQL} DELETE FROM endpoints WHERE folder_id IN (SELECT id FROM subtree)"
+    ))
+    .bind(&id)
+    .execute(&mut *tx)
+    .await?;
+
+    // 再递归删除子树全部文件夹。
+    let affected = sqlx::query(&format!(
+        "{FOLDER_SUBTREE_SQL} DELETE FROM folders WHERE id IN (SELECT id FROM subtree)"
+    ))
+    .bind(&id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    if affected.rows_affected() == 0 {
+        return Err(AppError::NotFound(format!("文件夹（{folder_id}）")));
+    }
     Ok(())
 }
 

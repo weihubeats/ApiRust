@@ -37,12 +37,28 @@ export function toFoxError(raw: unknown): Error {
   return raw instanceof Error ? raw : new Error(String(raw))
 }
 
+/** 主密钥问题弹窗文案（对应后端 DECRYPT 错误码）。 */
+const DECRYPT_WARNING = '主密钥不匹配或已损坏，无法解密环境变量，请检查备份'
+
+/** 弹窗去重：同一会话只提示一次，避免批量环境列表解密失败时重复弹出。 */
+let decryptionWarned = false
+
+function warnDecryptionFailed(): void {
+  if (decryptionWarned) return
+  decryptionWarned = true
+  window.alert(DECRYPT_WARNING)
+}
+
 /** 统一的带错误映射的 invoke 封装。 */
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
     return await invoke<T>(command, args)
   } catch (e) {
-    throw toFoxError(e)
+    const err = toFoxError(e)
+    if ('code' in err && err.code === 'DECRYPT') {
+      warnDecryptionFailed()
+    }
+    throw err
   }
 }
 

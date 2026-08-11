@@ -3,8 +3,10 @@
 //! 使用 AES-256-GCM：随机 32 字节主密钥保存在
 //! `~/.rustfox/master.key`（权限 0600），每次加密生成随机 12 字节
 //! nonce，输出格式 `base64(nonce):base64(ciphertext||tag)`。
-//! 兼容性：密文格式无法解析或解密失败时，`decrypt` 返回原文本
-//! （旧版本明文数据容错；密钥更换后旧密文保持不可读，属预期）。
+//! 兼容性：非加密格式（无 `:` / nonce 非 12 字节）原样返回（旧版本明文
+//! 数据容错）；明确加密格式但解密失败（主密钥丢失/更换、密文损坏）返回
+//! `SecretError::DecryptionFailed`，由上层提示用户，避免把 base64 密文当
+//! 明文继续解析导致环境变量静默丢失。
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -21,6 +23,8 @@ pub enum SecretError {
     InvalidKey,
     #[error("密文格式损坏")]
     InvalidCiphertext,
+    #[error("解密失败：主密钥不匹配或密文已损坏")]
+    DecryptionFailed,
 }
 
 pub type Result<T> = std::result::Result<T, SecretError>;
@@ -82,8 +86,11 @@ pub fn encrypt(key: &MasterKey, plain: &str) -> Result<String> {
     Ok(format!("{}:{}", b64(&nonce_bytes), b64(&ciphertext)))
 }
 
-/// 解密 `encrypt` 产物；只有 `base64(12B nonce):base64(ciphertext)`
-/// 这种严格格式才尝试解密，否则原样返回（旧版本明文数据容错）。
+/// 解密 `encrypt` 产物。
+///
+/// - 非加密格式（无 `:`、nonce 非 12 字节的 base64）：视为旧版本明文，原样返回；
+/// - 明确加密格式（`base64(12B nonce):base64(ciphertext)`）但解密失败
+///   （主密钥不匹配 / 密文损坏）：返回 `SecretError::DecryptionFailed`。
 pub fn decrypt(key: &MasterKey, text: &str) -> Result<String> {
     let Some((nonce_b64, cipher_b64)) = text.split_once(':') else {
         return Ok(text.to_string());
@@ -96,15 +103,12 @@ pub fn decrypt(key: &MasterKey, text: &str) -> Result<String> {
         return Ok(text.to_string());
     }
     let Ok(ciphertext) = engine.decode(cipher_b64) else {
-        return Ok(text.to_string());
+        return Err(SecretError::DecryptionFailed);
     };
-    match cipher(key).decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref()) {
-        Ok(p) => match String::from_utf8(p) {
-            Ok(v) => Ok(v),
-            Err(_) => Ok(text.to_string()),
-        },
-        Err(_) => Ok(text.to_string()),
-    }
+    let plain = cipher(key)
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|_| SecretError::DecryptionFailed)?;
+    String::from_utf8(plain).map_err(|_| SecretError::DecryptionFailed)
 }
 
 #[cfg(test)]
@@ -143,18 +147,32 @@ mod tests {
     }
 
     #[test]
-    fn wrong_key_returns_ciphertext_as_is() {
+    fn wrong_key_returns_decryption_failed() {
         let key = test_key(2);
         let other = test_key(3);
         let enc = encrypt(&key, "top-secret").unwrap();
-        let out = decrypt(&other, &enc).unwrap();
-        assert_eq!(out, enc);
+        assert!(matches!(
+            decrypt(&other, &enc),
+            Err(SecretError::DecryptionFailed)
+        ));
+    }
+
+    #[test]
+    fn valid_nonce_bad_ciphertext_errors() {
+        // nonce 合法（12 字节 base64）但密文段不是合法 base64 → 判定为损坏密文。
+        let key = test_key(5);
+        let nonce = base64::engine::general_purpose::STANDARD.encode([0u8; 12]);
+        let malformed = format!("{nonce}:!!!not-base64!!!");
+        assert!(matches!(
+            decrypt(&key, &malformed),
+            Err(SecretError::DecryptionFailed)
+        ));
     }
 
     #[test]
     fn malformed_ciphertext_passthrough() {
         let key = test_key(4);
-        // 非法 base64 / 错误长度 → 视为明文原样返回。
+        // nonce 非 12 字节 / 非 base64 → 视为明文原样返回。
         assert_eq!(decrypt(&key, "abc:def").unwrap(), "abc:def");
         assert_eq!(decrypt(&key, "QQ==:YQ==").unwrap(), "QQ==:YQ==");
         // 含冒号的明文 JSON 也被原样保留。

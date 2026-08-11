@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use dioxus::prelude::*;
 
 use crate::components::dropdown::Dropdown;
+use crate::components::icons::XIcon;
 use crate::state::{AppState, Page};
 use fox_core::model::Environment;
 use fox_openapi::import::ConflictStrategy;
@@ -264,6 +265,11 @@ pub fn SettingsPage() -> Element {
     let add_rule_btn = state.clone();
     let backup_btn = state.clone();
     let restore_btn = state.clone();
+    let check_btn = state.clone();
+    let view_btn = state.clone();
+    let close_btn = state.clone();
+    let update_info = state.update_info.read().clone();
+    let update_checking = *state.update_checking.read();
     let project_name = state
         .projects
         .read()
@@ -299,9 +305,29 @@ pub fn SettingsPage() -> Element {
         .collect();
 
     rsx! {
-        div { class: "page-pad",
-            div { class: "center-box",
-                h2 { "设置" }
+        div {
+            class: "page-pad",
+            // 点击设置内容外的空白区域关闭设置页。
+            onclick: move |_| {
+                let mut pg = close_btn.current_page;
+                pg.set(Page::Workspace);
+            },
+            div {
+                class: "center-box",
+                // 设置内容区不冒泡到空白区关闭逻辑。
+                onclick: |e| { e.stop_propagation(); },
+                div { class: "settings-header",
+                    h2 { "设置" }
+                    button {
+                        class: "rf-btn rf-btn-ghost rf-btn-sm settings-close",
+                        title: "关闭设置",
+                        onclick: move |_| {
+                            let mut pg = close_btn.current_page;
+                            pg.set(Page::Workspace);
+                        },
+                        XIcon {}
+                    }
+                }
                 div { class: "rf-divider" }
                 div { class: "hint rf-hint-flat",
                     "当前项目：{project_name}。变量优先级：环境 > 项目 > 内置（{{$uuid}} / {{$timestamp}} / {{$isoTimestamp}} / {{$randomInt}}）。" }
@@ -584,6 +610,28 @@ pub fn SettingsPage() -> Element {
                             }
                         }
                     }
+                    div { class: "rf-divider" }
+                    div { class: "settings-section",
+                        div { class: "section-title", "关于" }
+                        { about_rows() }
+                        div { class: "row",
+                            button {
+                                class: "rf-btn rf-btn-primary",
+                                onclick: move |_| check_btn.check_for_update(true),
+                                "检查更新",
+                            }
+                            if let Some(info) = &update_info {
+                                span { class: "env-current", "发现新版本 v{info.version}" }
+                                button {
+                                    class: "rf-btn",
+                                    onclick: move |_| view_btn.open_update_modal(),
+                                    "查看更新",
+                                }
+                            } else if update_checking {
+                                span { class: "hint-inline", "正在检查更新…" }
+                            }
+                        }
+                    }
                 div { class: "row rf-mt-4",
                     button {
                         class: "rf-btn",
@@ -637,6 +685,21 @@ fn proj_var_row(
                     }
                 },
                 "删除"
+            }
+        }
+    }
+}
+
+/// 「关于」区信息行（应用版本、平台、数据目录等）。
+fn about_rows() -> Element {
+    let rows = crate::updater::about_meta();
+    rsx! {
+        div { class: "about-table",
+            for (k, v) in rows {
+                div { class: "row",
+                    span { class: "label-hint", "{k}" }
+                    span { class: "about-value", "{v}" }
+                }
             }
         }
     }

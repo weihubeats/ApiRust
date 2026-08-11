@@ -60,6 +60,10 @@ pub struct AppState {
     pub folders: Signal<Vec<Folder>>,
     pub endpoints: Signal<Vec<Endpoint>>,
     pub environments: Signal<Vec<Environment>>,
+    /// 项目数据加载中标记（refresh_project_data 查询期间为 true）。
+    pub is_loading: Signal<bool>,
+    /// 加载遮罩显示文案（如「正在同步接口...」）。
+    pub loading_text: Signal<String>,
     pub toasts: Signal<Vec<Toast>>,
     pub search: Signal<String>,
     pub mock_rules: Signal<Vec<MockRule>>,
@@ -68,12 +72,33 @@ pub struct AppState {
     pub mock_port: Signal<Option<u16>>,
     /// 最近用户操作步骤（问题反馈报告用），最多保留 60 条。
     pub steps: Signal<Vec<String>>,
+    /// 最新版本信息（检查到新版本时填充）。
+    pub update_info: Signal<Option<crate::updater::UpdateInfo>>,
+    /// 检查更新进行中。
+    pub update_checking: Signal<bool>,
+    /// 更新弹窗是否可见。
+    pub update_modal_open: Signal<bool>,
+    /// 下载进度（0.0 ~ 100.0；None 表示未在下载）。
+    pub update_progress: Signal<Option<f64>>,
+    /// 已下载的安装包路径（下载成功后填充，供再次打开）。
+    pub update_downloaded: Signal<Option<String>>,
+    /// 最近一次更新流程错误信息。
+    pub update_error: Signal<Option<String>>,
 }
 
 /// 操作步骤上限。
 const MAX_STEPS: usize = 60;
 
 static TOAST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// 加载标记兜底复位器：任务 panic / 提前 drop 时也能把 is_loading 复位为 false。
+struct LoadingReset(Signal<bool>);
+
+impl Drop for LoadingReset {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
 
 impl AppState {
     pub fn new(services: Services) -> Self {
@@ -88,12 +113,20 @@ impl AppState {
             folders: Signal::new(Vec::new()),
             endpoints: Signal::new(Vec::new()),
             environments: Signal::new(Vec::new()),
+            is_loading: Signal::new(false),
+            loading_text: Signal::new(String::new()),
             toasts: Signal::new(Vec::new()),
             search: Signal::new(String::new()),
             mock_rules: Signal::new(Vec::new()),
             mock_handle: Signal::new(None),
             mock_port: Signal::new(None),
             steps: Signal::new(Vec::new()),
+            update_info: Signal::new(None),
+            update_checking: Signal::new(false),
+            update_modal_open: Signal::new(false),
+            update_progress: Signal::new(None),
+            update_downloaded: Signal::new(None),
+            update_error: Signal::new(None),
         }
     }
 
@@ -105,6 +138,20 @@ impl AppState {
     pub fn set_current_project(&self, id: Option<Uuid>) {
         let mut c = self.current_project_id;
         c.set(id);
+    }
+
+    /// 显示全局加载遮罩（is_loading = true 并设置文案）。
+    pub fn set_loading(&self, text: &str) {
+        let mut loading_text = self.loading_text;
+        loading_text.set(text.to_string());
+        let mut is_loading = self.is_loading;
+        is_loading.set(true);
+    }
+
+    /// 隐藏全局加载遮罩。
+    pub fn clear_loading(&self) {
+        let mut is_loading = self.is_loading;
+        is_loading.set(false);
     }
 
     /// 弹出失败 Toast（中文消息）。
@@ -233,6 +280,13 @@ impl AppState {
         let mut environments = self.environments;
         let mut mock_rules = self.mock_rules;
         let mut toasts = self.toasts;
+        let mut loading = self.is_loading;
+        self.set_loading("正在同步接口...");
+        let st = self.clone();
+        tracing::info!("refresh project data start: {project_id}");
+        // 兜底：任务即使 panic / 提前 drop 也会在 Drop 时复位加载标记，
+        // 避免界面永远卡在「正在加载项目数据…」。
+        let _guard = LoadingReset(loading);
         spawn(async move {
             match repo::list_folders(&db, project_id).await {
                 Ok(list) => folders.set(list),
@@ -242,6 +296,7 @@ impl AppState {
                     message: format!("加载文件夹失败：{}", e.user_message()),
                 }),
             }
+            tracing::info!("refresh folders done");
             match repo::list_endpoints(&db, project_id).await {
                 Ok(list) => endpoints.set(list),
                 Err(e) => toasts.write().push(Toast {
@@ -250,6 +305,7 @@ impl AppState {
                     message: format!("加载接口失败：{}", e.user_message()),
                 }),
             }
+            tracing::info!("refresh endpoints done");
             match repo::list_environments(&db, project_id).await {
                 Ok(list) => environments.set(list),
                 Err(e) => toasts.write().push(Toast {
@@ -258,6 +314,7 @@ impl AppState {
                     message: format!("加载环境失败：{}", e.user_message()),
                 }),
             }
+            tracing::info!("refresh environments done");
             match repo::list_mock_rules(&db, project_id).await {
                 Ok(list) => mock_rules.set(list),
                 Err(e) => toasts.write().push(Toast {
@@ -265,6 +322,20 @@ impl AppState {
                     kind: ToastKind::Error,
                     message: format!("加载 Mock 规则失败：{}", e.user_message()),
                 }),
+            }
+            tracing::info!("refresh mock rules done");
+            loading.set(false);
+            st.clear_loading();
+            tracing::info!("refresh project data end");
+        });
+        // 超时兜底：即使刷新任务被中断/调度异常，最多 10 秒后也强制复位
+        // 加载标记，保证界面不会永远卡在「正在加载项目数据…」。
+        let mut watchdog_loading = self.is_loading;
+        spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            if *watchdog_loading.read() {
+                tracing::warn!("refresh project data watchdog fired, is_loading forced reset");
+                watchdog_loading.set(false);
             }
         });
     }
@@ -1223,6 +1294,176 @@ impl AppState {
                     kind: ToastKind::Error,
                     message: format!("删除 Mock 规则失败：{}", e.user_message()),
                 }),
+            }
+        });
+    }
+
+    /// 检查更新。manual 为 true 时（设置页手动触发）总会弹出结果；
+    /// 自动检查（启动时）发现新版本仅提示 Toast，且尊重「跳过此版本」。
+    pub fn check_for_update(&self, manual: bool) {
+        if *self.update_checking.peek() {
+            return;
+        }
+        let mut checking = self.update_checking;
+        checking.set(true);
+        let mut toasts = self.toasts;
+        let mut st = self.clone();
+        let db = self.services.db.clone();
+        st.update_error.set(None);
+        spawn(async move {
+            let result = crate::updater::fetch_latest_release().await;
+            checking.set(false);
+            match result {
+                Ok(info) => {
+                    let latest = info.version.clone();
+                    let current = env!("CARGO_PKG_VERSION").to_string();
+                    if !crate::updater::version_gt(&latest, &current) {
+                        st.update_info.set(None);
+                        if manual {
+                            toasts.write().push(Toast {
+                                id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                                kind: ToastKind::Success,
+                                message: format!("已是最新版本 v{current}"),
+                            });
+                        }
+                        return;
+                    }
+                    st.update_info.set(Some(info.clone()));
+                    if manual {
+                        st.open_update_modal();
+                        return;
+                    }
+                    // 自动检查：被用户跳过的版本不再打扰。
+                    match repo::get_setting(&db, "skip_update_version").await {
+                        Ok(Some(skipped)) if skipped == latest => return,
+                        _ => {}
+                    }
+                    toasts.write().push(Toast {
+                        id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                        kind: ToastKind::Info,
+                        message: format!(
+                            "发现新版本 v{latest}（设置 → 关于 可查看详情并更新）"
+                        ),
+                    });
+                }
+                Err(e) => {
+                    st.update_error.set(Some(e.clone()));
+                    if manual {
+                        st.open_update_modal();
+                    } else {
+                        tracing::warn!("自动检查更新失败：{e}");
+                    }
+                }
+            }
+        });
+    }
+
+    /// 打开更新弹窗。
+    pub fn open_update_modal(&self) {
+        let mut m = self.update_modal_open;
+        m.set(true);
+    }
+
+    /// 关闭更新弹窗。
+    pub fn close_update_modal(&self) {
+        let mut m = self.update_modal_open;
+        m.set(false);
+        let mut p = self.update_progress;
+        p.set(None);
+    }
+
+    /// 下载最新版本安装包（带进度），完成后自动打开。
+    pub fn download_update(&self) {
+        let Some(info) = self.update_info.read().clone() else {
+            self.toast_error("暂无待下载的更新");
+            return;
+        };
+        let mut progress = self.update_progress;
+        let mut downloaded = self.update_downloaded;
+        let mut error = self.update_error;
+        let mut toasts = self.toasts;
+        let st = self.clone();
+        progress.set(Some(0.0));
+        error.set(None);
+        downloaded.set(None);
+        let url = info.download_url.clone();
+        let file_name = info.file_name.clone();
+        spawn(async move {
+            let mut progress_sink = progress;
+            let result = crate::updater::download_update(&url, &file_name, |p| {
+                progress_sink.set(Some(p));
+            })
+            .await;
+            match result {
+                Ok(path) => {
+                    downloaded.set(Some(path.display().to_string()));
+                    if let Err(e) = crate::updater::open_path(&path) {
+                        error.set(Some(e));
+                    }
+                    progress_sink.set(None);
+                    push_step(
+                        st.steps,
+                        format!("下载更新 v{} → {}", info.version, path.display()),
+                    );
+                    toasts.write().push(Toast {
+                        id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                        kind: ToastKind::Success,
+                        message: format!(
+                            "更新包下载完成，已自动打开：{}",
+                            path.display()
+                        ),
+                    });
+                }
+                Err(e) => {
+                    error.set(Some(e.clone()));
+                    progress_sink.set(None);
+                    toasts.write().push(Toast {
+                        id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                        kind: ToastKind::Error,
+                        message: e,
+                    });
+                }
+            }
+        });
+    }
+
+    /// 跳过当前版本：写入设置并关闭弹窗（自动检查不再提示）。
+    pub fn skip_update_version(&self) {
+        let Some(info) = self.update_info.read().clone() else {
+            return;
+        };
+        let db = self.services.db.clone();
+        let st = self.clone();
+        let mut toasts = self.toasts;
+        spawn(async move {
+            let version = info.version.clone();
+            if let Err(e) = repo::set_setting(&db, "skip_update_version", &version).await {
+                toasts.write().push(Toast {
+                    id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    kind: ToastKind::Error,
+                    message: format!("跳过此版本失败：{}", e.user_message()),
+                });
+                return;
+            }
+            st.toast_info(format!("已跳过 v{version}，后续启动不再提示（可在设置中重新检查）"));
+            st.close_update_modal();
+        });
+    }
+
+    /// 重新打开已下载的安装包。
+    pub fn open_update_file(&self) {
+        let Some(path) = self.update_downloaded.read().clone() else {
+            self.toast_error("暂无已下载的安装包");
+            return;
+        };
+        let st = self.clone();
+        spawn(async move {
+            match crate::updater::open_path(std::path::Path::new(&path)) {
+                Ok(()) => {}
+                Err(e) => {
+                    let mut err = st.update_error;
+                    err.set(Some(e));
+                }
             }
         });
     }

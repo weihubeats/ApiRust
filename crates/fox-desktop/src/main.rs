@@ -5,8 +5,12 @@ mod components;
 mod feedback;
 mod pages;
 mod services;
+mod shortcuts;
 mod state;
 mod styles;
+mod updater;
+mod views;
+mod window_state;
 
 use std::fs::File;
 use std::io;
@@ -40,14 +44,28 @@ fn main() -> std::process::ExitCode {
     let Ok(pool) = pool else {
         return std::process::ExitCode::FAILURE;
     };
-    app::provide_pool(pool);
+    app::provide_pool(pool.clone());
 
-    let cfg = dioxus::desktop::Config::new().with_window(
-        dioxus::desktop::WindowBuilder::new()
-            .with_title("RustFox")
-            .with_inner_size(dioxus::desktop::LogicalSize::new(1360.0, 900.0))
-            .with_min_inner_size(dioxus::desktop::LogicalSize::new(900.0, 600.0)),
-    );
+    // 启动时恢复上次关闭的窗口状态（settings 表）；无记录则用默认尺寸。
+    let restored = window_state::WindowState::load(&pool);
+
+    let mut wb = dioxus::desktop::WindowBuilder::new()
+        .with_title("RustFox")
+        .with_min_inner_size(dioxus::desktop::LogicalSize::new(900.0, 600.0));
+    match restored {
+        Some(s) => {
+            wb = wb
+                .with_inner_size(dioxus::desktop::LogicalSize::new(s.width, s.height))
+                .with_position(dioxus::desktop::LogicalPosition::new(s.x, s.y));
+            if s.maximized {
+                wb = wb.with_maximized(true);
+            }
+        }
+        None => {
+            wb = wb.with_inner_size(dioxus::desktop::LogicalSize::new(1360.0, 900.0));
+        }
+    }
+    let cfg = dioxus::desktop::Config::new().with_window(wb);
 
     dioxus::prelude::LaunchBuilder::new()
         .with_cfg(cfg)

@@ -63,59 +63,70 @@ pub fn resolve_variables(input: &str, vars: &VariableMap) -> String {
 }
 
 /// 解析文本中的 `{{name}}` 变量，指定最大递归深度。
+///
+/// 单次扫描实现：一次遍历输入，定位全部 `{{...}}` token，
+/// `with_capacity` 预分配后直接拼接最终结果；token 值内嵌套的
+/// 变量逐层递归解析（上限 `max_depth`），不再整串反复扫描与重建。
 pub fn resolve_variables_with(
     input: &str,
     vars: &VariableMap,
     max_depth: usize,
     options: ResolveOptions,
 ) -> String {
-    let mut current = input.to_string();
-    for _ in 0..max_depth {
-        if !current.contains("{{") {
-            break;
-        }
-        let rendered = render_once(&current, vars, options);
-        if rendered == current {
-            break;
-        }
-        current = rendered;
-    }
-    current
+    let mut out = String::with_capacity(input.len() + 16);
+    resolve_into(&mut out, input, vars, max_depth, options);
+    out
 }
 
-/// 单轮替换：找到第一个 `{{...}}` 并替换。
-fn render_once(input: &str, vars: &VariableMap, options: ResolveOptions) -> String {
-    fn find_token(s: &str) -> Option<(usize, usize, &str)> {
-        let start = s.find("{{")?;
-        let after = &s[start + 2..];
-        match after.find("}}") {
-            Some(rel) => {
-                let end = start + 2 + rel;
-                Some((start, end + 2, &s[start + 2..end]))
-            }
-            None => None,
-        }
+/// 单次扫描：将 `s` 中所有可解析 token 替换后追加到 `out`。
+///
+/// - `depth` 为剩余解析层数，为 0 时整体按字面量输出；
+/// - 未知变量、空 token、未闭合的 `{{` 均原样保留；
+/// - 按字节扫描定位 `{` / `}`：二者均为 ASCII，不会与多字节 UTF-8 序列冲突。
+fn resolve_into(
+    out: &mut String,
+    s: &str,
+    vars: &VariableMap,
+    depth: usize,
+    options: ResolveOptions,
+) {
+    if depth == 0 {
+        out.push_str(s);
+        return;
     }
-
-    match find_token(input) {
-        None => input.to_string(),
-        Some((start, end, token)) => {
-            let name = token.trim();
-            let replacement = if name.is_empty() {
-                None
+    let bytes = s.as_bytes();
+    let mut copied = 0; // 已拷入 out 的字面量区间终点（相对 s 起点的字节偏移）
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'{' && bytes[i + 1] == b'{' {
+            // 查找闭合的 }}。
+            let mut close = i + 2;
+            while close + 1 < bytes.len() {
+                if bytes[close] == b'}' && bytes[close + 1] == b'}' {
+                    break;
+                }
+                close += 1;
+            }
+            if close + 1 >= bytes.len() {
+                break; // 未闭合：其余内容一律按字面量处理
+            }
+            out.push_str(&s[copied..i]);
+            let name = s[i + 2..close].trim();
+            if name.is_empty() {
+                out.push_str(&s[i..close + 2]);
+            } else if let Some(value) = lookup(name, vars, options) {
+                // 值内可能仍有 {{...}}：递归解析，消耗一层深度。
+                resolve_into(out, &value, vars, depth - 1, options);
             } else {
-                lookup(name, vars, options)
-            };
-            let mut out = String::with_capacity(input.len() + 16);
-            out.push_str(&input[..start]);
-            match replacement {
-                Some(value) => out.push_str(&value),
-                None => out.push_str(&input[start..end]),
+                out.push_str(&s[i..close + 2]);
             }
-            out.push_str(&input[end..]);
-            out
+            copied = close + 2;
+            i = close + 2;
+        } else {
+            i += 1;
         }
     }
+    out.push_str(&s[copied..]);
 }
 
 /// 查找变量值。优先级：用户变量 > 内置变量。
@@ -222,5 +233,32 @@ mod tests {
     fn empty_token_left_alone() {
         let v = VariableMap::new();
         assert_eq!(resolve_variables("a{{}}b", &v), "a{{}}b");
+    }
+
+    #[test]
+    fn many_tokens_resolved_in_one_pass() {
+        let v = vars(&[("id", "42")]);
+        let input = "{{id}},".repeat(1000);
+        let out = resolve_variables(&input, &v);
+        assert_eq!(out, "42,".repeat(1000));
+        assert!(!out.contains("{{"));
+    }
+
+    #[test]
+    fn unicode_literals_preserved() {
+        let v = vars(&[("name", "小狐狸"), ("id", "9")]);
+        assert_eq!(
+            resolve_variables("你好，{{name}}！#{{id}}号", &v),
+            "你好，小狐狸！#9号"
+        );
+    }
+
+    #[test]
+    fn unclosed_token_kept_as_literal() {
+        let v = vars(&[("a", "1")]);
+        assert_eq!(
+            resolve_variables("{{a}} and {{unclosed", &v),
+            "1 and {{unclosed"
+        );
     }
 }

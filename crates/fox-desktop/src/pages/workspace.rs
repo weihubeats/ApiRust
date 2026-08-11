@@ -26,6 +26,7 @@ use uuid::Uuid;
 use crate::components::dropdown::Dropdown;
 use crate::components::icons::{ImportIcon, XIcon};
 use crate::state::AppState;
+use crate::views::empty_state::EmptyState;
 
 /// 编辑器分组。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1307,9 +1308,43 @@ pub fn WorkspacePage() -> Element {
     // 因此始终把草稿读出，编辑器主体在函数末尾以条件分支渲染。
     let ep_opt = draft.read().clone();
     let _active_endpoint_id = *state.active_endpoint_id.read();
+    // 项目数据加载中标记：读取即订阅，查询期间全页显示 Spinner 遮罩，
+    // 避免加载期间空白页面 / 误操作。
+    let loading_flag = *state.is_loading.read();
+    let loading_overlay = loading_flag.then(|| {
+        rsx! {
+            div { class: "rf-loading-overlay",
+                div { class: "rf-spinner" }
+                "正在加载项目数据…"
+            }
+        }
+    });
 
     if let Some(ep) = ep_opt {
         let method_str = ep.method.to_string();
+    // 环境展示与拼接 URL 预览：变量经 项目 < 环境 合并后由 base_url 拼出完整地址。
+    let env_id = *state.current_environment_id.read();
+    let env_name: Option<String> = env_id.and_then(|id| {
+        state
+            .environments
+            .read()
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| e.name.clone())
+    });
+    let vars = state
+        .current_project_id
+        .peek()
+        .map(|pid| merged_vars(&state, pid))
+        .unwrap_or_default();
+    let (full_url, _) = render_request(&ep, &vars);
+    let base_prefix = full_url
+        .starts_with(vars.get("base_url").map(String::as_str).unwrap_or_default())
+        .then(|| {
+            let base = vars.get("base_url").cloned().unwrap_or_default();
+            let rest: String = full_url[base.len()..].to_string();
+            (base, rest)
+        });
     let body_mode = ep.request.body.mode_name();
     let auth_type = auth_mode(&ep.request.auth);
     let raw_body = body_raw(&ep);
@@ -1863,6 +1898,19 @@ pub fn WorkspacePage() -> Element {
                         button { class: "rf-btn rf-btn-danger", onclick: move |_| cancel_send(), "取消" }
                     }
                 }
+                div { class: "url-preview",
+                    if let Some(name) = &env_name {
+                        span { class: "url-preview-env", "环境：{name}" }
+                    } else {
+                        span { class: "url-preview-env none", "未选环境" }
+                    }
+                    if let Some((base, rest)) = &base_prefix {
+                        span { class: "url-preview-base", "{base}" }
+                        span { class: "url-preview-rest", "{rest}" }
+                    } else {
+                        span { class: "url-preview-rest", "{full_url}" }
+                    }
+                }
                 div { class: "editor-meta",
                     input {
                         class: "rf-input grow",
@@ -2365,6 +2413,8 @@ let Some(ep) = draft.read().clone() else {
                                         ("python".into(), "Python (requests)".into()),
                                         ("js".into(), "JavaScript (fetch)".into()),
                                         ("go".into(), "Go (net/http)".into()),
+                                        ("java".into(), "Java (OkHttp)".into()),
+                                        ("php".into(), "PHP (cURL)".into()),
                                     ],
                                     selected: codegen_lang_str.clone(),
                                     on_select: move |v: String| {
@@ -2425,10 +2475,18 @@ let Some(ep) = draft.read().clone() else {
                     }
                 }
             }
+            {loading_overlay}
         }
     } else {
         rsx! {
-            div { class: "empty", "未选择接口，请从左侧目录选择" }
+            if loading_flag {
+                div { class: "rf-empty",
+                    div { class: "rf-spinner" }
+                    "正在加载项目数据…"
+                }
+            } else {
+                EmptyState {}
+            }
         }
     }
 }

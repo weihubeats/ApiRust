@@ -30,6 +30,8 @@ dirs = { workspace = true }
 rfd = { workspace = true }
 dioxus = { workspace = true }
 sqlx = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
 dioxus-html = { version = "0.5", features = ["serialize"] }

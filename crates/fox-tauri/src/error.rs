@@ -59,6 +59,7 @@ impl From<AppError> for CommandError {
             AppError::ScriptError(_) => "SCRIPT",
             AppError::WebSocket(_) => "WEBSOCKET",
             AppError::Json(_) => "JSON",
+            AppError::Decryption(_) => "DECRYPT",
         };
         CommandError {
             code,

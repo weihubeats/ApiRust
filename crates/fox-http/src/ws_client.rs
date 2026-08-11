@@ -25,12 +25,15 @@ use futures::StreamExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
-use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Message, Utf8Bytes};
 use tokio_tungstenite::tungstenite::http;
+use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Message, Utf8Bytes};
 use tokio_tungstenite::{connect_async, WebSocketStream};
 
 /// 事件广播容量。
 const EVENT_CAPACITY: usize = 256;
+/// 发送队列容量：有界通道，防止连接卡顿持续发送时内存无限增长；
+/// 队列满时新消息直接拒绝（见 [`WsClient::send_message`]）。
+const OUTBOX_CAPACITY: usize = 1024;
 /// 默认心跳间隔：10 秒。
 const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 /// 默认连续未收到 Pong 即判定失联的次数。
@@ -124,8 +127,8 @@ struct WsInner {
     protocol: watch::Sender<Option<String>>,
     /// 停止信号（false→true，只翻转一次）。
     stop: watch::Sender<bool>,
-    /// 发送队列（缓冲，重连成功后自动补发）。
-    outbox: mpsc::UnboundedSender<WsOutgoing>,
+    /// 发送队列（有界缓冲，重连成功后自动补发；满则拒绝新消息）。
+    outbox: mpsc::Sender<WsOutgoing>,
     /// 后台连接任务句柄。
     task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -163,7 +166,7 @@ impl WsClient {
         let (state, _) = watch::channel(WsState::Connecting);
         let (protocol, _) = watch::channel(None::<String>);
         let (stop, _) = watch::channel(false);
-        let (outbox, outbox_rx) = mpsc::unbounded_channel();
+        let (outbox, outbox_rx) = mpsc::channel(OUTBOX_CAPACITY);
         let inner = Arc::new(WsInner {
             target,
             headers,
@@ -204,7 +207,8 @@ impl WsClient {
         self.inner.events.subscribe()
     }
 
-    /// 发送消息。连接未就绪时会进入内部缓冲队列，重连成功后自动补发。
+    /// 发送消息。连接未就绪时会进入内部缓冲队列，重连成功后自动补发；
+    /// 队列满（背压）时返回错误，消息被丢弃而非无限积压。
     pub fn send_message(&self, message: WsMessage) -> Result<()> {
         let outgoing = match message {
             WsMessage::Text(text) => WsOutgoing::Text(text),
@@ -213,8 +217,13 @@ impl WsClient {
         };
         self.inner
             .outbox
-            .send(outgoing)
-            .map_err(|_| ws_error("WebSocket 客户端已停止，无法发送消息"))
+            .try_send(outgoing)
+            .map_err(|err| match err {
+                mpsc::error::TrySendError::Full(_) => ws_error("发送队列已满，消息已丢弃"),
+                mpsc::error::TrySendError::Closed(_) => {
+                    ws_error("WebSocket 客户端已停止，无法发送消息")
+                }
+            })
     }
 
     /// 发送文本帧。
@@ -289,7 +298,7 @@ fn emit_failed(inner: &WsInner, reason: impl Into<String>) {
 }
 
 /// 后台主循环：连接 → 会话 → 断开后按指数退避重连，直到停止或放弃。
-async fn ws_loop(inner: Arc<WsInner>, mut outbox_rx: mpsc::UnboundedReceiver<WsOutgoing>) {
+async fn ws_loop(inner: Arc<WsInner>, mut outbox_rx: mpsc::Receiver<WsOutgoing>) {
     loop {
         if *inner.stop.borrow() {
             break;
@@ -391,7 +400,11 @@ fn extract_subprotocol(response: &http::Response<Option<Vec<u8>>>) -> Option<Str
 
 /// 在位会话：消息双向转发、心跳检测、处理发送队列与停止信号。
 /// 返回 `Ok(())` 表示优雅结束（服务端 Close / 用户停止），`Err` 表示异常。
-async fn run_session<S>(inner: Arc<WsInner>, ws: WebSocketStream<S>, outbox_rx: &mut mpsc::UnboundedReceiver<WsOutgoing>) -> std::result::Result<(), String>
+async fn run_session<S>(
+    inner: Arc<WsInner>,
+    ws: WebSocketStream<S>,
+    outbox_rx: &mut mpsc::Receiver<WsOutgoing>,
+) -> std::result::Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -550,7 +563,9 @@ mod tests {
     #[tokio::test]
     async fn connect_send_receive_round_trip() {
         let url = spawn_echo_server().await;
-        let client = WsClient::connect(url, HashMap::new(), vec![]).await.unwrap();
+        let client = WsClient::connect(url, HashMap::new(), vec![])
+            .await
+            .unwrap();
         let mut events = client.subscribe();
 
         wait_event(&mut events, |e| *e == WsEvent::State(WsState::Open)).await;
@@ -558,15 +573,17 @@ mod tests {
         assert_eq!(client.subprotocol(), None);
 
         client.send_text("你好").unwrap();
-        wait_event(&mut events, |e| {
-            matches!(e, WsEvent::Message(WsMessage::Text(t)) if t == "你好")
-        })
+        wait_event(
+            &mut events,
+            |e| matches!(e, WsEvent::Message(WsMessage::Text(t)) if t == "你好"),
+        )
         .await;
 
         client.send_binary(vec![1, 2, 3]).unwrap();
-        wait_event(&mut events, |e| {
-            matches!(e, WsEvent::Message(WsMessage::Binary(b)) if b == &vec![1, 2, 3])
-        })
+        wait_event(
+            &mut events,
+            |e| matches!(e, WsEvent::Message(WsMessage::Binary(b)) if b == &vec![1, 2, 3]),
+        )
         .await;
 
         client.stop().await.unwrap();
@@ -657,14 +674,10 @@ mod tests {
             backoff_max: Duration::from_millis(150),
             ..Default::default()
         };
-        let client = WsClient::connect_with_options(
-            format!("ws://{addr}"),
-            HashMap::new(),
-            vec![],
-            options,
-        )
-        .await
-        .unwrap();
+        let client =
+            WsClient::connect_with_options(format!("ws://{addr}"), HashMap::new(), vec![], options)
+                .await
+                .unwrap();
         let mut events = client.subscribe();
 
         wait_event(&mut events, |e| *e == WsEvent::State(WsState::Open)).await;
@@ -678,12 +691,35 @@ mod tests {
     #[tokio::test]
     async fn graceful_stop_sends_close() {
         let url = spawn_echo_server().await;
-        let client = WsClient::connect(url, HashMap::new(), vec![]).await.unwrap();
+        let client = WsClient::connect(url, HashMap::new(), vec![])
+            .await
+            .unwrap();
         let mut events = client.subscribe();
         wait_event(&mut events, |e| *e == WsEvent::State(WsState::Open)).await;
 
         client.stop().await.unwrap();
         assert_eq!(client.state(), WsState::Closed);
+    }
+
+    #[tokio::test]
+    async fn outbox_backpressure_when_queue_full() {
+        // 目标不可达：连接一直失败，发送队列无人消费，填满后应返回“队列已满”。
+        let client = WsClient::connect("ws://127.0.0.1:1/", HashMap::new(), vec![])
+            .await
+            .unwrap();
+        let mut full_error = None;
+        for i in 0..OUTBOX_CAPACITY + 10 {
+            match client.send_text(format!("msg{i}")) {
+                Ok(()) => {}
+                Err(err) => {
+                    full_error = Some(err.user_message().to_string());
+                    break;
+                }
+            }
+        }
+        client.stop().await.unwrap();
+        let message = full_error.expect("发送队列应填满并返回错误");
+        assert!(message.contains("发送队列已满"), "意外错误：{message}");
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-//! 左侧目录树：文件夹 / 接口 的树形展示与 CRUD 操作。
+//! 左侧侧边栏：Header（项目选择器）| Toolbar（＋文件夹 / ＋接口）| Search | Tree | Footer（环境选择器）。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -8,6 +8,8 @@ use fox_core::curl_parser::parse_curl;
 use fox_core::model::{Endpoint, Folder};
 use uuid::Uuid;
 
+use crate::components::dropdown::Dropdown;
+use crate::components::icons::{CaretIcon, FolderIcon, SearchIcon};
 use crate::state::AppState;
 
 /// 树操作动作。
@@ -30,20 +32,39 @@ pub type Dispatcher = Rc<RefCell<dyn FnMut(TreeAction)>>;
 pub fn SideBar() -> Element {
     let state = use_context::<AppState>();
 
-    if !state.current_project_id.read().is_some() {
-        return rsx! {
-            aside { class: "sidebar",
-                div { class: "empty", "未选择项目" }
-            }
-        };
-    }
-
     let folders = state.folders.read().clone();
     let endpoints = state.endpoints.read().clone();
     let search = state.search.read().clone();
+    let has_project = state.current_project_id.read().is_some();
+
+    let projects = state.projects.read().clone();
+    let project_options: Vec<(String, String)> = projects
+        .iter()
+        .map(|p| (p.id.to_string(), p.name.clone()))
+        .collect();
+    let project_selected: String = state
+        .current_project_id
+        .read()
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    let st_project = state.clone();
+
+    let environments = state.environments.read().clone();
+    let env_options: Vec<(String, String)> = environments
+        .iter()
+        .map(|e| (e.id.to_string(), e.name.clone()))
+        .collect();
+    let env_selected: String = state
+        .current_environment_id
+        .read()
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    let st_env = state.clone();
 
     let modal: Signal<Option<TreeAction>> = use_signal(|| None);
     let mut modal_input: Signal<String> = use_signal(String::new);
+    // Toolbar「＋ 接口」下拉（HTTP 接口 / 从 cURL 导入）。
+    let mut add_menu_open: Signal<bool> = use_signal(|| false);
     // 导入 cURL 弹窗。
     let curl_open: Signal<bool> = use_signal(|| false);
     let curl_target: Signal<Option<Uuid>> = use_signal(|| None);
@@ -149,6 +170,7 @@ pub fn SideBar() -> Element {
         }
     };
     let curl_open_flag = *curl_open.read();
+    let add_menu_open_flag = *add_menu_open.read();
     let mut ok_a = dialog_ok.clone();
     let mut ok_b = dialog_ok.clone();
     let mut cancel_a = dialog_cancel;
@@ -168,44 +190,112 @@ pub fn SideBar() -> Element {
 
     rsx! {
         aside { class: "sidebar",
-            div { class: "section-title",
-                span { "目录" }
+            div { class: "sb-header",
+                div { class: "sb-project-icon",
+                    FolderIcon {}
+                }
+                Dropdown {
+                    class: "sb-width sb-project-dropdown",
+                    options: project_options,
+                    selected: project_selected,
+                    placeholder: "未选择项目",
+                    on_select: move |v: String| {
+                        if let Ok(id) = uuid::Uuid::parse_str(&v) {
+                            st_project.select_project(id);
+                        }
+                    },
+                }
             }
-            div { class: "row rf-toolbar",
+            div { class: "sb-toolbar",
                 button {
-                    class: "rf-btn rf-btn-sm",
+                    id: "sb-add-folder",
+                    class: "sb-toolbar-btn",
                     onclick: move |_| top_btn_a.borrow_mut()(TreeAction::CreateFolder { parent_id: None }),
                     "＋ 文件夹",
                 }
-                button {
-                    class: "rf-btn rf-btn-sm",
-                    onclick: move |_| top_btn_b.borrow_mut()(TreeAction::CreateEndpoint { folder_id: None }),
-                    "＋ 接口",
-                }
-                button {
-                    class: "rf-btn rf-btn-sm",
-                    onclick: move |_| top_btn_c.borrow_mut()(TreeAction::ImportCurl { folder_id: None }),
-                    "导入 cURL",
+                div { class: "sb-tool-group",
+                    button {
+                        id: "sb-add-endpoint",
+                        class: "sb-toolbar-btn sb-toolbar-btn-primary",
+                        onclick: move |_| {
+                            let next = !*add_menu_open.peek();
+                            add_menu_open.set(next);
+                        },
+                        "＋ 接口"
+                        CaretIcon {}
+                    }
+                    if add_menu_open_flag {
+                        div { class: "sb-menu-backdrop", onclick: move |_| add_menu_open.set(false) }
+                        div { class: "sb-menu",
+                            button {
+                                class: "sb-menu-item",
+                                onclick: move |_| {
+                                    add_menu_open.set(false);
+                                    top_btn_b.borrow_mut()(TreeAction::CreateEndpoint { folder_id: None });
+                                },
+                                "HTTP 接口",
+                            }
+                            button {
+                                class: "sb-menu-item",
+                                onclick: move |_| {
+                                    add_menu_open.set(false);
+                                    top_btn_c.borrow_mut()(TreeAction::ImportCurl { folder_id: None });
+                                },
+                                "从 cURL 导入",
+                            }
+                        }
+                    }
                 }
             }
-            for ep in endpoints.iter().filter(|e| e.folder_id.is_none()).cloned() {
-                if search.is_empty() || ep.name.contains(&search) || ep.path.contains(&search) {
-                    EndpointRow { ep, depth: 0 }
+            div { class: "sb-search",
+                SearchIcon {}
+                input {
+                    id: "sb-search-input",
+                    class: "rf-input sb-search-input",
+                    placeholder: "搜索接口",
+                    value: "{search}",
+                    oninput: move |e| {
+                        let mut s = state.search;
+                        s.set(e.data().value());
+                    },
                 }
             }
-            for folder in root_folders {
-                FolderNode {
-                    folder,
-                    folders: folders.clone(),
-                    endpoints: endpoints.clone(),
-                    search: search.clone(),
-                    depth: 0,
+            div { class: "sb-tree",
+                if !has_project {
+                    div { class: "empty sb-empty", "未选择项目，请在顶部选择" }
+                } else {
+                    for ep in endpoints.iter().filter(|e| e.folder_id.is_none()).cloned() {
+                        if search.is_empty() || ep.name.contains(&search) || ep.path.contains(&search) {
+                            EndpointRow { ep, depth: 0 }
+                        }
+                    }
+                    for folder in root_folders {
+                        FolderNode {
+                            folder,
+                            folders: folders.clone(),
+                            endpoints: endpoints.clone(),
+                            search: search.clone(),
+                            depth: 0,
+                        }
+                    }
+                    if no_match {
+                        div { class: "empty", "没有匹配的接口" }
+                    } else if show_empty {
+                        div { class: "empty", "暂无接口，点击上方按钮创建" }
+                    }
                 }
             }
-            if no_match {
-                div { class: "empty", "没有匹配的接口" }
-            } else if show_empty {
-                div { class: "empty", "暂无接口，点击上方按钮创建" }
+            div { class: "sb-footer",
+                Dropdown {
+                    class: "sb-width sb-env-dropdown",
+                    options: env_options,
+                    selected: env_selected,
+                    placeholder: "未选环境",
+                    on_select: move |v: String| {
+                        let id = uuid::Uuid::parse_str(&v).ok();
+                        st_env.select_environment(id);
+                    },
+                }
             }
         }
         if dialog_visible {

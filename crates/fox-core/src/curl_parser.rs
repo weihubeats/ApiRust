@@ -271,12 +271,24 @@ fn push_header(headers: &mut Vec<KeyValue>, v: &str) {
     headers.push(KeyValue::new(key.to_string(), value.trim().to_string()));
 }
 
-/// 多个 `-d` 以 `&` 连接（与 curl 语义一致）；`{`/`[` 开头且可解析为 JSON 时推断 JSON。
+/// `{`/`[` 开头且可解析为 JSON 时推断 JSON。
+///
+/// 启发式分级：先跳过首尾空白检查首尾字符（非 `{`/`[` 开头或
+/// 非 `}`/`]` 结尾直接判 Text），再对「可能 JSON 且较短（< 64KB）」
+/// 的载荷调用 serde_json 精确验证，避免大 JSON 完整解析的开销。
 fn infer_body(data: &str) -> BodySpec {
     let raw = data.to_owned();
-    let t = raw.trim_start();
-    if (t.starts_with('{') || t.starts_with('[')) && serde_json::from_str::<serde_json::Value>(t).is_ok()
-    {
+    let trimmed = data.trim();
+    const MAX_PRECISE_CHECK_BYTES: usize = 64 * 1024;
+    let plausible_json = matches!(
+        (trimmed.as_bytes().first(), trimmed.as_bytes().last()),
+        (Some(b'{' | b'['), Some(b'}' | b']'))
+    );
+    // 启发式命中（首尾字符像 JSON）且负载较小时再做完整解析验证。
+    let is_json = plausible_json
+        && trimmed.len() <= MAX_PRECISE_CHECK_BYTES
+        && serde_json::from_str::<serde_json::Value>(trimmed).is_ok();
+    if is_json {
         BodySpec::Json { raw }
     } else {
         BodySpec::Text { raw }
@@ -289,9 +301,7 @@ mod tests {
 
     fn auth_basic(parsed: &CurlParsed) -> Option<(String, String)> {
         match &parsed.auth {
-            AuthSpec::Basic { username, password } => {
-                Some((username.clone(), password.clone()))
-            }
+            AuthSpec::Basic { username, password } => Some((username.clone(), password.clone())),
             _ => None,
         }
     }
@@ -376,10 +386,7 @@ mod tests {
     /// 不支持的参数直接忽略。
     #[test]
     fn parse_unknown_flags_ignored() {
-        let p = parse_curl(
-            "curl -v -k -s --compressed -L https://api.example.com/secure",
-        )
-        .unwrap();
+        let p = parse_curl("curl -v -k -s --compressed -L https://api.example.com/secure").unwrap();
         assert_eq!(p.url, "https://api.example.com/secure");
         assert_eq!(p.method, HttpMethod::GET);
     }
@@ -446,5 +453,55 @@ mod tests {
         let p = parse_curl(r#"curl -ikLb "a=1" https://api.example.com"#).unwrap();
         assert_eq!(p.url, "https://api.example.com");
         assert_eq!(p.method, HttpMethod::GET);
+    }
+
+    /// 首字符不是 `{`/`[`：启发式直接判 Text，不触发 JSON 解析。
+    #[test]
+    fn infer_body_non_json_start_is_text() {
+        match infer_body("name=rustfox&page=1") {
+            BodySpec::Text { .. } => {}
+            other => panic!("期望 Text，实际 {other:?}"),
+        }
+    }
+
+    /// 首尾括号不配对（如截断的 JSON）：判 Text。
+    #[test]
+    fn infer_body_unmatched_braces_is_text() {
+        match infer_body("{\"a\":1") {
+            BodySpec::Text { .. } => {}
+            other => panic!("期望 Text，实际 {other:?}"),
+        }
+        match infer_body("[1,2,3}") {
+            BodySpec::Text { .. } => {}
+            other => panic!("期望 Text，实际 {other:?}"),
+        }
+    }
+
+    /// 首尾像 JSON 但内容非法：精确解析后回退 Text。
+    #[test]
+    fn infer_body_invalid_json_is_text() {
+        match infer_body("{\"a\":}") {
+            BodySpec::Text { .. } => {}
+            other => panic!("期望 Text，实际 {other:?}"),
+        }
+    }
+
+    /// 合法 JSON（含首尾空白）判 Json，且保留原始内容。
+    #[test]
+    fn infer_body_valid_json_with_whitespace() {
+        match infer_body("  {\"a\":1}  ") {
+            BodySpec::Json { raw } => assert_eq!(raw, "  {\"a\":1}  "),
+            other => panic!("期望 Json，实际 {other:?}"),
+        }
+    }
+
+    /// 超过 64KB 的载荷跳过精确 JSON 解析，直接判 Text（避免大负载解析开销）。
+    #[test]
+    fn infer_body_huge_payload_skips_precise_check() {
+        let huge = format!("{{\"pad\":\"{}\"}}", "x".repeat(65 * 1024));
+        match infer_body(&huge) {
+            BodySpec::Text { .. } => {}
+            other => panic!("期望 Text（超限跳过解析），实际 {other:?}"),
+        }
     }
 }

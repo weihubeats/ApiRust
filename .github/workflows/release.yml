@@ -25,8 +25,10 @@ jobs:
         include:
           - name: linux
             os: ubuntu-latest
-          - name: macos
+          - name: macos-arm
             os: macos-latest
+          - name: macos-intel
+            os: macos-15-intel
           - name: windows
             os: windows-latest
     runs-on: ${{ matrix.os }}

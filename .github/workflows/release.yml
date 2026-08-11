@@ -25,16 +25,10 @@ jobs:
         include:
           - name: linux
             os: ubuntu-latest
-            package: scripts/package.sh
-            shell: bash
           - name: macos
             os: macos-latest
-            package: scripts/package.sh
-            shell: bash
           - name: windows
             os: windows-latest
-            package: scripts/package.bat
-            shell: cmd
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -64,9 +58,14 @@ jobs:
       - name: Build release binary
         run: cargo build --release -p fox-desktop
 
-      - name: Run package script
-        shell: ${{ matrix.shell }}
-        run: ${{ matrix.package }}
+      - name: Run package script (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: scripts/package.sh
+
+      - name: Run package script (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: scripts\package.bat
 
       - name: Smoke test (Linux/macOS)
         if: runner.os != 'Windows'

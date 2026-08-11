@@ -39,7 +39,7 @@ OS="$(uname -s)"
 case "$OS" in
     Linux*)  OS=linux ;;
     Darwin*) OS=macos ;;
-    *)       echo "不支持的平台: $OS（Windows 请用 scripts/package.bat）" >&2; exit 1 ;;
+    *)       echo "不支持的平台: ${OS}（Windows 请用 scripts/package.bat）" >&2; exit 1 ;;
 esac
 
 ARCH="$(uname -m)"
@@ -81,7 +81,7 @@ elif [[ "$OS" = "macos" ]]; then
     cp "$ROOT/docs/USER_GUIDE.md" "$STAGE/USER_GUIDE.md"
     ZBALL="$DIST/RustFox-$VERSION-macos-$ARCH.zip"
     (cd "$STAGE" && zip -qr "$ZBALL" RustFox.app README.md USER_GUIDE.md)
-    echo "==> 产物: $ZBALL（内含 RustFox.app + README + 使用手册）"
+    echo "==> 产物: ${ZBALL}（内含 RustFox.app + README + 使用手册）"
 
     # DMG（拖拽安装布局：RustFox.app + Applications 软链）
     DMG="$DIST/RustFox-$VERSION-macos-$ARCH.dmg"

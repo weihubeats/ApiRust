@@ -587,6 +587,9 @@ impl AppState {
         spawn_forever(async move {
             match repo::get_endpoint(&db, endpoint_id).await {
                 Ok(mut ep) => {
+                    if ep.folder_id == folder_id {
+                        return;
+                    }
                     ep.folder_id = folder_id;
                     ep.updated_at = chrono::Utc::now();
                     match repo::update_endpoint(&db, &ep).await {

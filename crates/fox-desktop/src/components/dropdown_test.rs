@@ -99,11 +99,50 @@ mod tests {
             let after_open = click_listeners(&m2);
             assert_eq!(after_open.len(), 3);
 
-            // 点击 backdrop（第一个新监听）→ 菜单关闭
             dom.handle_event("click", mouse(), after_open[0], true);
             let m3 = dom.render_immediate_to_vec();
             assert_eq!(click_listeners(&m3).len(), 0);
             assert!(!has_text(&m3, "a"), "关闭菜单不应触发选择");
         });
+    }
+
+    #[test]
+    fn footer_renders_when_open() {
+        with_converter(|| {
+            let mut dom = VirtualDom::new(footer_probe);
+            let m1 = dom.rebuild_to_vec();
+            let trigger = click_listeners(&m1)[0];
+            let clicks_before = click_listeners(&m1).len();
+
+            dom.handle_event("click", mouse(), trigger, true);
+            let m2 = dom.render_immediate_to_vec();
+            let clicks_after = click_listeners(&m2).len();
+            // 初始 1 个（trigger），打开后 3 个（backdrop + 选项 + footer 按钮）
+            assert_eq!(clicks_after, clicks_before + 2, "打开后应有新增的选项 + footer 监听");
+            assert!(clicks_after >= 3, "应有 backdrop + 选项 + footer 按钮");
+        });
+    }
+
+    fn footer_probe() -> Element {
+        let mut received = use_signal(|| String::new());
+        let mut footer_clicked = use_signal(|| false);
+        rsx! {
+            Dropdown {
+                options: vec![("a".into(), "A".into())],
+                selected: String::new(),
+                on_select: move |v: String| received.set(v),
+                footer: Some(rsx! {
+                    div { class: "rf-dropdown-footer",
+                        button {
+                            class: "rf-dropdown-action",
+                            onclick: move |_| footer_clicked.set(true),
+                            "管理环境"
+                        }
+                    }
+                }),
+            }
+            p { id: "footer", "{footer_clicked}" }
+            p { id: "received", "{received}" }
+        }
     }
 }

@@ -23,6 +23,9 @@ pub fn Dropdown(
     /// 附加类（宽度等）。
     #[props(default)]
     class: String,
+    /// 底部区域（如"管理环境"按钮），可选。
+    #[props(default)]
+    footer: Option<Element>,
 ) -> Element {
     let open = use_signal(|| false);
 
@@ -105,6 +108,9 @@ pub fn Dropdown(
                             },
                             "{label}"
                         }
+                    }
+                    if let Some(f) = footer {
+                        { f }
                     }
                 }
             }

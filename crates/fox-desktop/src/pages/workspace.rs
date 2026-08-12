@@ -29,7 +29,7 @@ use crate::components::icons::{
     ClockIcon, CodeIcon, CopyIcon, ImportIcon, PlusIcon, SaveIcon, SendIcon, XIcon,
 };
 use crate::components::modal::RFModal;
-use crate::state::AppState;
+use crate::state::{AppState, Page};
 use crate::views::empty_state::EmptyState;
 
 /// 复制文本到剪贴板（webview 内 execCommand 兜底，兼容非安全上下文）。
@@ -1785,6 +1785,8 @@ pub fn WorkspacePage() -> Element {
             .collect();
         let env_selected: String = env_id.map(|id| id.to_string()).unwrap_or_default();
         let st_env_dd = state.clone();
+        let st_env_footer = state.clone();
+        let st_method = state.clone();
         let vars = state
             .current_project_id
             .peek()
@@ -2366,6 +2368,19 @@ pub fn WorkspacePage() -> Element {
                                         let id = uuid::Uuid::parse_str(&v).ok();
                                         st_env_dd.select_environment(id);
                                     },
+                                    footer: Some(rsx! {
+                                        div {
+                                            class: "rf-dropdown-footer",
+                                            button {
+                                                class: "rf-dropdown-action",
+                                                onclick: move |_| {
+                                                    let mut pg = st_env_footer.current_page;
+                                                    pg.set(Page::Settings);
+                                                },
+                                                "管理环境"
+                                            }
+                                        }
+                                    }),
                                 }
                             }
                         }
@@ -2380,14 +2395,22 @@ pub fn WorkspacePage() -> Element {
                                     selected: method_str.clone(),
                                     on_select: move |v: String| {
                                         if let Ok(m) = v.parse::<HttpMethod>() {
+                                            let st = st_method.clone();
                                             let mut d = draft;
                                             let mut guard = d.write();
-                                            if let Some(ep) = guard.as_mut() { ep.method = m; }
+                                            if let Some(ep) = guard.as_mut() {
+                                                ep.method = m;
+                                                let ep_save = ep.clone();
+                                                drop(guard);
+                                                let id = ep_save.id;
+                                                st.save_endpoint(ep_save);
+                                                tracing::info!("自动保存方法 id={} method={}", id, m);
+                                            }
                                         }
                                     },
                                 }
                                 if let Some((base, _)) = &base_prefix {
-                                    span { class: "ub-base-url", "{base}" }
+                                    span { class: "ub-base-url", title: "base_url（请在设置-环境管理中修改）", "{base}" }
                                 }
                                 input {
                                     class: "rf-input ub-url-input",

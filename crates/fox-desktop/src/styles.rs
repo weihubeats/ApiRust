@@ -421,6 +421,13 @@ svg { display: block; }
 }
 .rf-dropdown-item:hover { background: var(--panel-2); color: var(--text); }
 .rf-dropdown-item.selected { color: var(--accent); }
+.rf-dropdown-footer { padding: 6px 4px 2px; border-top: 1px solid var(--border); }
+.rf-dropdown-action {
+  display: block; width: 100%; text-align: center; padding: 8px 10px;
+  border: none; border-radius: 6px; background: transparent;
+  color: var(--accent); cursor: pointer; font-size: 13px; font-weight: 500;
+}
+.rf-dropdown-action:hover { background: var(--accent-soft); }
 
 
 /* 顶栏：三栏 Flex（左 / 中 / 右），浅色下抬升一档海拔 */
@@ -776,6 +783,7 @@ code, pre { font-family: var(--mono); }
 .tree-item:active { background: var(--accent-soft); }
 .tree-item.draggable { cursor: grab; }
 .tree-item.dragging { opacity: .4; }
+.tree-item.no-pointer { pointer-events: none; }
 .tree-item.drop-over { background: var(--accent-soft);
   box-shadow: inset 0 0 0 1px var(--accent); }
 .tree-root-drop-target { position: relative; }
@@ -882,7 +890,7 @@ code, pre { font-family: var(--mono); }
   border-bottom: 1px solid var(--border); align-items: center; }
 .ub-group { display: flex; align-items: stretch; flex: 1; min-width: 0; height: 34px;
   background: var(--panel); border: 1px solid var(--border-2);
-  border-radius: var(--r-s); overflow: hidden; }
+  border-radius: var(--r-s); }
 .ub-group .rf-dropdown-trigger { height: 32px; border: none; border-radius: 0;
   border-right: 1px solid var(--border); font-weight: 700; font-size: 13px; }
 .ub-group .rf-dd-method { width: auto; min-width: 108px; }
@@ -912,8 +920,9 @@ code, pre { font-family: var(--mono); }
   user-select: none; }
 .ub-send { border: none; border-left: 1px solid var(--border); cursor: pointer;
   display: inline-flex; align-items: center; gap: 6px; padding: 0 18px;
+  height: 32px; box-sizing: border-box;
   background: var(--success); color: var(--on-success); font-size: 13px;
-  font-weight: 700; transition: filter .12s; }
+  font-weight: 700; transition: filter .12s; flex-shrink: 0; }
 .ub-send:hover { filter: brightness(1.07); }
 .ub-send:active { filter: brightness(.96); }
 .ub-send:disabled { opacity: .8; cursor: not-allowed; }

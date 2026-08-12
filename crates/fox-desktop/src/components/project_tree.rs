@@ -132,7 +132,7 @@ pub fn SideBar() -> Element {
             let js = r#"
 console.log('fox-drag-js-init');
 var foxDrag = window.__foxDrag = window.__foxDrag || {
-    epId: null, dragging: false, moved: false, startX: 0, startY: 0, ghost: null
+    epId: null, dragging: false, moved: false, startX: 0, startY: 0, ghost: null, pointerLocked: false
 };
 
 function makeGhost(el) {
@@ -159,6 +159,19 @@ function makeGhost(el) {
 
 function clearDragging() {
     document.querySelectorAll('.tree-item.dragging').forEach(function(el){el.classList.remove('dragging')});
+    document.querySelectorAll('.tree-item.no-pointer').forEach(function(el){el.classList.remove('no-pointer')});
+}
+
+function lockPointerEvents() {
+    document.querySelectorAll('.tree-item').forEach(function(el){
+        if (!el.hasAttribute('data-fox-drop-target')) {
+            el.classList.add('no-pointer');
+        }
+    });
+}
+
+function unlockPointerEvents() {
+    document.querySelectorAll('.tree-item.no-pointer').forEach(function(el){el.classList.remove('no-pointer')});
 }
 
 function doStart(e) {
@@ -172,6 +185,8 @@ function doStart(e) {
     foxDrag.startY = e.clientY;
     foxDrag.moved = false;
     foxDrag.dragging = false;
+    foxDrag.noClick = true;
+    e.preventDefault();
     epEl.classList.add('dragging');
 }
 
@@ -184,6 +199,10 @@ function doMove(e) {
     foxDrag.dragging = true;
     if (!foxDrag.ghost) {
         foxDrag.ghost = makeGhost(document.querySelector('[data-fox-ep-id="' + foxDrag.epId + '"]'));
+    }
+    if (!foxDrag.pointerLocked) {
+        foxDrag.pointerLocked = true;
+        lockPointerEvents();
     }
     foxDrag.ghost.style.left = e.clientX + 'px';
     foxDrag.ghost.style.top = e.clientY + 'px';
@@ -199,17 +218,30 @@ function doEnd(e) {
     var epId = foxDrag.epId;
     var target = null;
     if (foxDrag.moved && foxDrag.dragging) {
-        target = e.target.closest('[data-fox-drop-target]');
+        var el = document.elementFromPoint(e.clientX, e.clientY);
+        if (el) {
+            target = el.closest('[data-fox-drop-target]');
+        }
+        if (target) {
+            var dragEl = document.querySelector('[data-fox-ep-id="' + foxDrag.epId + '"]');
+            if (dragEl && (dragEl === target || target.contains(dragEl))) {
+                target = null;
+            }
+        }
     }
     var folderId = target ? target.dataset.foxFolderId : null;
+    var didMove = foxDrag.moved;
     foxDrag.epId = null;
     foxDrag.dragging = false;
     foxDrag.moved = false;
+    foxDrag.pointerLocked = false;
+    if (!didMove) {
+        foxDrag.noClick = false;
+    }
     document.querySelectorAll('[data-fox-drop-target].drop-over').forEach(function(el){el.classList.remove('drop-over')});
     clearDragging();
     if (foxDrag.ghost) { foxDrag.ghost.remove(); foxDrag.ghost = null; }
     if (target) {
-        foxDrag.noClick = true;
         console.log('fox-drop:', epId, folderId);
         dioxus.send({ep_id: epId, folder_id: folderId});
     }

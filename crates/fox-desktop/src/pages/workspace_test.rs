@@ -278,4 +278,31 @@ mod tests {
             );
         });
     }
+
+    /// 方法下拉框：初始渲染 GET，且接口 state 方法为 GET。
+    #[test]
+    fn method_dropdown_initial_state_is_get() {
+        dioxus_html::set_event_converter(Box::new(dioxus_html::SerializedHtmlEventConverter));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let pool = fox_storage::db::memory_pool().await.unwrap();
+            POOL.with(|s| *s.borrow_mut() = Some(pool));
+
+            let mut dom = VirtualDom::new_with_props(root, ());
+            let _m1 = dom.rebuild_to_vec();
+            let m2 = dom.render_immediate_to_vec();
+            dom.render_immediate_to_vec();
+
+            let texts = all_text(&m2);
+            assert!(
+                texts.iter().any(|t| t == "GET"),
+                "初始应显示 GET，实际文本：{texts:?}"
+            );
+
+            let state = ST.with(|s| s.borrow().clone()).expect("state 已就绪");
+            let endpoints = state.endpoints.read();
+            let ep = endpoints.iter().find(|e| e.method == HttpMethod::GET);
+            assert!(ep.is_some(), "应有 GET 方法的接口，实际 endpoints：{endpoints:?}");
+        });
+    }
 }

@@ -106,6 +106,23 @@ fn render_spec(spec: &RequestSpec, vars: &VariableMap) -> RequestSpec {
                 value: fox_core::resolve_variables(value, vars),
                 location: *location,
             },
+            AuthSpec::OAuth2 {
+                client_id,
+                client_secret,
+                auth_url,
+                token_url,
+                scope,
+                redirect_uri,
+                token,
+            } => AuthSpec::OAuth2 {
+                client_id: fox_core::resolve_variables(client_id, vars),
+                client_secret: fox_core::resolve_variables(client_secret, vars),
+                auth_url: fox_core::resolve_variables(auth_url, vars),
+                token_url: fox_core::resolve_variables(token_url, vars),
+                scope: fox_core::resolve_variables(scope, vars),
+                redirect_uri: fox_core::resolve_variables(redirect_uri, vars),
+                token: token.clone(),
+            },
         },
         body: match &spec.body {
             BodySpec::None => BodySpec::None,
@@ -128,6 +145,13 @@ fn render_spec(spec: &RequestSpec, vars: &VariableMap) -> RequestSpec {
                         enabled: f.enabled,
                     })
                     .collect(),
+            },
+            BodySpec::GraphQL { spec } => BodySpec::GraphQL {
+                spec: fox_core::model::GraphQLSpec {
+                    query: fox_core::resolve_variables(&spec.query, vars),
+                    variables: fox_core::resolve_variables(&spec.variables, vars),
+                    operation_name: fox_core::resolve_variables(&spec.operation_name, vars),
+                },
             },
         },
         timeout_ms: spec.timeout_ms,

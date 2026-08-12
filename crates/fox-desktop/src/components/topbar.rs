@@ -1,10 +1,10 @@
 //! 顶部栏：三栏 Flex 布局。
-//! 左：Logo + 面包屑（项目名）；中：全局搜索（max-width 500px，含 ⌘K 快捷键标签）；
-//! 右：反馈 / 设置（图标 + 文字，hover 变色）。
+//! 左：Logo（狐狸 SVG + 字标）+ 面包屑（项目名）；中：全局搜索（max-width 480px，⌘K 胶囊）；
+//! 右：反馈 / 设置（ghost 图标按钮 + tooltip）。
 
 use dioxus::prelude::*;
 
-use crate::components::icons::{BugIcon, SearchIcon, SlidersIcon};
+use crate::components::icons::{BugIcon, FoxFaceIcon, SearchIcon, SlidersIcon};
 use crate::feedback;
 use crate::state::{AppState, Page};
 
@@ -42,7 +42,8 @@ pub fn TopBar() -> Element {
                         let mut p = state.current_page;
                         p.set(Page::Home);
                     },
-                    "RustFox",
+                    FoxFaceIcon {}
+                    span { "RustFox" }
                 }
                 div { class: "rf-topbar-sep" }
                 div { class: "tb-breadcrumb",
@@ -63,12 +64,13 @@ pub fn TopBar() -> Element {
                         value: "{search}",
                         oninput: move |e| search.set(e.data().value()),
                     }
-                    span { class: "search-shortcut-tag", "{shortcut}" }
+                    span { class: "ws-kbd tb-kbd", "{shortcut}" }
                 }
             }
             div { class: "tb-right",
                 button {
                     class: "rf-btn rf-btn-ghost tb-btn",
+                    title: "生成反馈报告（提交到 GitHub Issue）",
                     onclick: move |_| {
                         let st_fb = st_feedback.clone();
                         spawn(async move {
@@ -82,16 +84,15 @@ pub fn TopBar() -> Element {
                         });
                     },
                     BugIcon {}
-                    "反馈"
                 }
                 button {
                     class: "rf-btn rf-btn-ghost tb-btn",
+                    title: "设置",
                     onclick: move |_| {
                         let mut p = state.current_page;
                         p.set(Page::Settings);
                     },
                     SlidersIcon {}
-                    "设置"
                 }
             }
         }

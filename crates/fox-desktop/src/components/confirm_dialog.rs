@@ -2,6 +2,8 @@
 
 use dioxus::prelude::*;
 
+use crate::components::modal::RFModal;
+
 /// 确认框内容。
 #[derive(Clone, PartialEq)]
 pub struct ConfirmInfo {
@@ -34,21 +36,13 @@ pub fn ConfirmDialog(
         return rsx! {};
     };
     rsx! {
-        div {
-            class: "modal-backdrop",
-            onclick: move |e| {
-                e.stop_propagation();
-                on_cancel.call(());
-            },
-            div {
-                class: "modal",
-                onclick: |e| e.stop_propagation(),
-                h3 { "{info.title}" }
-                p { class: "confirm-message", "{info.message}" }
-                div { class: "rf-modal-actions",
-                    button { class: "rf-btn", onclick: move |_| on_cancel.call(()), "取消" }
-                    button { class: "rf-btn rf-btn-danger", onclick: move |_| on_confirm.call(()), "{info.confirm_text}" }
-                }
+        RFModal {
+            on_close: move |_| on_cancel.call(()),
+            h3 { "{info.title}" }
+            p { class: "confirm-message", "{info.message}" }
+            div { class: "rf-modal-actions",
+                button { class: "rf-btn", onclick: move |_| on_cancel.call(()), "取消" }
+                button { class: "rf-btn rf-btn-danger", onclick: move |_| on_confirm.call(()), "{info.confirm_text}" }
             }
         }
     }

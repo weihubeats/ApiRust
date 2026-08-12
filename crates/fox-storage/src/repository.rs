@@ -1198,3 +1198,101 @@ pub async fn list_test_runs(db: &SqlitePool, project_id: Uuid, limit: i64) -> Re
     .await?;
     rows.into_iter().map(|r| r.into_model()).collect()
 }
+
+// ---------------------------------------------------------------------------
+// WebSocket 离线消息（ws_messages）
+// ---------------------------------------------------------------------------
+
+#[derive(sqlx::FromRow)]
+struct WsMessageRow {
+    id: String,
+    message_type: String,
+    payload: String,
+    created_at: String,
+}
+
+impl WsMessageRow {
+    fn into_model(self) -> Result<WsMessageRecord> {
+        Ok(WsMessageRecord {
+            id: parse_uuid(&self.id)?,
+            message_type: match self.message_type.as_str() {
+                "text" => WsMessageType::Text,
+                "binary" => WsMessageType::Binary,
+                "ping" => WsMessageType::Ping,
+                other => {
+                    return Err(AppError::Validation(format!("无效的消息类型：{other}")));
+                }
+            },
+            payload: self.payload,
+            created_at: parse_time(&self.created_at)?,
+        })
+    }
+}
+
+/// 持久化一条待发消息（发送队列溢出 / 连接不可达时保活）。
+pub async fn enqueue_ws_message(
+    db: &SqlitePool,
+    target: &str,
+    message_type: WsMessageType,
+    payload: &str,
+) -> Result<WsMessageRecord> {
+    let record = WsMessageRecord {
+        id: Uuid::new_v4(),
+        message_type,
+        payload: payload.to_string(),
+        created_at: Utc::now(),
+    };
+    sqlx::query(
+        "INSERT INTO ws_messages (id, target, message_type, payload, created_at)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(record.id.to_string())
+    .bind(target)
+    .bind(message_type.as_str())
+    .bind(&record.payload)
+    .bind(record.created_at.to_rfc3339())
+    .execute(db)
+    .await?;
+    Ok(record)
+}
+
+/// 查询指定连接的目标地址尚未发送的消息（重连成功后按序补发）。
+pub async fn list_pending_ws_messages(
+    db: &SqlitePool,
+    target: &str,
+) -> Result<Vec<WsMessageRecord>> {
+    let rows: Vec<WsMessageRow> = sqlx::query_as(
+        "SELECT id, message_type, payload, created_at
+         FROM ws_messages WHERE target = ? ORDER BY created_at",
+    )
+    .bind(target)
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(WsMessageRow::into_model).collect()
+}
+
+/// 删除已发送的持久化消息。
+pub async fn delete_ws_messages(db: &SqlitePool, ids: &[Uuid]) -> Result<()> {
+    for id in ids {
+        sqlx::query("DELETE FROM ws_messages WHERE id = ?")
+            .bind(id.to_string())
+            .execute(db)
+            .await?;
+    }
+    Ok(())
+}
+
+/// 清理超过保留期的待发消息（过期丢弃），返回清理条数。
+pub async fn purge_expired_ws_messages(
+    db: &SqlitePool,
+    target: &str,
+    retention: chrono::Duration,
+) -> Result<u64> {
+    let cutoff = (Utc::now() - retention).to_rfc3339();
+    let result = sqlx::query("DELETE FROM ws_messages WHERE target = ? AND created_at < ?")
+        .bind(target)
+        .bind(cutoff)
+        .execute(db)
+        .await?;
+    Ok(result.rows_affected())
+}

@@ -17,6 +17,7 @@ fox-mock = { path = "../fox-mock" }
 fox-test = { path = "../fox-test" }
 fox-backup = { path = "../fox-backup" }
 fox-codegen = { path = "../fox-codegen" }
+fox-oauth = { path = "../fox-oauth" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

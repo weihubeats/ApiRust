@@ -6,7 +6,8 @@
 
 use base64::Engine;
 use fox_core::model::{
-    ApiKeyLocation, AuthSpec, BodySpec, HttpMethod, KeyValue, MultipartField, MultipartValueType,
+    ApiKeyLocation, AuthSpec, BodySpec, GraphQLSpec, HttpMethod, KeyValue, MultipartField,
+    MultipartValueType,
 };
 
 /// 目标语言。
@@ -72,30 +73,17 @@ fn auth_headers(auth: &AuthSpec) -> Vec<(String, String)> {
             value,
             location: ApiKeyLocation::Header,
         } if !key.trim().is_empty() && !value.is_empty() => vec![(key.clone(), value.clone())],
+        // OAuth2：已授权时输出 Bearer 头（token 从 AuthSpec 内嵌令牌取）。
+        AuthSpec::OAuth2 { token: Some(t), .. } if !t.access_token.is_empty() => {
+            vec![("Authorization".into(), format!("Bearer {}", t.access_token))]
+        }
         _ => Vec::new(),
     }
 }
 
 /// 生成代码。
 pub fn render<'a>(lang: Lang, req: &GenRequest<'a>) -> String {
-    let mut headers: Vec<(String, String)> = auth_headers(req.auth);
-    headers.extend(
-        req.headers
-            .iter()
-            .filter(|kv| kv.enabled && !kv.key.trim().is_empty())
-            .map(|kv| (kv.key.trim().to_string(), kv.value.clone())),
-    );
-    let mut merged: Vec<(String, String)> = Vec::new();
-    for (k, v) in headers {
-        if let Some(existing) = merged
-            .iter_mut()
-            .find(|(ek, _)| ek.eq_ignore_ascii_case(&k))
-        {
-            existing.1 = v;
-        } else {
-            merged.push((k, v));
-        }
-    }
+    let merged = merge_headers(req.headers, req.auth);
     let m = req.method;
     let u = req.url;
     match lang {
@@ -106,6 +94,78 @@ pub fn render<'a>(lang: Lang, req: &GenRequest<'a>) -> String {
         Lang::Java => render_java(m, u, &merged, req.body),
         Lang::Php => render_php(m, u, &merged, req.body),
     }
+}
+
+/// 生成 GraphQL curl 代码（POST + `application/json`）。
+pub fn render_graphql_curl(
+    url: &str,
+    headers: &[KeyValue],
+    auth: &AuthSpec,
+    spec: &GraphQLSpec,
+) -> String {
+    let merged = merge_headers(headers, auth);
+    let mut out = format!("curl -X POST '{}'", sq(url));
+    for (k, v) in &merged {
+        out.push_str(&format!(" \\\n     -H '{}: {}'", sq(k), sq(v)));
+    }
+    let has_ct = merged
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+    if !has_ct {
+        out.push_str(" \\\n     -H 'Content-Type: application/json'");
+    }
+    out.push_str(&format!(" \\\n     --data '{}'", sq(&graphql_json(spec))));
+    out
+}
+
+/// 生成 GraphQL JavaScript 代码（Apollo Client）。
+///
+/// 变量取自 spec.variables，为合法 JSON 对象时原样嵌入；
+/// 空/非法时回退为空对象 `{}`。
+pub fn render_graphql_js(
+    url: &str,
+    headers: &[KeyValue],
+    auth: &AuthSpec,
+    spec: &GraphQLSpec,
+) -> String {
+    let mut out = String::new();
+    out.push_str("import { ApolloClient, InMemoryCache, gql } from '@apollo/client';\n\n");
+    out.push_str("const client = new ApolloClient({\n");
+    out.push_str(&format!("  uri: '{}',\n", sq(url)));
+    let merged = merge_headers(headers, auth);
+    if !merged.is_empty() {
+        out.push_str("  headers: {\n");
+        for (k, v) in &merged {
+            out.push_str(&format!("    '{}': '{}',\n", dq(k), dq(v)));
+        }
+        out.push_str("  },\n");
+    }
+    out.push_str("  cache: new InMemoryCache(),\n");
+    out.push_str("});\n\n");
+    out.push_str("const QUERY = gql`\n");
+    out.push_str(&spec.query);
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("`;\n\n");
+    let variables = spec
+        .variables
+        .trim()
+        .parse::<serde_json::Value>()
+        .ok()
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    out.push_str(&format!("const variables = {};\n\n", variables));
+    if !spec.operation_name.trim().is_empty() {
+        out.push_str(&format!(
+            "const result = await client.query({{\n  query: QUERY,\n  variables,\n  operationName: '{}',\n}});\n",
+            dq(spec.operation_name.trim())
+        ));
+    } else {
+        out.push_str("const result = await client.query({\n  query: QUERY,\n  variables,\n});\n");
+    }
+    out.push_str("console.log(result.data);\n");
+    out
 }
 
 /// (body 文本, 内容类型, multipart 字段)
@@ -133,7 +193,52 @@ fn body_parts(body: &BodySpec) -> (String, Option<&'static str>, Option<&Vec<Mul
             )
         }
         BodySpec::Multipart { fields } => (String::new(), None, Some(fields)),
+        BodySpec::GraphQL { spec } => (graphql_json(spec), Some("application/json"), None),
     }
+}
+
+/// 构建 GraphQL 请求体 JSON（variables 为空串/"{}" 时省略，operationName 为空时省略）。
+fn graphql_json(spec: &GraphQLSpec) -> String {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "query".into(),
+        serde_json::Value::String(spec.query.clone()),
+    );
+    let trimmed = spec.variables.trim();
+    if !trimmed.is_empty() && trimmed != "{}" {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if value.is_object() {
+                payload.insert("variables".into(), value);
+            }
+        }
+    }
+    if !spec.operation_name.trim().is_empty() {
+        payload.insert(
+            "operationName".into(),
+            serde_json::Value::String(spec.operation_name.clone()),
+        );
+    }
+    serde_json::to_string(&serde_json::Value::Object(payload)).unwrap_or_default()
+}
+
+/// 合并请求头与认证信息（auth 优先，大小写不敏感去重）。
+fn merge_headers<'a>(headers: &'a [KeyValue], auth: &'a AuthSpec) -> Vec<(String, String)> {
+    let mut merged: Vec<(String, String)> = auth_headers(auth);
+    for kv in headers
+        .iter()
+        .filter(|kv| kv.enabled && !kv.key.trim().is_empty())
+    {
+        let key = kv.key.trim().to_string();
+        if let Some(existing) = merged
+            .iter_mut()
+            .find(|(ek, _)| ek.eq_ignore_ascii_case(&key))
+        {
+            existing.1 = kv.value.clone();
+        } else {
+            merged.push((key, kv.value.clone()));
+        }
+    }
+    merged
 }
 
 /// RFC 3986 表单编码（Component 规则）。
@@ -199,7 +304,10 @@ fn render_curl(
         out.push_str(&format!(" \\\n     -H '{}: {}'", sq(k), sq(v)));
     }
     if let Some(fields) = multipart {
-        for f in fields.iter().filter(|f| f.enabled && !f.key.trim().is_empty()) {
+        for f in fields
+            .iter()
+            .filter(|f| f.enabled && !f.key.trim().is_empty())
+        {
             let value = match f.value_type {
                 MultipartValueType::Text => sq(&f.value),
                 MultipartValueType::FilePath => format!("@{}", sq(&f.value)),
@@ -244,7 +352,10 @@ fn render_python(
     }
     if let Some(fields) = multipart {
         out.push_str("files = {\n");
-        for f in fields.iter().filter(|f| f.enabled && !f.key.trim().is_empty()) {
+        for f in fields
+            .iter()
+            .filter(|f| f.enabled && !f.key.trim().is_empty())
+        {
             match f.value_type {
                 MultipartValueType::Text => {
                     out.push_str(&format!("    \"{}\": \"{}\",\n", dq(&f.key), dq(&f.value)));
@@ -298,10 +409,17 @@ fn render_js(
     }
     if let Some(fields) = multipart {
         out.push_str("const fd = new FormData();\n");
-        for f in fields.iter().filter(|f| f.enabled && !f.key.trim().is_empty()) {
+        for f in fields
+            .iter()
+            .filter(|f| f.enabled && !f.key.trim().is_empty())
+        {
             match f.value_type {
                 MultipartValueType::Text => {
-                    out.push_str(&format!("fd.append(\"{}\", \"{}\");\n", dq(&f.key), dq(&f.value)));
+                    out.push_str(&format!(
+                        "fd.append(\"{}\", \"{}\");\n",
+                        dq(&f.key),
+                        dq(&f.value)
+                    ));
                 }
                 MultipartValueType::FilePath => {
                     out.push_str(&format!(
@@ -345,10 +463,7 @@ fn render_go(
     } else {
         // Go raw string literal（反引号）无法包含反引号；改用双引号字符串，
         // 对 `"`、`\`、`\n`、`\r`、`\t` 做标准转义。
-        out.push_str(&format!(
-            "  payload := []byte(\"{}\")\n",
-            dq(&body)
-        ));
+        out.push_str(&format!("  payload := []byte(\"{}\")\n", dq(&body)));
         out.push_str(&format!(
             "  req, err := http.NewRequest(\"{method}\", \"{}\", bytes.NewBuffer(payload))\n",
             dq(url)
@@ -386,10 +501,7 @@ fn render_java(
     out.push_str(&body_expr);
     out.push_str("    Request request = new Request.Builder()\n");
     out.push_str(&format!("      .url(\"{}\")\n", dq(url)));
-    out.push_str(&format!(
-        "      .method(\"{}\", body)\n",
-        method
-    ));
+    out.push_str(&format!("      .method(\"{}\", body)\n", method));
     for (k, v) in headers {
         out.push_str(&format!("      .addHeader(\"{}\", \"{}\")\n", dq(k), dq(v)));
     }
@@ -404,7 +516,9 @@ fn render_java(
     out.push_str("      .build();\n\n");
     out.push_str("    try (Response response = client.newCall(request).execute()) {\n");
     out.push_str("      System.out.println(response.code());\n");
-    out.push_str("      System.out.println(response.body() != null ? response.body().string() : \"\");\n");
+    out.push_str(
+        "      System.out.println(response.body() != null ? response.body().string() : \"\");\n",
+    );
     out.push_str("    }\n  }\n}\n");
     out
 }
@@ -420,7 +534,10 @@ fn body_expr_java(
         let mut out =
             String::from("    MultipartBody.Builder builder = new MultipartBody.Builder()\n");
         out.push_str("      .setType(MultipartBody.FORM)\n");
-        for f in fields.iter().filter(|f| f.enabled && !f.key.trim().is_empty()) {
+        for f in fields
+            .iter()
+            .filter(|f| f.enabled && !f.key.trim().is_empty())
+        {
             match f.value_type {
                 MultipartValueType::Text => out.push_str(&format!(
                     "      .addFormDataPart(\"{}\", \"{}\")\n",
@@ -463,14 +580,20 @@ fn render_php(
 ) -> String {
     let (body, content_type, multipart) = body_parts(spec);
     let mut out = String::from("<?php\n\n$ch = curl_init();\n");
-    out.push_str(&format!("curl_setopt($ch, CURLOPT_URL, \"{}\");\n", dq(url)));
+    out.push_str(&format!(
+        "curl_setopt($ch, CURLOPT_URL, \"{}\");\n",
+        dq(url)
+    ));
     out.push_str(&format!(
         "curl_setopt($ch, CURLOPT_CUSTOMREQUEST, \"{}\");\n",
         method
     ));
     if let Some(fields) = multipart {
         out.push_str("curl_setopt($ch, CURLOPT_POSTFIELDS, array(\n");
-        for f in fields.iter().filter(|f| f.enabled && !f.key.trim().is_empty()) {
+        for f in fields
+            .iter()
+            .filter(|f| f.enabled && !f.key.trim().is_empty())
+        {
             match f.value_type {
                 MultipartValueType::Text => out.push_str(&format!(
                     "    \"{}\" => \"{}\",\n",
@@ -486,9 +609,14 @@ fn render_php(
         }
         out.push_str("));\n");
     } else if !body.is_empty() {
-        out.push_str(&format!("curl_setopt($ch, CURLOPT_POSTFIELDS, \"{}\");\n", dq(&body)));
+        out.push_str(&format!(
+            "curl_setopt($ch, CURLOPT_POSTFIELDS, \"{}\");\n",
+            dq(&body)
+        ));
     }
-    let has_ct = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+    let has_ct = headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
     if !headers.is_empty() || (content_type.is_some() && !has_ct) {
         out.push_str("curl_setopt($ch, CURLOPT_HTTPHEADER, array(\n");
         for (k, v) in headers {
@@ -505,7 +633,9 @@ fn render_php(
     out.push_str("$response = curl_exec($ch);\n");
     out.push_str("$err = curl_error($ch);\n");
     out.push_str("curl_close($ch);\n\n");
-    out.push_str("if ($err) {\n    echo \"cURL Error #:\" . $err;\n} else {\n    echo $response;\n}\n");
+    out.push_str(
+        "if ($err) {\n    echo \"cURL Error #:\" . $err;\n} else {\n    echo $response;\n}\n",
+    );
     out
 }
 #[cfg(test)]
@@ -726,7 +856,9 @@ mod tests {
         assert!(code.contains("import okhttp3.*;"));
         assert!(code.contains(".url(\"https://api.example.com/users\")"));
         assert!(code.contains(".method(\"POST\", body)"));
-        assert!(code.contains("RequestBody body = RequestBody.create(mediaType, \"{\\\"name\\\":\\\"a\\\"}\");"));
+        assert!(code.contains(
+            "RequestBody body = RequestBody.create(mediaType, \"{\\\"name\\\":\\\"a\\\"}\");"
+        ));
         assert!(code.contains("MediaType.parse(\"application/json\")"));
         assert!(code.contains(".addHeader(\"Authorization\", \"Bearer tok123\")"));
     }
@@ -913,5 +1045,119 @@ mod tests {
         let code = render(Lang::Curl, &req);
         assert_eq!(code.matches("Authorization").count(), 1);
         assert!(code.contains("manual"));
+    }
+
+    #[test]
+    fn graphql_body_in_all_renderers() {
+        let method = HttpMethod::POST;
+        let body = BodySpec::GraphQL {
+            spec: GraphQLSpec {
+                query: "query Hero($id: ID!) { hero(id: $id) { name } }".into(),
+                variables: "{\"id\":\"42\"}".into(),
+                operation_name: "Hero".into(),
+            },
+        };
+        let req = GenRequest {
+            method: &method,
+            url: "https://api.example.com/graphql",
+            headers: &[],
+            body: &body,
+            auth: &AuthSpec::None,
+        };
+        let curl = render(Lang::Curl, &req);
+        assert!(curl.contains("Content-Type: application/json"));
+        assert!(curl.contains("\"variables\""));
+        assert!(curl.contains("\"operationName\""));
+        let py = render(Lang::Python, &req);
+        assert!(py.contains("payload = \""));
+        assert!(py.contains("operationName"));
+        let js = render(Lang::JavaScript, &req);
+        assert!(js.contains("JSON.stringify("));
+        let go = render(Lang::Go, &req);
+        assert!(go.contains("payload := []byte("));
+        let java = render(Lang::Java, &req);
+        assert!(java.contains("RequestBody body = RequestBody.create(mediaType"));
+        let php = render(Lang::Php, &req);
+        assert!(php.contains("CURLOPT_POSTFIELDS"));
+        assert!(php.contains("operationName"));
+    }
+
+    #[test]
+    fn graphql_curl_omits_empty_variables() {
+        let spec = GraphQLSpec {
+            query: "{ hero { name } }".into(),
+            variables: String::new(),
+            operation_name: String::new(),
+        };
+        let code = render_graphql_curl(
+            "https://api.example.com/graphql",
+            &[],
+            &AuthSpec::None,
+            &spec,
+        );
+        assert!(code.starts_with("curl -X POST 'https://api.example.com/graphql'"));
+        assert!(code.contains("Content-Type: application/json"));
+        assert!(!code.contains("variables"));
+        assert!(!code.contains("operationName"));
+    }
+
+    #[test]
+    fn graphql_curl_includes_bearer_auth() {
+        let spec = GraphQLSpec {
+            query: "{ a }".into(),
+            variables: "{}".into(),
+            operation_name: "A".into(),
+        };
+        let code = render_graphql_curl(
+            "https://api.example.com/graphql",
+            &[],
+            &AuthSpec::Bearer {
+                token: "t0k".into(),
+            },
+            &spec,
+        );
+        assert!(code.contains("Authorization: Bearer t0k"));
+        assert!(code.contains("operationName"));
+        assert!(!code.contains("variables"));
+    }
+
+    #[test]
+    fn graphql_js_apollo_client_shape() {
+        let spec = GraphQLSpec {
+            query: "query Hero($id: ID!) {\n  hero(id: $id) { name }\n}".into(),
+            variables: "{\"id\":\"42\"}".into(),
+            operation_name: "Hero".into(),
+        };
+        let code = render_graphql_js(
+            "https://api.example.com/graphql",
+            &[],
+            &AuthSpec::None,
+            &spec,
+        );
+        assert!(code.contains("ApolloClient, InMemoryCache, gql"));
+        assert!(code.contains("uri: 'https://api.example.com/graphql',"));
+        assert!(code.contains("const QUERY = gql`"));
+        assert!(code.contains("hero(id: $id)"));
+        assert!(code.contains("const variables = {\"id\":\"42\"};"));
+        assert!(code.contains("operationName: 'Hero'"));
+        assert!(code.contains("client.query("));
+        assert!(code.contains("console.log(result.data)"));
+    }
+
+    #[test]
+    fn graphql_js_fallback_variables_and_auth() {
+        let spec = GraphQLSpec::default();
+        let code = render_graphql_js(
+            "https://api.example.com/graphql",
+            &[],
+            &AuthSpec::Bearer {
+                token: "t0k".into(),
+            },
+            &spec,
+        );
+        assert!(code.contains("const variables = {};"));
+        assert!(code.contains("'Authorization': 'Bearer t0k'"));
+        assert!(!code.contains("operationName"));
+        assert!(!code.contains("operationName: '"));
     }
 }

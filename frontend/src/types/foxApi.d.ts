@@ -14,6 +14,10 @@ export interface CommandError {
     | 'DATABASE'
     | 'IO'
     | 'HTTP'
+    | 'TIMEOUT'
+    | 'SSL'
+    | 'DNS'
+    | 'CONNECTION'
     | 'VALIDATION'
     | 'NOT_FOUND'
     | 'OPENAPI'
@@ -23,6 +27,7 @@ export interface CommandError {
     | 'WEBSOCKET'
     | 'JSON'
     | 'DECRYPT'
+    | 'OAUTH2'
   message: string
 }
 
@@ -51,6 +56,27 @@ export type AuthSpec =
   | { type: 'bearer'; token: string }
   | { type: 'basic'; username: string; password: string }
   | { type: 'apikey'; key: string; value: string; in: ApiKeyLocation }
+  | {
+      type: 'oauth2'
+      client_id: string
+      client_secret: string
+      auth_url: string
+      token_url: string
+      scope: string
+      redirect_uri: string
+      token?: OAuth2Token
+    }
+
+/** OAuth2 令牌（`expires_at` 为 UTC 时刻）。 */
+export interface OAuth2Token {
+  access_token: string
+  token_type?: string
+  refresh_token?: string
+  expires_at: string
+}
+
+/** OAuth2 授权状态（UI 状态指示器用）。 */
+export type OAuth2Status = 'unauthorized' | 'valid' | 'expiring_soon' | 'expired'
 
 /** Multipart 值类型。 */
 export type MultipartValueType = 'text' | 'file_path'
@@ -62,6 +88,13 @@ export interface MultipartField {
   enabled: boolean
 }
 
+/** GraphQL 请求（Rust `GraphQLSpec`，变量为 JSON 文本，operationName 可空）。 */
+export interface GraphQLSpec {
+  query: string
+  variables: string
+  operation_name: string
+}
+
 /** 请求 Body（Rust `BodySpec`，tag = "mode"）。 */
 export type BodySpec =
   | { mode: 'none' }
@@ -69,6 +102,26 @@ export type BodySpec =
   | { mode: 'text'; raw: string }
   | { mode: 'urlencoded'; fields: KeyValue[] }
   | { mode: 'multipart'; fields: MultipartField[] }
+  | { mode: 'graphql'; spec: GraphQLSpec }
+
+/** GraphQL 错误位置（Rust `GraphQLErrorLocation`）。 */
+export interface GraphQLErrorLocation {
+  line: number
+  column: number
+}
+
+/** GraphQL 错误条目（Rust `GraphQLError`）。 */
+export interface GraphQLError {
+  message: string
+  locations: GraphQLErrorLocation[] | null
+  path: (string | number | boolean | null)[] | null
+}
+
+/** 解析后的 GraphQL 响应（Rust `GraphQLResponse`）。 */
+export interface GraphQLResponse {
+  data: unknown
+  errors: GraphQLError[]
+}
 
 /** 统一请求结构（Rust `RequestSpec`）。 */
 export interface RequestSpec {

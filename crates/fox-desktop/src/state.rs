@@ -20,6 +20,23 @@ pub enum Page {
     Settings,
 }
 
+/// 主题模式取值（与 styles.rs 的 `data-theme` / media 查询约定一致）。
+pub mod theme {
+    /// 跟随系统：由 app.rs 的 matchMedia 监听把解析结果写入根节点 data-theme。
+    pub const AUTO: &str = "auto";
+    /// 强制深色。
+    pub const DARK: &str = "dark";
+    /// 强制浅色。
+    pub const LIGHT: &str = "light";
+
+    pub const ALL: [&str; 3] = [AUTO, DARK, LIGHT];
+}
+
+/// 校验主题取值是否合法。
+pub fn valid_theme(mode: &str) -> bool {
+    theme::ALL.contains(&mode)
+}
+
 /// Toast 类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -84,6 +101,8 @@ pub struct AppState {
     pub update_downloaded: Signal<Option<String>>,
     /// 最近一次更新流程错误信息。
     pub update_error: Signal<Option<String>>,
+    /// 主题模式（auto / dark / light，持久化于 settings 表）。
+    pub theme: Signal<String>,
 }
 
 /// 操作步骤上限。
@@ -127,6 +146,7 @@ impl AppState {
             update_progress: Signal::new(None),
             update_downloaded: Signal::new(None),
             update_error: Signal::new(None),
+            theme: Signal::new(theme::AUTO.into()),
         }
     }
 
@@ -557,6 +577,48 @@ impl AppState {
         });
     }
 
+    /// 移动接口到目标文件夹（`None` 表示回到项目根）。
+    pub fn move_endpoint_to_folder(&self, endpoint_id: Uuid, folder_id: Option<Uuid>) {
+        tracing::info!("move_endpoint_to_folder: ep={endpoint_id} folder={folder_id:?}");
+        let db = self.services.db.clone();
+        let mut endpoints = self.endpoints;
+        let mut toasts = self.toasts;
+        let active = self.active_endpoint_id;
+        spawn_forever(async move {
+            match repo::get_endpoint(&db, endpoint_id).await {
+                Ok(mut ep) => {
+                    ep.folder_id = folder_id;
+                    ep.updated_at = chrono::Utc::now();
+                    match repo::update_endpoint(&db, &ep).await {
+                        Ok(updated) => {
+                            let mut list = endpoints.write();
+                            if let Some(e) = list.iter_mut().find(|e| e.id == endpoint_id) {
+                                *e = updated;
+                            }
+                            let _ = active.read().is_some_and(|id| id == endpoint_id);
+                            let _ = updated;
+                            toasts.write().push(Toast {
+                                id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                                kind: ToastKind::Success,
+                                message: "接口已移动".into(),
+                            });
+                        }
+                        Err(e) => toasts.write().push(Toast {
+                            id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                            kind: ToastKind::Error,
+                            message: format!("移动接口失败：{}", e.user_message()),
+                        }),
+                    }
+                }
+                Err(e) => toasts.write().push(Toast {
+                    id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    kind: ToastKind::Error,
+                    message: format!("移动接口失败：{}", e.user_message()),
+                }),
+            }
+        });
+    }
+
     /// 删除接口。
     pub fn delete_endpoint(&self, endpoint_id: Uuid) {
         let db = self.services.db.clone();
@@ -601,6 +663,15 @@ impl AppState {
 
     /// 保存接口（更新数据库并刷新列表）。
     pub fn save_endpoint(&self, ep: Endpoint) {
+        self.persist_endpoint(ep, true);
+    }
+
+    /// 静默保存接口（无 toast）：用于 OAuth2 刷新后自动持久化新 token。
+    pub fn save_endpoint_quiet(&self, ep: Endpoint) {
+        self.persist_endpoint(ep, false);
+    }
+
+    fn persist_endpoint(&self, ep: Endpoint, notify: bool) {
         let db = self.services.db.clone();
         let mut endpoints = self.endpoints;
         let mut toasts = self.toasts;
@@ -611,17 +682,23 @@ impl AppState {
                     if let Some(e) = list.iter_mut().find(|e| e.id == updated.id) {
                         *e = updated;
                     }
-                    toasts.write().push(Toast {
-                        id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                        kind: ToastKind::Success,
-                        message: "保存成功".into(),
-                    });
+                    if notify {
+                        toasts.write().push(Toast {
+                            id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                            kind: ToastKind::Success,
+                            message: "保存成功".into(),
+                        });
+                    }
                 }
-                Err(e) => toasts.write().push(Toast {
-                    id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                    kind: ToastKind::Error,
-                    message: format!("保存失败：{}", e.user_message()),
-                }),
+                Err(e) => {
+                    if notify {
+                        toasts.write().push(Toast {
+                            id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                            kind: ToastKind::Error,
+                            message: format!("保存失败：{}", e.user_message()),
+                        });
+                    }
+                }
             }
         });
     }
@@ -723,6 +800,20 @@ impl AppState {
                 &id.map(|u| u.to_string()).unwrap_or_default(),
             )
             .await;
+        });
+    }
+
+    /// 设置主题模式（auto / dark / light）并持久化。
+    pub fn set_theme(&self, mode: impl Into<String>) {
+        let mode = mode.into();
+        if !valid_theme(&mode) {
+            return;
+        }
+        let mut theme = self.theme;
+        theme.set(mode.clone());
+        let db = self.services.db.clone();
+        spawn_forever(async move {
+            let _ = repo::set_setting(&db, "theme", &mode).await;
         });
     }
 
@@ -1505,5 +1596,25 @@ async fn insert_examples(
         if let Err(e) = repo::create_response_example(db, endpoint_id, &example).await {
             tracing::warn!("写响应示例失败: {}", e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::theme;
+    use super::valid_theme;
+
+    #[test]
+    fn theme_validation_accepts_known_modes() {
+        assert!(valid_theme(theme::AUTO));
+        assert!(valid_theme(theme::DARK));
+        assert!(valid_theme(theme::LIGHT));
+    }
+
+    #[test]
+    fn theme_validation_rejects_unknown_modes() {
+        assert!(!valid_theme("blue"));
+        assert!(!valid_theme(""));
+        assert!(!valid_theme("LIGHT"));
     }
 }

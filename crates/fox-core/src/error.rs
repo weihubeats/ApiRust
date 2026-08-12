@@ -12,6 +12,22 @@ pub enum AppError {
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),
 
+    /// 网络超时（连接 / 读取 / 总请求超时）。
+    #[error("network timeout: {0}")]
+    NetworkTimeout(String),
+
+    /// TLS / 证书错误（证书无效、已过期、不受信任）。
+    #[error("ssl error: {0}")]
+    Ssl(String),
+
+    /// DNS 解析失败（域名不存在或网络不可用）。
+    #[error("dns error: {0}")]
+    Dns(String),
+
+    /// 连接失败（目标拒绝连接或网络不可达）。
+    #[error("connection error: {0}")]
+    Connection(String),
+
     #[error("validation error: {0}")]
     Validation(String),
 
@@ -39,15 +55,60 @@ pub enum AppError {
     /// 环境变量解密失败（主密钥丢失 / 更换 / 密文损坏）。
     #[error("decryption failed: {0}")]
     Decryption(String),
+
+    /// OAuth2 授权 / 刷新失败。
+    #[error("oauth2 error: {0}")]
+    OAuth2(String),
 }
 
 impl AppError {
+    /// 将 reqwest 错误分类为面向用户的网络错误变体。
+    ///
+    /// 判断顺序（与识别准确度匹配）：
+    /// 1. 超时（`is_timeout`）→ [`AppError::NetworkTimeout`]；
+    /// 2. 错误链含 DNS 关键词 → [`AppError::Dns`]；
+    /// 3. 错误链含 TLS / 证书关键词 → [`AppError::Ssl`]（证书错误可能以连接错误形态出现）；
+    /// 4. 连接失败 → [`AppError::Connection`]；
+    /// 5. 请求构建失败（参数非法）→ [`AppError::Validation`]；
+    /// 6. 其余保留 [`AppError::Http`] 兜底。
+    pub fn from_reqwest(e: reqwest::Error) -> AppError {
+        Self::classify(&e).unwrap_or_else(|| AppError::Http(e))
+    }
+
+    /// 只做分类（借用错误，无所有权）。无法识别时返回 `None`，由调用方兜底。
+    pub fn classify(e: &reqwest::Error) -> Option<AppError> {
+        let chain = source_chain(e);
+        if e.is_timeout() {
+            Some(AppError::NetworkTimeout(e.to_string()))
+        } else if chain.contains("lookup")
+            || chain.contains("name or service not known")
+            || chain.contains("dns")
+            || (chain.contains("resolve") && !chain.contains("certificate"))
+        {
+            Some(AppError::Dns(e.to_string()))
+        } else if chain.contains("certificate") || chain.contains("tls") {
+            Some(AppError::Ssl(e.to_string()))
+        } else if e.is_connect() {
+            Some(AppError::Connection(e.to_string()))
+        } else if e.is_builder() {
+            Some(AppError::Validation(
+                "HTTP 请求参数非法，无法构建请求".to_string(),
+            ))
+        } else {
+            None
+        }
+    }
+
     /// 用户可见的中文错误消息。
     pub fn user_message(&self) -> String {
         match self {
             AppError::Database(_) => "数据库操作失败".to_string(),
             AppError::Io(_) => format!("文件操作失败：{self}"),
             AppError::Http(_) => "网络请求失败".to_string(),
+            AppError::NetworkTimeout(_) => "连接超时：服务器未在限定时间内响应".to_string(),
+            AppError::Ssl(_) => "TLS 证书错误：证书无效、已过期或不受信任".to_string(),
+            AppError::Dns(_) => "DNS 解析失败：域名不存在或网络不可用".to_string(),
+            AppError::Connection(_) => "连接失败：目标拒绝连接或网络不可达".to_string(),
             AppError::Validation(msg) => msg.clone(),
             AppError::NotFound(name) => format!("未找到：{name}"),
             AppError::OpenApi(msg) => msg.clone(),
@@ -57,6 +118,7 @@ impl AppError {
             AppError::WebSocket(msg) => msg.clone(),
             AppError::Json(_) => "JSON 解析失败".to_string(),
             AppError::Decryption(msg) => msg.clone(),
+            AppError::OAuth2(msg) => msg.clone(),
         }
     }
 }
@@ -80,4 +142,52 @@ pub fn script_error(msg: impl Into<String>) -> AppError {
 
 pub fn ws_error(msg: impl Into<String>) -> AppError {
     AppError::WebSocket(msg.into())
+}
+
+/// 收集错误链（自身 + 所有 source）为小写文本，用于关键词识别。
+fn source_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![e.to_string().to_lowercase()];
+    let mut cur = e.source();
+    while let Some(cause) = cur {
+        parts.push(cause.to_string().to_lowercase());
+        cur = cause.source();
+    }
+    parts.join(" | ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_messages_cover_all_network_variants() {
+        assert!(AppError::NetworkTimeout("".into())
+            .user_message()
+            .contains("超时"));
+        assert!(AppError::Dns("".into()).user_message().contains("DNS"));
+        assert!(AppError::Ssl("".into()).user_message().contains("证书"));
+        assert!(AppError::Connection("".into())
+            .user_message()
+            .contains("连接失败"));
+        assert!(AppError::OAuth2("需要重新授权".into())
+            .user_message()
+            .contains("重新授权"));
+    }
+
+    #[test]
+    fn error_codes_are_distinct() {
+        let msgs = [
+            AppError::NetworkTimeout("t".into()),
+            AppError::Dns("d".into()),
+            AppError::Ssl("s".into()),
+            AppError::Connection("c".into()),
+        ];
+        assert!(
+            msgs.iter()
+                .map(|m| m.user_message())
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                == 4
+        );
+    }
 }

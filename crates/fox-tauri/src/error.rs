@@ -51,6 +51,10 @@ impl From<AppError> for CommandError {
             AppError::Database(_) => "DATABASE",
             AppError::Io(_) => "IO",
             AppError::Http(_) => "HTTP",
+            AppError::NetworkTimeout(_) => "TIMEOUT",
+            AppError::Ssl(_) => "SSL",
+            AppError::Dns(_) => "DNS",
+            AppError::Connection(_) => "CONNECTION",
             AppError::Validation(_) => "VALIDATION",
             AppError::NotFound(_) => "NOT_FOUND",
             AppError::OpenApi(_) => "OPENAPI",
@@ -60,6 +64,7 @@ impl From<AppError> for CommandError {
             AppError::WebSocket(_) => "WEBSOCKET",
             AppError::Json(_) => "JSON",
             AppError::Decryption(_) => "DECRYPT",
+            AppError::OAuth2(_) => "OAUTH2",
         };
         CommandError {
             code,

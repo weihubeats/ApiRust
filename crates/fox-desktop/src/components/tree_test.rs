@@ -1,5 +1,5 @@
 //! 侧边栏行为测试（无头渲染 + 事件模拟）：
-//! - 布局：Header 项目选择器 / Toolbar 双按钮 / Search / Tree / Footer 环境选择器；
+//! - 布局：Header 项目选择器 / Toolbar 双按钮 / Search / Tree；
 //! - 「＋ 接口」弹名称弹窗并按名称建接口；接口行「导入cURL」弹窗导入并创建接口。
 
 #[cfg(test)]
@@ -20,7 +20,7 @@ mod tests {
     /// 根组件：在 VirtualDom 作用域内创建状态（Signal 必须挂载到作用域）。
     fn root(_: ()) -> Element {
         let pool = POOL.with(|s| s.borrow().clone()).expect("连接池已就绪");
-        let project_id = PROJECT.with(|s| s.borrow().clone()).expect("项目已就绪");
+        let project_id = PROJECT.with(|s| *s.borrow()).expect("项目已就绪");
         let mut state = AppState::new(Services::new(pool.clone()));
         // 项目行在 setup 阶段已入库（外键约束），此处在状态中保持一致。
         state.projects.write().push(Project {
@@ -121,15 +121,15 @@ mod tests {
     fn sidebar_layout_and_modals() {
         with_pool(|| {
             with_converter(|| {
-let mut dom = VirtualDom::new_with_props(root, ());
-            let m1 = dom.rebuild_to_vec();
+                let mut dom = VirtualDom::new_with_props(root, ());
+                let m1 = dom.rebuild_to_vec();
 
-            // 初始 click 监听：项目/环境下拉 trigger + Toolbar 双按钮 + 树行 open + 接口行「⋯」按钮。
+                // 初始 click 监听：2 下拉 + 2 工具栏 + 接口行(open + 重命名/复制/删除) = 7。
                 let initial = event_listeners(&m1, "click");
                 assert_eq!(
                     initial.len(),
-                    6,
-                    "结构监听：2 下拉 + 2 工具栏 + 树(open+more) = 6，实际：{initial:?}"
+                    7,
+                    "结构监听：2 下拉 + 2 工具栏 + 接口行 4 = 7，实际：{initial:?}"
                 );
                 // 初始 input 监听：仅搜索框。
                 assert_eq!(
@@ -140,7 +140,7 @@ let mut dom = VirtualDom::new_with_props(root, ());
 
                 // Toolbar「＋ 接口」（[1]）：点击展开下拉（backdrop + HTTP 接口 + 从 cURL 导入）。
                 // 静态 id 随 LoadTemplate 内建，Mutation 不可见；按注册顺序取：
-                // [0] ＋ 文件夹 [1] ＋ 接口 [2] 环境下拉 [3] 树行 open [4] 接口行「⋯」 [5] 项目下拉。
+                // [0] ＋ 文件夹 [1] ＋ 接口 [2] 接口行 open [3] 重命名 [4] 复制 [5] 删除 [6] 项目下拉。
                 let add_ep = initial[1];
                 dom.handle_event("click", mouse(), add_ep, true);
                 let m_menu = dom.render_immediate_to_vec();
@@ -196,25 +196,8 @@ let mut dom = VirtualDom::new_with_props(root, ());
                 dom.handle_event("click", mouse(), fresh_curl[0], true);
                 let _m_curl_closed = dom.render_immediate_to_vec();
 
-                // 底部环境下拉（[2]）：展开应新增 backdrop（无环境项）。
-                let env_dd = initial[2];
-                dom.handle_event("click", mouse(), env_dd, true);
-                let m_env = dom.render_immediate_to_vec();
-                let fresh_env: Vec<ElementId> = event_listeners(&m_env, "click")
-                    .iter()
-                    .filter(|id| !initial.contains(id))
-                    .copied()
-                    .collect();
-                assert_eq!(
-                    fresh_env.len(),
-                    1,
-                    "环境下拉应展开（仅 backdrop），实际：{fresh_env:?}"
-                );
-                dom.handle_event("click", mouse(), fresh_env[0], true);
-                let _m_env_closed = dom.render_immediate_to_vec();
-
-                // 顶部项目下拉（[5]）：展开应新增 backdrop + 项目菜单项监听。
-                let proj_dd = initial[5];
+                // 顶部项目下拉（[6]）：展开应新增 backdrop + 项目菜单项监听。
+                let proj_dd = initial[6];
                 dom.handle_event("click", mouse(), proj_dd, true);
                 let m_menu = dom.render_immediate_to_vec();
                 let fresh_menu: Vec<ElementId> = event_listeners(&m_menu, "click")
@@ -230,22 +213,9 @@ let mut dom = VirtualDom::new_with_props(root, ());
                 dom.handle_event("click", mouse(), fresh_menu[0], true);
                 let _m_menu_closed = dom.render_immediate_to_vec();
 
-                // 接口行的「⋯」（[4]）：展开更多操作下拉（backdrop + 重命名 + 复制 Curl + 删除）。
-                let row_more = initial[4];
-                dom.handle_event("click", mouse(), row_more, true);
-                let m_more = dom.render_immediate_to_vec();
-                let fresh_menu: Vec<ElementId> = event_listeners(&m_more, "click")
-                    .iter()
-                    .filter(|id| !initial.contains(id))
-                    .copied()
-                    .collect();
-                assert_eq!(
-                    fresh_menu.len(),
-                    4,
-                    "「⋯」下拉应为 backdrop + 3 个菜单项，实际：{fresh_menu:?}"
-                );
-                // 点「重命名」→ 名称弹窗（backdrop + 弹窗体 + 取消 + 确定）。
-                dom.handle_event("click", mouse(), fresh_menu[1], true);
+                // 接口行重命名（[3]）：点击 → 名称弹窗（backdrop + 弹窗体 + 取消 + 确定）。
+                let row_rename = initial[3];
+                dom.handle_event("click", mouse(), row_rename, true);
                 let m_rename = dom.render_immediate_to_vec();
                 let fresh_rename: Vec<ElementId> = event_listeners(&m_rename, "click")
                     .iter()
@@ -260,23 +230,31 @@ let mut dom = VirtualDom::new_with_props(root, ());
                 // 点 backdrop 关闭。
                 dom.handle_event("click", mouse(), fresh_rename[0], true);
                 let _m_rename_closed = dom.render_immediate_to_vec();
-                // 再点「⋯」展开，点 backdrop 关闭。
-                dom.handle_event("click", mouse(), row_more, true);
-                let m_more2 = dom.render_immediate_to_vec();
-                let fresh_more2: Vec<ElementId> = event_listeners(&m_more2, "click")
+                // 接口行删除（[5]）：点击 → 确认删除弹窗，backdrop 关闭后无残留。
+                let row_delete = initial[5];
+                dom.handle_event("click", mouse(), row_delete, true);
+                let m_confirm = dom.render_immediate_to_vec();
+                let fresh_confirm: Vec<ElementId> = event_listeners(&m_confirm, "click")
                     .iter()
                     .filter(|id| !initial.contains(id))
                     .copied()
                     .collect();
-                assert_eq!(fresh_more2.len(), 4, "再次展开应有 4 个新监听");
-                dom.handle_event("click", mouse(), fresh_more2[0], true);
+                assert_eq!(
+                    fresh_confirm.len(),
+                    4,
+                    "删除确认弹窗应为 backdrop+弹窗体+取消+确定，实际：{fresh_confirm:?}"
+                );
+                dom.handle_event("click", mouse(), fresh_confirm[0], true);
                 let m_close = dom.render_immediate_to_vec();
                 let fresh_close: Vec<ElementId> = event_listeners(&m_close, "click")
                     .iter()
                     .filter(|id| !initial.contains(id))
                     .copied()
                     .collect();
-                assert!(fresh_close.is_empty(), "backdrop 点击应关闭「⋯」下拉");
+                assert!(
+                    fresh_close.is_empty(),
+                    "backdrop 点击应关闭删除确认弹窗，残留：{fresh_close:?}"
+                );
             });
         });
     }

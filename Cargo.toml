@@ -10,6 +10,7 @@ members = [
     "crates/fox-backup",
     "crates/fox-secret",
     "crates/fox-codegen",
+    "crates/fox-oauth",
     "crates/fox-smoke",
     "crates/fox-desktop",
 ]
@@ -58,6 +59,8 @@ reqwest = { version = "0.12", default-features = false, features = [
     "multipart",
     "rustls-tls",
 ] }
+
+webbrowser = "1"
 
 axum = "0.7"
 tower = "0.4"

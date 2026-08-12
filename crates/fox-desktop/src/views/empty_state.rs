@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 use fox_core::curl_parser::parse_curl;
 use fox_openapi::import::ConflictStrategy;
 
+use crate::components::modal::RFModal;
 use crate::state::AppState;
 
 /// 雷达 / API 连接 SVG（单色，透明度由容器样式控制）。
@@ -121,13 +122,9 @@ pub fn EmptyState() -> Element {
             }
         }
         if curl_open_flag {
-            div {
-                class: "modal-backdrop",
-                onclick: move |_| curl_open.set(false),
-                div {
-                    class: "modal curl-modal",
-                    onclick: |e| { e.stop_propagation(); },
-                    h3 { "从 cURL 导入接口" }
+            RFModal {
+                on_close: move |_| curl_open.set(false),
+                h3 { "从 cURL 导入接口" }
                     div {
                         class: "hint",
                         "粘贴浏览器「Copy as cURL」复制的命令，自动解析方法、URL、请求头、Body 与认证，并创建接口。",
@@ -156,15 +153,10 @@ pub fn EmptyState() -> Element {
                     }
                 }
             }
-        }
         if oapi_open_flag {
-            div {
-                class: "modal-backdrop",
-                onclick: move |_| oapi_open.set(false),
-                div {
-                    class: "modal curl-modal",
-                    onclick: |e| { e.stop_propagation(); },
-                    h3 { "从 OpenAPI 导入接口" }
+            RFModal {
+                on_close: move |_| oapi_open.set(false),
+                h3 { "从 OpenAPI 导入接口" }
                     div {
                         class: "hint",
                         "粘贴 OpenAPI 3.0 / Swagger 2.0 / Postman 集合 v2.1（JSON 或 YAML），自动识别格式导入；重复接口默认跳过。",
@@ -193,7 +185,6 @@ pub fn EmptyState() -> Element {
                     }
                 }
             }
-        }
     }
 }
 
@@ -215,7 +206,7 @@ mod tests {
 
     fn root(_: ()) -> Element {
         let pool = POOL.with(|s| s.borrow().clone()).expect("连接池已就绪");
-        let project_id = PROJECT.with(|s| s.borrow().clone()).expect("项目已就绪");
+        let project_id = PROJECT.with(|s| *s.borrow()).expect("项目已就绪");
         let mut state = AppState::new(Services::new(pool.clone()));
         state.projects.write().push(Project {
             id: project_id,

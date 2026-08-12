@@ -17,6 +17,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { ref } from 'vue'
+import { useProgress } from './useProgress'
 import type {
   CommandError,
   Endpoint,
@@ -66,17 +67,31 @@ export function useFoxApi() {
   /** 全局请求中标记（可用于按钮 loading）。 */
   const pending = ref(false)
 
+  /** 全局顶部加载进度条（配合 ProgressBar 组件）。 */
+  const progress = useProgress()
+
   /** 激活项目 / 环境的响应式缓存（由 setActive* 命令同步）。 */
   const activeProject = ref<Project | null>(null)
   const activeEnvironment = ref<Environment | null>(null)
 
-  /** 执行一个异步任务并维护 pending 状态。 */
+  /** 并发请求深度：归零时才结束进度条，避免嵌套请求提前收尾。 */
+  let inflight = 0
+
+  /** 执行一个异步任务并维护 pending 状态与顶部进度条。 */
   async function run<T>(task: () => Promise<T>): Promise<T> {
-    pending.value = true
+    if (inflight === 0) {
+      pending.value = true
+      progress.start()
+    }
+    inflight += 1
     try {
       return await task()
     } finally {
-      pending.value = false
+      inflight -= 1
+      if (inflight === 0) {
+        pending.value = false
+        progress.done()
+      }
     }
   }
 

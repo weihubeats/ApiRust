@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use dioxus::prelude::*;
 use serde::Deserialize;
 
+use crate::components::modal::RFModal;
 use crate::state::AppState;
 
 /// GitHub Releases 最新版本 API（tag_name 形如 `v1.2.3`）。
@@ -45,17 +46,17 @@ struct GhAsset {
     size: u64,
 }
 
-fn http_client() -> reqwest::Client {
+fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent(format!("RustFox/{}", env!("CARGO_PKG_VERSION")))
         .connect_timeout(REQUEST_TIMEOUT)
         .build()
-        .expect("构建 HTTP 客户端失败")
+        .map_err(|e| format!("HTTP 客户端初始化失败：{e}"))
 }
 
 /// 请求 GitHub 最新 Release。失败返回中文错误。
 pub async fn fetch_latest_release() -> Result<UpdateInfo, String> {
-    let client = http_client();
+    let client = http_client()?;
     let resp = client
         .get(LATEST_API)
         .timeout(REQUEST_TIMEOUT)
@@ -174,7 +175,7 @@ pub async fn download_update(
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败：{e}"))?;
     let path = dir.join(sanitize_file_name(file_name));
 
-    let client = http_client();
+    let client = http_client()?;
     let resp = client
         .get(url)
         .send()
@@ -290,16 +291,13 @@ pub fn UpdateModal() -> Element {
     let open_btn = state.clone();
 
     rsx! {
-        div {
-            class: "modal-backdrop",
-            onclick: move |_| {
+        RFModal {
+            on_backdrop: Some(EventHandler::new(move |_| {
                 if progress.is_none() {
                     backdrop_btn.close_update_modal();
                 }
-            },
-            div {
-                class: "modal update-modal",
-                onclick: |e| { e.stop_propagation(); },
+            })),
+            on_close: move |_| {},
                 if let Some(info) = info {
                     h3 { "发现新版本 v{info.version}" }
                     div { class: "hint",
@@ -371,7 +369,6 @@ pub fn UpdateModal() -> Element {
                         }
                     }
                 }
-            }
         }
     }
 }

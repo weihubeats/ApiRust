@@ -1,4 +1,4 @@
-//! 左侧侧边栏：Header（项目选择器）| Toolbar（＋文件夹 / ＋接口）| Search | Tree | Footer（环境选择器）。
+//! 左侧侧边栏：Header（项目选择器）| Toolbar（＋文件夹 / ＋接口）| Search | Tree。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -8,11 +8,15 @@ use dioxus::prelude::*;
 use fox_codegen::Lang;
 use fox_core::curl_parser::parse_curl;
 use fox_core::model::{Endpoint, Folder};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::components::confirm_dialog::{ConfirmDialog, ConfirmInfo};
 use crate::components::dropdown::Dropdown;
-use crate::components::icons::{CaretIcon, FolderIcon, MoreIcon, SearchIcon};
+use crate::components::icons::{
+    CaretIcon, CopyIcon, FolderIcon, PencilIcon, PlusIcon, SearchIcon, TrashIcon, TreeFolderIcon,
+};
+use crate::components::modal::RFModal;
 use crate::pages::workspace::build_codegen_code;
 use crate::state::AppState;
 
@@ -30,6 +34,13 @@ pub enum TreeAction {
 
 /// 树操作分发器。
 pub type Dispatcher = Rc<RefCell<dyn FnMut(TreeAction)>>;
+
+/// JS 拖放回调消息。
+#[derive(Debug, Deserialize)]
+struct DropMessage {
+    ep_id: String,
+    folder_id: Option<String>,
+}
 
 #[component]
 pub fn SideBar() -> Element {
@@ -51,18 +62,6 @@ pub fn SideBar() -> Element {
         .map(|id| id.to_string())
         .unwrap_or_default();
     let st_project = state.clone();
-
-    let environments = state.environments.read().clone();
-    let env_options: Vec<(String, String)> = environments
-        .iter()
-        .map(|e| (e.id.to_string(), e.name.clone()))
-        .collect();
-    let env_selected: String = state
-        .current_environment_id
-        .read()
-        .map(|id| id.to_string())
-        .unwrap_or_default();
-    let st_env = state.clone();
 
     let modal: Signal<Option<TreeAction>> = use_signal(|| None);
     let mut modal_input: Signal<String> = use_signal(String::new);
@@ -120,6 +119,140 @@ pub fn SideBar() -> Element {
     let top_btn_a = dispatcher.clone();
     let top_btn_b = dispatcher.clone();
     let top_btn_c = dispatcher.clone();
+
+    // 拖放：通过 JS 注入全局 drag/drop 监听，drop 事件通过 eval channel 回传 Rust。
+    {
+        let st = state.clone();
+        let dragger_init = use_hook(|| std::cell::Cell::new(false));
+        use_effect(move || {
+            if dragger_init.get() {
+                return;
+            }
+            dragger_init.set(true);
+            let js = r#"
+console.log('fox-drag-js-init');
+var foxDrag = window.__foxDrag = window.__foxDrag || {
+    epId: null, dragging: false, moved: false, startX: 0, startY: 0, ghost: null
+};
+
+function makeGhost(el) {
+    var name = el.querySelector('.name');
+    var g = document.createElement('div');
+    g.className = 'fox-drag-ghost';
+    g.textContent = name ? name.textContent.trim() : el.dataset.foxEpId;
+    g.style.position = 'fixed';
+    g.style.pointerEvents = 'none';
+    g.style.zIndex = '10000';
+    g.style.opacity = '0.85';
+    g.style.background = '#1e40af';
+    g.style.color = '#fff';
+    g.style.padding = '4px 10px';
+    g.style.borderRadius = '6px';
+    g.style.fontSize = '12px';
+    g.style.fontWeight = '600';
+    g.style.boxShadow = '0 4px 12px rgba(0,0,0,0.4)';
+    g.style.transform = 'translate(-50%, -50%)';
+    g.style.whiteSpace = 'nowrap';
+    document.body.appendChild(g);
+    return g;
+}
+
+function clearDragging() {
+    document.querySelectorAll('.tree-item.dragging').forEach(function(el){el.classList.remove('dragging')});
+}
+
+function doStart(e) {
+    if (e.button !== 0) return;
+    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    var epEl = e.target.closest('[data-fox-ep-id]');
+    if (!epEl) return;
+    foxDrag.epId = epEl.dataset.foxEpId;
+    foxDrag.startX = e.clientX;
+    foxDrag.startY = e.clientY;
+    foxDrag.moved = false;
+    foxDrag.dragging = false;
+    epEl.classList.add('dragging');
+}
+
+function doMove(e) {
+    if (!foxDrag.epId) return;
+    var dx = Math.abs(e.clientX - foxDrag.startX);
+    var dy = Math.abs(e.clientY - foxDrag.startY);
+    if (dx < 8 && dy < 8) return;
+    foxDrag.moved = true;
+    foxDrag.dragging = true;
+    if (!foxDrag.ghost) {
+        foxDrag.ghost = makeGhost(document.querySelector('[data-fox-ep-id="' + foxDrag.epId + '"]'));
+    }
+    foxDrag.ghost.style.left = e.clientX + 'px';
+    foxDrag.ghost.style.top = e.clientY + 'px';
+    var target = e.target.closest('[data-fox-drop-target]');
+    document.querySelectorAll('[data-fox-drop-target].drop-over').forEach(function(el){el.classList.remove('drop-over')});
+    if (target) {
+        target.classList.add('drop-over');
+    }
+}
+
+function doEnd(e) {
+    if (!foxDrag.epId) return;
+    var epId = foxDrag.epId;
+    var target = null;
+    if (foxDrag.moved && foxDrag.dragging) {
+        target = e.target.closest('[data-fox-drop-target]');
+    }
+    var folderId = target ? target.dataset.foxFolderId : null;
+    foxDrag.epId = null;
+    foxDrag.dragging = false;
+    foxDrag.moved = false;
+    document.querySelectorAll('[data-fox-drop-target].drop-over').forEach(function(el){el.classList.remove('drop-over')});
+    clearDragging();
+    if (foxDrag.ghost) { foxDrag.ghost.remove(); foxDrag.ghost = null; }
+    if (target) {
+        foxDrag.noClick = true;
+        console.log('fox-drop:', epId, folderId);
+        dioxus.send({ep_id: epId, folder_id: folderId});
+    }
+}
+
+document.addEventListener('mousedown', doStart);
+document.addEventListener('mousemove', doMove);
+document.addEventListener('mouseup', doEnd);
+document.addEventListener('click', function(e) {
+    if (foxDrag.noClick) {
+        foxDrag.noClick = false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return false;
+    }
+}, true);
+console.log('fox-drag-js-done');
+"#;
+            let mut handle = eval(js);
+            let st_spawn = st.clone();
+            // 使用 spawn_forever：任务绑定根 scope，不会被组件 re-render 丢弃。
+            spawn_forever(async move {
+                loop {
+                    match handle.recv().await {
+                        Ok(v) => {
+                            tracing::info!("fox-drag-recv: {}", serde_json::to_string(&v).unwrap_or_default());
+                            let msg: DropMessage = match serde_json::from_value(v) {
+                                Ok(m) => m,
+                                Err(_) => continue,
+                            };
+                            if let Ok(ep_id) = Uuid::parse_str(&msg.ep_id) {
+                                let folder_id: Option<Uuid> = msg
+                                    .folder_id
+                                    .and_then(|s| Uuid::parse_str(&s).ok());
+                                st_spawn.move_endpoint_to_folder(ep_id, folder_id);
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        });
+    }
 
     let dialog_visible = modal.read().is_some();
     let dialog_title: &str = modal
@@ -223,7 +356,7 @@ pub fn SideBar() -> Element {
             div { class: "sb-toolbar",
                 button {
                     id: "sb-add-folder",
-                    class: "sb-toolbar-btn",
+                    class: "sb-toolbar-btn sb-toolbar-btn-ghost",
                     onclick: move |_| top_btn_a.borrow_mut()(TreeAction::CreateFolder { parent_id: None }),
                     "＋ 文件夹",
                 }
@@ -275,51 +408,43 @@ pub fn SideBar() -> Element {
                 }
             }
             div { class: "sb-tree",
-                if !has_project {
-                    div { class: "empty sb-empty", "未选择项目，请在顶部选择" }
-                } else {
-                    for ep in endpoints.iter().filter(|e| e.folder_id.is_none()).cloned() {
-                        if search.is_empty() || ep.name.contains(&search) || ep.path.contains(&search) {
-                            EndpointRow { ep, depth: 0 }
+                    if !has_project {
+                        div { class: "empty sb-empty", "未选择项目，请在顶部选择" }
+                    } else {
+                        div {
+                            class: "tree-root-drop-target",
+                            "data-fox-drop-target": "",
+                            for ep in endpoints.iter().filter(|e| e.folder_id.is_none()).cloned() {
+                                if search.is_empty() || ep.name.contains(&search) || ep.path.contains(&search) {
+                                    EndpointRow { ep, depth: 0 }
+                                }
+                            }
+                        }
+                        for folder in root_folders {
+                            FolderNode {
+                                folder,
+                                folders: folders.clone(),
+                                endpoints: endpoints.clone(),
+                                search: search.clone(),
+                                depth: 0,
+                            }
+                        }
+                        if no_match {
+                            div { class: "empty", "没有匹配的接口" }
+                        } else if show_empty {
+                            div { class: "rf-empty sb-tree-empty",
+                                div { class: "rf-empty-icon", TreeFolderIcon {} }
+                                div { class: "rf-empty-title", "还没有接口" }
+                                div { class: "rf-empty-desc", "点击上方「+ 接口」创建第一个 API" }
+                            }
                         }
                     }
-                    for folder in root_folders {
-                        FolderNode {
-                            folder,
-                            folders: folders.clone(),
-                            endpoints: endpoints.clone(),
-                            search: search.clone(),
-                            depth: 0,
-                        }
-                    }
-                    if no_match {
-                        div { class: "empty", "没有匹配的接口" }
-                    } else if show_empty {
-                        div { class: "empty", "暂无接口，点击上方按钮创建" }
-                    }
-                }
-            }
-            div { class: "sb-footer",
-                Dropdown {
-                    class: "sb-width sb-env-dropdown",
-                    options: env_options,
-                    selected: env_selected,
-                    placeholder: "未选环境",
-                    on_select: move |v: String| {
-                        let id = uuid::Uuid::parse_str(&v).ok();
-                        st_env.select_environment(id);
-                    },
-                }
             }
         }
         if dialog_visible {
-            div {
-                class: "modal-backdrop",
-                onclick: move |_| cancel_a(),
-                div {
-                    class: "modal",
-                    onclick: |e| { e.stop_propagation(); },
-                    h3 { "{dialog_title}" }
+            RFModal {
+                on_close: move |_| cancel_a(),
+                h3 { "{dialog_title}" }
                     input {
                         class: "rf-input",
                         value: "{modal_input}",
@@ -336,18 +461,13 @@ pub fn SideBar() -> Element {
                     }
                 }
             }
-        }
         if curl_open_flag {
-            div {
-                class: "modal-backdrop",
-                onclick: move |_| {
+            RFModal {
+                on_close: move |_| {
                     let mut co = curl_open;
                     co.set(false);
                 },
-                div {
-                    class: "modal curl-modal",
-                    onclick: |e| { e.stop_propagation(); },
-                    h3 { "从 cURL 导入接口" }
+                h3 { "从 cURL 导入接口" }
                     div {
                         class: "hint",
                         "粘贴浏览器「Copy as cURL」复制的命令，自动解析方法、URL、请求头、Body 与认证，并在当前位置创建接口。",
@@ -372,7 +492,6 @@ pub fn SideBar() -> Element {
                     }
                 }
             }
-        }
         if let Some((info, _)) = confirm.read().as_ref() {
             ConfirmDialog {
                 info: Some(info.clone()),
@@ -410,71 +529,93 @@ pub fn FolderNode(
     let d2 = dispatcher.clone();
     let d3 = dispatcher.clone();
     let d4 = dispatcher.clone();
-    let d5 = dispatcher.clone();
+    let mut expanded = use_signal(|| true);
     let children: Vec<Folder> = folders
         .iter()
         .filter(|f| f.parent_id == Some(folder.id))
         .cloned()
         .collect();
+    let has_sub = !children.is_empty()
+        || endpoints.iter().any(|e| e.folder_id == Some(folder.id));
+    let f_id = folder.id;
+    let folder_name = folder.name.clone();
+    let expand_class = if has_sub { "tree-item folder expandable" } else { "tree-item folder" };
+    let chevron = if has_sub {
+        if *expanded.read() { "▾" } else { "▸" }
+    } else { "  " };
+
+    let is_expanded = *expanded.read();
+    let fold_children = is_expanded;
 
     rsx! {
-        div { class: "tree-item folder", style: "padding-left: {8 + depth * 16}px",
-            span { class: "name", "▸ {folder.name}" }
+        div {
+            class: expand_class,
+            style: "padding-left: {8 + depth * 16}px",
+            "data-fox-drop-target": "",
+            "data-fox-folder-id": "{f_id}",
+            onclick: move |_| {
+                if fold_children && has_sub {
+                    let mut e = expanded;
+                    e.set(false);
+                } else if has_sub {
+                    let mut e = expanded;
+                    e.set(true);
+                }
+            },
+            span { class: "name", "{chevron} {folder_name}" }
             div { class: "tree-actions",
                 button {
                     class: "rf-tree-action",
+                    title: "新建接口",
                     onclick: move |e| {
                         e.stop_propagation();
-                        (d1.borrow_mut())(TreeAction::CreateEndpoint { folder_id: Some(folder.id) });
+                        (d1.borrow_mut())(TreeAction::CreateEndpoint { folder_id: Some(f_id) });
                     },
-                    "接口"
+                    PlusIcon {}
                 }
                 button {
                     class: "rf-tree-action",
+                    title: "新建子目录",
                     onclick: move |e| {
                         e.stop_propagation();
-                        (d2.borrow_mut())(TreeAction::CreateFolder { parent_id: Some(folder.id) });
+                        (d2.borrow_mut())(TreeAction::CreateFolder { parent_id: Some(f_id) });
                     },
-                    "子目录"
+                    FolderIcon {}
                 }
                 button {
                     class: "rf-tree-action",
+                    title: "重命名",
                     onclick: move |e| {
                         e.stop_propagation();
-                        (d3.borrow_mut())(TreeAction::ImportCurl { folder_id: Some(folder.id) });
+                        (d3.borrow_mut())(TreeAction::RenameFolder { id: f_id, current: folder_name.clone() });
                     },
-                    "导入cURL"
+                    PencilIcon {}
                 }
                 button {
-                    class: "rf-tree-action",
+                    class: "rf-tree-action rf-tree-action-danger",
+                    title: "删除",
                     onclick: move |e| {
                         e.stop_propagation();
-                        (d4.borrow_mut())(TreeAction::RenameFolder { id: folder.id, current: folder.name.clone() });
+                        (d4.borrow_mut())(TreeAction::DeleteFolder { id: f_id });
                     },
-                    "改名"
-                }
-                button {
-                    class: "rf-tree-action",
-                    onclick: move |e| {
-                        e.stop_propagation();
-                        (d5.borrow_mut())(TreeAction::DeleteFolder { id: folder.id });
-                    },
-                    "删除"
+                    TrashIcon {}
                 }
             }
         }
-        for ep in endpoints.iter().filter(|e| e.folder_id == Some(folder.id)).cloned() {
-            if search.is_empty() || ep.name.contains(&search) || ep.path.contains(&search) {
-                EndpointRow { ep, depth: depth + 1 }
+        if is_expanded {
+            for ep in endpoints.iter().filter(|e| e.folder_id == Some(f_id)).cloned() {
+                if search.is_empty() || ep.name.contains(&search) || ep.path.contains(&search) {
+                    EndpointRow { ep, depth: depth + 1 }
+                }
             }
-        }
-        for child in children {
-            FolderNode {
-                folder: child,
-                folders: folders.clone(),
-                endpoints: endpoints.clone(),
-                search: search.clone(),
-                depth: depth + 1,
+            for child in children {
+                FolderNode {
+                    folder: child,
+                    folders: folders.clone(),
+                    endpoints: endpoints.clone(),
+                    search: search.clone(),
+                    depth: depth + 1,
+                }
             }
         }
     }
@@ -505,73 +646,45 @@ pub fn EndpointRow(ep: Endpoint, depth: usize) -> Element {
     let ep_name = ep.name.clone();
     let ep_for_curl = ep.clone();
     let st_curl = state.clone();
-    // 「⋯」更多操作下拉。
-    let more_open = use_signal(|| false);
 
     rsx! {
         div {
-            class: if is_active { "tree-item selected" } else { "tree-item" },
+            class: if is_active { "tree-item selected draggable" } else { "tree-item draggable" },
             style: "padding-left: {8 + depth * 16}px",
+            "data-fox-ep-id": "{ep_id}",
             onclick: move |_| state.open_endpoint_tab(ep.id),
             div { class: "rf-method rf-method-chip rf-method-chip-{method_cls}", "{ep.method}" }
             div { class: "name", title: "{path}", "{ep.name}" }
             div { class: "tree-actions",
-                div { class: "tree-more-wrap",
-                    button {
-                        class: "rf-tree-action rf-tree-more",
-                        onclick: move |e| {
-                            e.stop_propagation();
-                            let mut o = more_open;
-                            let cur = *o.peek();
-                            o.set(!cur);
-                        },
-                        MoreIcon {}
-                    }
-                    if *more_open.read() {
-                        div {
-                            class: "rf-dropdown-backdrop",
-                            onclick: move |e| {
-                                e.stop_propagation();
-                                let mut o = more_open;
-                                o.set(false);
-                            },
+                button {
+                    class: "rf-tree-action",
+                    title: "重命名",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        (d_rename.borrow_mut())(TreeAction::RenameEndpoint { id: ep_id, current: ep_name.clone() });
+                    },
+                    PencilIcon {}
+                }
+                button {
+                    class: "rf-tree-action",
+                    title: "复制 Curl",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        if let Some(code) = build_codegen_code(&st_curl, &ep_for_curl, Lang::Curl) {
+                            copy_text(&code);
+                            st_curl.toast_success("cURL 命令已复制到剪贴板");
                         }
-                        div { class: "rf-dropdown-menu tree-more-menu",
-                            div {
-                                class: "rf-dropdown-item",
-                                onclick: move |e| {
-                                    e.stop_propagation();
-                                    let mut o = more_open;
-                                    o.set(false);
-                                    (d_rename.borrow_mut())(TreeAction::RenameEndpoint { id: ep_id, current: ep_name.clone() });
-                                },
-                                "重命名"
-                            }
-                            div {
-                                class: "rf-dropdown-item",
-                                onclick: move |e| {
-                                    e.stop_propagation();
-                                    let mut o = more_open;
-                                    o.set(false);
-                                    if let Some(code) = build_codegen_code(&st_curl, &ep_for_curl, Lang::Curl) {
-                                        copy_text(&code);
-                                        st_curl.toast_success("cURL 命令已复制到剪贴板");
-                                    }
-                                },
-                                "复制 Curl"
-                            }
-                            div {
-                                class: "rf-dropdown-item rf-dd-danger",
-                                onclick: move |e| {
-                                    e.stop_propagation();
-                                    let mut o = more_open;
-                                    o.set(false);
-                                    (d_delete.borrow_mut())(TreeAction::DeleteEndpoint { id: ep_id });
-                                },
-                                "删除"
-                            }
-                        }
-                    }
+                    },
+                    CopyIcon {}
+                }
+                button {
+                    class: "rf-tree-action rf-tree-action-danger",
+                    title: "删除",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        (d_delete.borrow_mut())(TreeAction::DeleteEndpoint { id: ep_id });
+                    },
+                    TrashIcon {}
                 }
             }
         }

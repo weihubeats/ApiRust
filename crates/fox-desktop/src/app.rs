@@ -1,5 +1,6 @@
 //! 应用根组件。
 
+use dioxus::events::eval;
 use dioxus::prelude::*;
 use fox_storage::repository as repo;
 use uuid::Uuid;
@@ -15,8 +16,28 @@ use crate::updater::UpdateModal;
 
 static DB_POOL: std::sync::OnceLock<sqlx::SqlitePool> = std::sync::OnceLock::new();
 
+/// 「跟随系统」主题：matchMedia 监听系统深浅色并把解析结果写入 <html> 的 data-theme。
+/// 重复执行（主题/渲染变化重跑）会先移除旧监听再注册，保证只挂一个。
+const THEME_AUTO_JS: &str = r#"(function(){
+  if (window.__rfThemeMq) { window.__rfThemeMq.removeEventListener("change", window.__rfThemeFn); }
+  var mq = window.matchMedia("(prefers-color-scheme: light)");
+  var fn = function() {
+    document.documentElement.setAttribute("data-theme", mq.matches ? "light" : "dark");
+  };
+  mq.addEventListener("change", fn);
+  window.__rfThemeMq = mq;
+  window.__rfThemeFn = fn;
+  fn();
+})();"#;
+
 pub fn provide_pool(pool: sqlx::SqlitePool) {
     let _ = DB_POOL.set(pool);
+}
+
+/// 测试用：读取已注入的全局连接池。
+#[cfg(test)]
+pub fn debug_pool() -> Option<sqlx::SqlitePool> {
+    DB_POOL.get().cloned()
 }
 
 /// 订阅窗口事件：收到 `CloseRequested` 时把窗口几何与最大化状态
@@ -70,6 +91,16 @@ pub fn App() -> Element {
                     }
                 });
             }
+            // 启动时恢复上次选定的主题（settings 表持久化）。
+            {
+                let state_theme = state_for_effect.clone();
+                let pool_theme = pool.clone();
+                spawn(async move {
+                    if let Ok(Some(raw)) = repo::get_setting(&pool_theme, "theme").await {
+                        state_theme.set_theme(raw);
+                    }
+                });
+            }
             subscribe_window_state();
             // 启动时静默检查更新（仅在 release 构建生效，测试/开发不触发网络请求）。
             if !cfg!(debug_assertions) {
@@ -80,9 +111,37 @@ pub fn App() -> Element {
 
     let page = *state.current_page.read();
     let has_project = state.current_project_id.read().is_some();
+    let raw_theme = state.theme.read().clone();
+    // 显式主题（浅色/深色）声明在 .app 上补充首帧色（JS 落地前的兜底）；
+    // 根节点 <html> 的 data-theme 由下面的 effect 用 JS 写入（跟随系统走 matchMedia）。
+    let theme_attr = if raw_theme == crate::state::theme::AUTO {
+        String::new()
+    } else {
+        raw_theme
+    };
+
+    // 主题落地 <html>：显式主题直接写入；跟随系统用 matchMedia 监听系统切换并实时写入。
+    // dioxus 0.5 的 use_effect 每次渲染都重跑，用上次已应用值去重。
+    let theme_applied = use_hook(|| std::cell::RefCell::new(String::new()));
+    let state_theme_eff = state.clone();
+    use_effect(move || {
+        let mode = state_theme_eff.theme.read().clone();
+        if *theme_applied.borrow() == mode {
+            return;
+        }
+        *theme_applied.borrow_mut() = mode.clone();
+        let script = if mode == crate::state::theme::AUTO {
+            THEME_AUTO_JS.to_string()
+        } else {
+            format!(r#"document.documentElement.setAttribute("data-theme","{mode}");"#)
+        };
+        let _ = eval(&script);
+    });
 
     rsx! {
-        div { class: "app",
+        div {
+            class: "app",
+            "data-theme": "{theme_attr}",
             style { "{crate::styles::DESIGN_SYSTEM_CSS}" }
             TopBar {}
             div { class: "body",

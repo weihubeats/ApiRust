@@ -6,6 +6,8 @@ rust-version.workspace = true
 
 [dependencies]
 fox-core = { path = "../fox-core" }
+fox-storage = { path = "../fox-storage" }
+fox-oauth = { path = "../fox-oauth" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
@@ -19,6 +21,7 @@ base64 = "0.22"
 serde_urlencoded = "0.7"
 bytes = { workspace = true }
 url = { workspace = true }
+sqlx = { workspace = true }
 rquickjs = "0.12"
 tokio-tungstenite = { version = "0.30", default-features = false, features = [
     "connect",

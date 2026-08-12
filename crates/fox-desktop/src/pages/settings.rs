@@ -279,6 +279,7 @@ pub fn SettingsPage() -> Element {
 
     let current_env_id = *state.current_environment_id.peek();
     let env_list = state.environments.read().clone();
+    let theme_btn = state.clone();
     let create_btn = state.clone();
     let save_proj_btn = state.clone();
     let import_btn = state.clone();
@@ -302,8 +303,8 @@ pub fn SettingsPage() -> Element {
         .find(|p| Some(p.id) == *state.current_project_id.peek())
         .map(|p| p.name.clone())
         .unwrap_or_else(|| "未选择项目".into());
-    let editing = *edit_id.peek();
-    let draft = env_draft.peek().clone();
+    let editing = *edit_id.read();
+    let draft = env_draft.read().clone();
     let proj_rows = proj_vars.read().clone();
     let mock_running = state.mock_running();
     let mock_addr = state
@@ -356,6 +357,25 @@ pub fn SettingsPage() -> Element {
                 div { class: "rf-divider" }
                 div { class: "hint rf-hint-flat",
                     "当前项目：{project_name}。变量优先级：环境 > 项目 > 内置（{{$uuid}} / {{$timestamp}} / {{$isoTimestamp}} / {{$randomInt}}）。" }
+                div { class: "settings-section",
+                    div { class: "section-title", "外观" }
+                    div { class: "row",
+                        span { class: "label-hint", "主题：" }
+                        Dropdown {
+                            options: vec![
+                                (crate::state::theme::DARK.into(), "深色".into()),
+                                (crate::state::theme::LIGHT.into(), "浅色".into()),
+                                (crate::state::theme::AUTO.into(), "跟随系统".into()),
+                            ],
+                            selected: state.theme.peek().clone(),
+                            on_select: move |v: String| {
+                                theme_btn.set_theme(v);
+                            },
+                        }
+                        span { class: "hint-inline", "跟随系统时随系统深浅色即时切换；选择即生效并保存。" }
+                    }
+                }
+                div { class: "rf-divider" }
                 div { class: "settings-section",
                     div { class: "section-title", "环境管理" }
                     div { class: "row",

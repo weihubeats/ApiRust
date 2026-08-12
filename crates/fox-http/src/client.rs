@@ -1,14 +1,20 @@
 //! HTTP 请求构建、发送、响应解析（SPEC §14）。
 
+use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use base64::Engine;
 use bytes::Bytes;
+use futures::StreamExt;
 use reqwest::{Client, Method, Response};
 use url::Url;
 
-use fox_core::model::{ApiKeyLocation, AuthSpec, BodySpec, HttpMethod, KeyValue, RequestSpec};
+use fox_core::model::{
+    ApiKeyLocation, AuthSpec, BodySpec, GraphQLError, GraphQLErrorLocation, GraphQLResponse,
+    GraphQLSpec, HttpMethod, KeyValue, MultipartField, MultipartValueType, RequestSpec,
+};
+use fox_core::variable::{resolve_variables, VariableMap};
 use fox_core::AppError;
 
 /// 默认超时（秒）。
@@ -79,16 +85,70 @@ fn append_query(url: &mut Url, params: &[KeyValue]) {
 }
 
 /// 渲染后的请求载荷（body 与 content-type）。
+#[derive(Debug)]
 enum Payload {
     None,
-    Bytes(Vec<u8>, Option<&'static str>),
+    Bytes(Vec<u8>, Option<String>),
 }
 
-fn build_payload(spec: &RequestSpec) -> Payload {
+/// 构建 multipart/form-data 请求体。
+///
+/// Text 字段直接作为文本 part；FilePath 字段异步读取文件内容作为 part。
+/// 编码后的 body 由 `Form::into_stream` 收集为字节，content-type 由
+/// `Form::boundary` 拼出（含 boundary）。
+async fn build_multipart(fields: &[MultipartField]) -> Result<Payload, AppError> {
+    let mut form = reqwest::multipart::Form::new();
+    for field in fields {
+        if !field.enabled {
+            continue;
+        }
+        let key = field.key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        match field.value_type {
+            MultipartValueType::Text => {
+                form = form.text(key.to_string(), field.value.clone());
+            }
+            MultipartValueType::FilePath => {
+                let path = Path::new(&field.value);
+                let data = tokio::fs::read(path).await.map_err(|e| {
+                    AppError::Validation(format!("读取文件 {} 失败：{e}", path.display()))
+                })?;
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or("upload")
+                    .to_string();
+                let part = reqwest::multipart::Part::bytes(data)
+                    .file_name(file_name)
+                    .mime_str("application/octet-stream")
+                    .map_err(|e| AppError::Validation(format!("multipart 构建失败：{e}")))?;
+                form = form.part(key.to_string(), part);
+            }
+        }
+    }
+    let content_type = format!("multipart/form-data; boundary={}", form.boundary());
+    let mut body = Vec::new();
+    let mut stream = form.into_stream();
+    while let Some(chunk) = stream.next().await {
+        body.extend_from_slice(&chunk.map_err(AppError::from_reqwest)?);
+    }
+    Ok(Payload::Bytes(body, Some(content_type)))
+}
+
+async fn build_payload(spec: &RequestSpec) -> Result<Payload, AppError> {
     match &spec.body {
-        BodySpec::None => Payload::None,
-        BodySpec::Json { raw } => Payload::Bytes(raw.as_bytes().to_vec(), Some("application/json")),
-        BodySpec::Text { raw } => Payload::Bytes(raw.as_bytes().to_vec(), Some("text/plain")),
+        BodySpec::None => Ok(Payload::None),
+        BodySpec::Json { raw } => Ok(Payload::Bytes(
+            raw.as_bytes().to_vec(),
+            Some("application/json".into()),
+        )),
+        BodySpec::Text { raw } => Ok(Payload::Bytes(
+            raw.as_bytes().to_vec(),
+            Some("text/plain".into()),
+        )),
         BodySpec::UrlEncoded { fields } => {
             let body: Vec<(String, String)> = fields
                 .iter()
@@ -96,13 +156,94 @@ fn build_payload(spec: &RequestSpec) -> Payload {
                 .map(|kv| (kv.key.clone(), kv.value.clone()))
                 .collect();
             let body = serde_urlencoded::to_string(body).unwrap_or_default();
-            Payload::Bytes(body.into_bytes(), Some("application/x-www-form-urlencoded"))
+            Ok(Payload::Bytes(
+                body.into_bytes(),
+                Some("application/x-www-form-urlencoded".into()),
+            ))
         }
-        BodySpec::Multipart { .. } => {
-            // Multipart 暂未实现，退回无 body。
-            Payload::None
+        BodySpec::Multipart { fields } => build_multipart(fields).await,
+        BodySpec::GraphQL { spec } => {
+            let body = graphql_request_json(spec, &VariableMap::new())?;
+            Ok(Payload::Bytes(
+                body.into_bytes(),
+                Some("application/json".into()),
+            ))
         }
     }
+}
+
+/// 构建 GraphQL 请求体 JSON：`{"query":..., "variables":..., "operationName":...}`。
+///
+/// query / variables / operationName 中的 `{{name}}` 占位符会先经
+/// `vars` 插值；variables 为空串或 `{}` 时省略该字段，operationName 为空时省略。
+/// 请求始终为 POST + `application/json`（GraphQL over HTTP 约定）。
+pub fn graphql_request_json(spec: &GraphQLSpec, vars: &VariableMap) -> Result<String, AppError> {
+    let query = resolve_variables(&spec.query, vars);
+    let variables = resolve_variables(&spec.variables, vars);
+    let operation_name = resolve_variables(&spec.operation_name, vars);
+
+    let mut payload = serde_json::Map::new();
+    payload.insert("query".into(), serde_json::Value::String(query));
+    let trimmed = variables.trim();
+    if !trimmed.is_empty() && trimmed != "{}" {
+        // 变量必须是合法 JSON 对象；非法时向用户报错而不是发坏请求。
+        match serde_json::from_str::<serde_json::Value>(trimmed) {
+            Ok(value) if value.is_object() => {
+                payload.insert("variables".into(), value);
+            }
+            Ok(_) => {
+                return Err(AppError::Validation("GraphQL 变量必须是 JSON 对象".into()));
+            }
+            Err(e) => {
+                return Err(AppError::Validation(format!("GraphQL 变量 JSON 无效：{e}")));
+            }
+        }
+    }
+    if !operation_name.trim().is_empty() {
+        payload.insert(
+            "operationName".into(),
+            serde_json::Value::String(operation_name),
+        );
+    }
+    serde_json::to_string(&serde_json::Value::Object(payload))
+        .map_err(|e| AppError::Validation(format!("GraphQL 请求构建失败：{e}")))
+}
+
+/// 解析 GraphQL 响应，区分 `data` 与 `errors`。
+///
+/// 非 JSON 响应返回错误；JSON 合法但缺少 data / errors 时对应字段为空。
+pub fn parse_graphql_response(body: &[u8]) -> Result<GraphQLResponse, AppError> {
+    let value: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|e| AppError::Validation(format!("GraphQL 响应不是合法 JSON：{e}")))?;
+    let data = value.get("data").cloned();
+    let errors = value
+        .get("errors")
+        .and_then(|e| e.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let message = entry.get("message")?.as_str()?.to_string();
+                    let locations = entry.get("locations").and_then(|l| l.as_array()).map(|ls| {
+                        ls.iter()
+                            .filter_map(|loc| {
+                                Some(GraphQLErrorLocation {
+                                    line: loc.get("line")?.as_u64()?,
+                                    column: loc.get("column")?.as_u64()?,
+                                })
+                            })
+                            .collect()
+                    });
+                    let path = entry.get("path").and_then(|p| p.as_array()).cloned();
+                    Some(GraphQLError {
+                        message,
+                        locations,
+                        path,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(GraphQLResponse { data, errors })
 }
 
 /// 是否已有指定头（不区分大小写）。
@@ -113,7 +254,14 @@ fn has_header(headers: &[(String, String)], name: &str) -> bool {
 }
 
 /// 认证字段转 Header / Query。
-fn apply_auth(headers: &mut Vec<(String, String)>, query: &mut Vec<KeyValue>, auth: &AuthSpec) {
+/// 应用认证到请求头 / 查询参数。
+///
+/// OAuth2：取 access token（过期自动静默刷新），未授权时返回中文错误。
+async fn apply_auth(
+    headers: &mut Vec<(String, String)>,
+    query: &mut Vec<KeyValue>,
+    auth: &AuthSpec,
+) -> Result<(), AppError> {
     match auth {
         AuthSpec::None => {}
         AuthSpec::Bearer { token } => {
@@ -132,7 +280,7 @@ fn apply_auth(headers: &mut Vec<(String, String)>, query: &mut Vec<KeyValue>, au
             location,
         } => {
             if key.is_empty() {
-                return;
+                return Ok(());
             }
             match location {
                 ApiKeyLocation::Header => {
@@ -143,7 +291,14 @@ fn apply_auth(headers: &mut Vec<(String, String)>, query: &mut Vec<KeyValue>, au
                 }
             }
         }
+        AuthSpec::OAuth2 { .. } => {
+            let access = fox_oauth::access_token_for(auth)
+                .await
+                .map_err(|e| AppError::OAuth2(e.to_string()))?;
+            headers.push(("Authorization".into(), format!("Bearer {access}")));
+        }
     }
+    Ok(())
 }
 
 /// 全局共享的 reqwest::Client。
@@ -151,15 +306,19 @@ fn apply_auth(headers: &mut Vec<(String, String)>, query: &mut Vec<KeyValue>, au
 /// `Client` 内部维护连接池与 TLS 会话缓存，按请求新建会重复建连、
 /// 重新握手，性能低下；`OnceLock` 保证进程内只构建一次，
 /// 所有（含并发）请求安全复用同一实例。
-fn shared_client() -> &'static Client {
-    static CLIENT: OnceLock<Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
+fn shared_client() -> Result<&'static Client, AppError> {
+    static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
+    let entry = CLIENT.get_or_init(|| {
         Client::builder()
             // 禁用系统代理：本地开发（127.0.0.1 / localhost）不受代理干扰。
             .no_proxy()
             .build()
-            .expect("构建共享 HTTP 客户端失败")
-    })
+            .map_err(|e| e.to_string())
+    });
+    match entry {
+        Ok(client) => Ok(client),
+        Err(e) => Err(AppError::Validation(format!("HTTP 客户端初始化失败：{e}"))),
+    }
 }
 
 /// 发送 HTTP 请求。
@@ -176,7 +335,7 @@ pub async fn send_request(
     timeout_ms: Option<u64>,
 ) -> Result<HttpResponseData, AppError> {
     let timeout_ms = timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
-    let client = shared_client();
+    let client = shared_client()?;
 
     let mut url = Url::parse(url).map_err(|e| AppError::Validation(format!("URL 无效：{e}")))?;
 
@@ -188,11 +347,11 @@ pub async fn send_request(
         .filter(|kv| kv.enabled)
         .map(|kv| (kv.key.trim().to_string(), kv.value.clone()))
         .collect();
-    apply_auth(&mut headers, &mut query_extra, &spec.auth);
+    apply_auth(&mut headers, &mut query_extra, &spec.auth).await?;
     append_query(&mut url, &spec.params);
     append_query(&mut url, &query_extra);
 
-    let payload = build_payload(spec);
+    let payload = build_payload(spec).await?;
     let mut req = client
         .request(reqwest_method(method), url.clone())
         .timeout(Duration::from_millis(timeout_ms));
@@ -206,14 +365,14 @@ pub async fn send_request(
     if let Payload::Bytes(body, content_type) = &payload {
         if let Some(ct) = content_type {
             if !has_header(&headers, "content-type") {
-                req = req.header("content-type", *ct);
+                req = req.header("content-type", ct.as_str());
             }
         }
         req = req.body(body.clone());
     }
 
     let start = std::time::Instant::now();
-    let resp: Response = req.send().await.map_err(AppError::Http)?;
+    let resp: Response = req.send().await.map_err(AppError::from_reqwest)?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     let status = resp.status().as_u16();
@@ -246,9 +405,8 @@ pub async fn send_request(
     let mut body: Vec<u8> = Vec::new();
     let mut truncated = false;
     let mut chunks = resp.bytes_stream();
-    use futures::StreamExt;
     while let Some(chunk) = chunks.next().await {
-        let chunk = chunk.map_err(AppError::Http)?;
+        let chunk = chunk.map_err(AppError::from_reqwest)?;
         if body.len() + chunk.len() > MAX_BODY_BYTES {
             let remaining = MAX_BODY_BYTES - body.len();
             body.extend_from_slice(&chunk[..remaining]);
@@ -271,36 +429,12 @@ pub async fn send_request(
 }
 
 /// 把 reqwest 错误翻译为面向用户的中文提示（DNS / 超时 / TLS / 连接失败）。
+///
+/// 分类逻辑统一收敛在 [`AppError::classify`]，此处仅取其用户消息。
 pub fn describe_http_error(e: &reqwest::Error) -> String {
-    let chain = source_chain(e);
-    if e.is_timeout() {
-        "连接超时：服务器未在限定时间内响应（默认 30 秒）".to_string()
-    } else if chain.contains("lookup")
-        || chain.contains("name or service not known")
-        || chain.contains("dns")
-        || (chain.contains("resolve") && !chain.contains("certificate"))
-    {
-        "DNS 解析失败：域名不存在或网络不可用".to_string()
-    } else if e.is_connect() {
-        "连接失败：目标拒绝连接或网络不可达".to_string()
-    } else if chain.contains("certificate") || chain.contains("tls") {
-        "TLS 证书错误：证书无效、已过期或不受信任".to_string()
-    } else if e.is_builder() {
-        "HTTP 请求构建失败".to_string()
-    } else {
-        "请求失败，服务端未返回有效响应".to_string()
-    }
-}
-
-/// 收集错误链（自身 + 所有 source）为小写文本，用于关键词识别。
-fn source_chain(e: &(dyn std::error::Error + 'static)) -> String {
-    let mut parts = vec![e.to_string().to_lowercase()];
-    let mut cur = e.source();
-    while let Some(cause) = cur {
-        parts.push(cause.to_string().to_lowercase());
-        cur = cause.source();
-    }
-    parts.join(" | ")
+    AppError::classify(e)
+        .map(|err| err.user_message())
+        .unwrap_or_else(|| "请求失败：服务端未返回有效响应".to_string())
 }
 
 #[cfg(test)]
@@ -381,6 +515,133 @@ mod tests {
         assert_eq!(resp.content_type(), "application/json");
     }
 
+    // ---------- OAuth2：Bearer 头 + 过期静默刷新 ----------
+
+    /// 本地 OAuth2 服务：/token 返回新令牌；其余路径断言 Authorization == 期望值。
+    fn oauth_server(
+        expected_bearer: &'static str,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let refresh_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = refresh_count.clone();
+        let base = start_server(move |head, request| {
+            if head.contains("/token") {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                assert!(head.starts_with("POST /token"), "HEAD: {head}");
+                assert!(request.contains("grant_type=refresh_token"));
+                assert!(request.contains("refresh_token=rt-1"));
+                return (
+                    200,
+                    "application/json".to_string(),
+                    "{\"access_token\":\"refreshed-1\",\"token_type\":\"Bearer\",\
+                     \"refresh_token\":\"rt-2\",\"expires_in\":3600}"
+                        .to_string(),
+                );
+            }
+            let auth = request
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
+                .map(|l| l.to_string())
+                .unwrap_or_default();
+            assert!(
+                auth.contains(expected_bearer),
+                "期望 Authorization 含 {expected_bearer}，实际：{auth}"
+            );
+            (200, "text/plain".to_string(), "ok".to_string())
+        });
+        (base, refresh_count)
+    }
+
+    fn oauth_spec(expires_in_secs: i64, refresh_token: Option<&str>) -> RequestSpec {
+        RequestSpec {
+            auth: AuthSpec::OAuth2 {
+                client_id: "e2e-client".into(),
+                client_secret: "e2e-secret".into(),
+                auth_url: "https://idp.example/authorize".into(),
+                token_url: String::new(), // 测试中动态填入
+                scope: "read".into(),
+                redirect_uri: "http://127.0.0.1:9090/callback".into(),
+                token: Some(fox_core::model::OAuth2Token {
+                    access_token: "stale-token".into(),
+                    token_type: "Bearer".into(),
+                    refresh_token: refresh_token.map(String::from),
+                    expires_at: chrono::Utc::now() + chrono::Duration::seconds(expires_in_secs),
+                }),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth2_expired_token_auto_refreshes() {
+        let (base, counter) = oauth_server("Bearer refreshed-1");
+        let mut spec = oauth_spec(-10, Some("rt-1"));
+        if let AuthSpec::OAuth2 { token_url, .. } = &mut spec.auth {
+            *token_url = format!("{base}/token");
+        }
+        let resp = send_request(HttpMethod::GET, &format!("{base}/echo"), &spec, None)
+            .await
+            .unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "过期 token 应触发一次刷新"
+        );
+        // 刷新后的 token 已入缓存 → 第二次请求不再刷新。
+        let resp2 = send_request(HttpMethod::GET, &format!("{base}/echo"), &spec, None)
+            .await
+            .unwrap();
+        assert_eq!(resp2.status, 200);
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "有效 token 不应重复刷新"
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth2_valid_token_uses_bearer_without_refresh() {
+        let (base, counter) = oauth_server("Bearer stale-token");
+        let mut spec = oauth_spec(3600, Some("rt-1"));
+        if let AuthSpec::OAuth2 { token_url, .. } = &mut spec.auth {
+            *token_url = format!("{base}/token");
+        }
+        let resp = send_request(HttpMethod::GET, &format!("{base}/echo"), &spec, None)
+            .await
+            .unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "有效 token 不应触发刷新"
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth2_unauthorized_reports_error() {
+        let (base, _counter) = oauth_server("Bearer unused");
+        let spec = RequestSpec {
+            auth: AuthSpec::OAuth2 {
+                client_id: "u-client".into(),
+                client_secret: "s".into(),
+                auth_url: "https://idp.example/authorize".into(),
+                token_url: format!("{base}/token"),
+                scope: String::new(),
+                redirect_uri: String::new(),
+                token: None,
+            },
+            ..Default::default()
+        };
+        let err = send_request(HttpMethod::GET, &format!("{base}/echo"), &spec, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AppError::OAuth2(_)),
+            "应映射为 OAuth2 错误：{err}"
+        );
+        assert!(err.user_message().contains("立即授权"));
+    }
+
     #[tokio::test]
     async fn send_basic_auth() {
         let base = start_server(|_, request| {
@@ -429,13 +690,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_url_reports_error() {
-        let spec = RequestSpec::default();
-        let err = send_request(HttpMethod::GET, "not a url", &spec, None).await;
-        assert!(err.is_err());
-    }
-
-    #[tokio::test]
     async fn connection_refused_reports_error() {
         let spec = RequestSpec::default();
         let err = send_request(HttpMethod::GET, "http://127.0.0.1:1/", &spec, Some(3000)).await;
@@ -449,12 +703,38 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            AppError::Http(re) => {
-                let msg = describe_http_error(&re);
-                assert!(msg.contains("连接失败"), "意外提示：{msg}");
-            }
-            other => panic!("非 HTTP 错误：{other}"),
+            AppError::Connection(_) => (),
+            other => panic!("应映射为 Connection 错误：{other}"),
         }
+        assert!(err.user_message().contains("连接失败"));
+    }
+
+    #[tokio::test]
+    async fn dns_failure_mapped_to_dns_variant() {
+        let spec = RequestSpec::default();
+        // .invalid 顶级域按 RFC 2606 保证不解析。
+        let err = send_request(
+            HttpMethod::GET,
+            "http://rustfox-nonexistent.invalid/",
+            &spec,
+            Some(3000),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Dns(_)), "应映射为 DNS 错误：{err}");
+        assert!(err.user_message().contains("DNS 解析失败"));
+    }
+
+    #[tokio::test]
+    async fn invalid_url_mapped_to_validation_variant() {
+        let spec = RequestSpec::default();
+        let err = send_request(HttpMethod::GET, "not a url", &spec, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AppError::Validation(_)),
+            "应映射为 Validation：{err}"
+        );
     }
 
     #[tokio::test]
@@ -483,9 +763,12 @@ mod tests {
         .await;
         assert!(err.is_err());
         assert!(start.elapsed().as_millis() < 3000);
-        if let Err(AppError::Http(re)) = err {
-            let msg = describe_http_error(&re);
-            assert!(msg.contains("超时"), "意外提示：{msg}");
+        if let Err(err) = err {
+            assert!(
+                matches!(err, AppError::NetworkTimeout(_)),
+                "应映射为超时错误：{err}"
+            );
+            assert!(err.user_message().contains("超时"));
         }
     }
 
@@ -522,8 +805,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn payload_builds_correctly() {
+    #[tokio::test]
+    async fn payload_builds_correctly() {
         let spec = RequestSpec {
             body: BodySpec::UrlEncoded {
                 fields: vec![KeyValue::new("a", "1"), KeyValue::new("b", "x y"), {
@@ -534,10 +817,10 @@ mod tests {
             },
             ..Default::default()
         };
-        let payload = build_payload(&spec);
+        let payload = build_payload(&spec).await.unwrap();
         match payload {
             Payload::Bytes(body, ct) => {
-                assert_eq!(ct, Some("application/x-www-form-urlencoded"));
+                assert_eq!(ct.as_deref(), Some("application/x-www-form-urlencoded"));
                 assert_eq!(String::from_utf8(body).unwrap(), "a=1&b=x+y");
             }
             _ => panic!("期望 UrlEncoded payload"),
@@ -545,7 +828,189 @@ mod tests {
     }
 
     #[test]
-    fn auth_api_key_query_appends() {
+    fn graphql_json_builds_post_payload() {
+        let spec = GraphQLSpec {
+            query: "query Hero($id: ID!) { hero(id: $id) { name } }".into(),
+            variables: "{\"id\":\"42\"}".into(),
+            operation_name: "Hero".into(),
+        };
+        let json = graphql_request_json(&spec, &VariableMap::new()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed["query"],
+            "query Hero($id: ID!) { hero(id: $id) { name } }"
+        );
+        assert_eq!(parsed["variables"]["id"], "42");
+        assert_eq!(parsed["operationName"], "Hero");
+    }
+
+    #[test]
+    fn graphql_json_omits_empty_variables_and_operation() {
+        let spec = GraphQLSpec::default();
+        let json = graphql_request_json(&spec, &VariableMap::new()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed.get("variables").is_none());
+        assert!(parsed.get("operationName").is_none());
+        assert_eq!(parsed["query"], "");
+    }
+
+    #[test]
+    fn graphql_json_interpolates_variables() {
+        let spec = GraphQLSpec {
+            query: "query { hero(id: {{id}}) { name } }".into(),
+            variables: "{\"id\":\"{{hero_id}}\"}".into(),
+            operation_name: String::new(),
+        };
+        let mut vars = VariableMap::new();
+        vars.insert("id".into(), "7".into());
+        vars.insert("hero_id".into(), "99".into());
+        let json = graphql_request_json(&spec, &vars).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["query"].as_str().unwrap().contains("hero(id: 7)"));
+        assert_eq!(parsed["variables"]["id"], "99");
+    }
+
+    #[test]
+    fn graphql_json_rejects_invalid_variables() {
+        let spec = GraphQLSpec {
+            query: "query { a }".into(),
+            variables: "not-json".into(),
+            operation_name: String::new(),
+        };
+        let err = graphql_request_json(&spec, &VariableMap::new()).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn graphql_response_parses_data_and_errors() {
+        let raw = br#"{"data":{"hero":{"name":"R2-D2"}},"errors":[{"message":"oops","locations":[{"line":1,"column":3}],"path":["hero","name"]}]}"#;
+        let resp = parse_graphql_response(raw).unwrap();
+        assert_eq!(resp.data.as_ref().unwrap()["hero"]["name"], "R2-D2");
+        assert!(resp.has_errors());
+        assert_eq!(resp.errors[0].message, "oops");
+        assert_eq!(resp.errors[0].locations.as_ref().unwrap()[0].line, 1);
+        assert_eq!(resp.errors[0].path.as_ref().unwrap()[0], "hero");
+    }
+
+    #[test]
+    fn graphql_response_without_errors_has_empty_list() {
+        let raw = br#"{"data":{"ok":true}}"#;
+        let resp = parse_graphql_response(raw).unwrap();
+        assert!(!resp.has_errors());
+        assert_eq!(resp.data.as_ref().unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn graphql_response_rejects_non_json() {
+        let err = parse_graphql_response(b"<html>error</html>").unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn multipart_text_payload_has_boundary() {
+        let spec = RequestSpec {
+            body: BodySpec::Multipart {
+                fields: vec![
+                    MultipartField {
+                        key: "note".into(),
+                        value_type: MultipartValueType::Text,
+                        value: "hello".into(),
+                        enabled: true,
+                    },
+                    MultipartField {
+                        key: "off".into(),
+                        value_type: MultipartValueType::Text,
+                        value: "skip".into(),
+                        enabled: false,
+                    },
+                ],
+            },
+            ..Default::default()
+        };
+        let payload = build_payload(&spec).await.unwrap();
+        match payload {
+            Payload::Bytes(body, ct) => {
+                let ct = ct.unwrap();
+                assert!(
+                    ct.starts_with("multipart/form-data; boundary="),
+                    "意外 content-type：{ct}"
+                );
+                let body = String::from_utf8(body).unwrap();
+                assert!(body.contains("name=\"note\""));
+                assert!(body.contains("hello"));
+                assert!(!body.contains("skip"), "禁用的字段不应发送");
+            }
+            _ => panic!("期望 Multipart payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_multipart_with_file_upload() {
+        let dir = std::env::temp_dir();
+        let file_path = dir.join("fox_http_upload_test.txt");
+        tokio::fs::write(&file_path, b"hello multipart file")
+            .await
+            .unwrap();
+        let file_path_str = file_path.to_str().unwrap().to_string();
+
+        let base = start_server(|_, request| {
+            assert!(request.contains("content-type: multipart/form-data; boundary="));
+            assert!(request.contains("name=\"note\""));
+            assert!(request.contains("hello from text"));
+            assert!(request.contains("name=\"file\""));
+            assert!(request.contains("filename=\"fox_http_upload_test.txt\""));
+            assert!(request.contains("hello multipart file"));
+            (200, "text/plain".to_string(), "uploaded".to_string())
+        });
+        let spec = RequestSpec {
+            body: BodySpec::Multipart {
+                fields: vec![
+                    MultipartField {
+                        key: "note".into(),
+                        value_type: MultipartValueType::Text,
+                        value: "hello from text".into(),
+                        enabled: true,
+                    },
+                    MultipartField {
+                        key: "file".into(),
+                        value_type: MultipartValueType::FilePath,
+                        value: file_path_str,
+                        enabled: true,
+                    },
+                ],
+            },
+            ..Default::default()
+        };
+        let resp = send_request(HttpMethod::POST, &format!("{base}/upload"), &spec, None)
+            .await
+            .unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body_text(), "uploaded");
+        tokio::fs::remove_file(&file_path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn multipart_missing_file_reports_error() {
+        let spec = RequestSpec {
+            body: BodySpec::Multipart {
+                fields: vec![MultipartField {
+                    key: "file".into(),
+                    value_type: MultipartValueType::FilePath,
+                    value: "/nonexistent/fox_http_missing.txt".into(),
+                    enabled: true,
+                }],
+            },
+            ..Default::default()
+        };
+        let err = build_payload(&spec).await.unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("读取文件"), "意外提示：{msg}"),
+            other => panic!("非 Validation 错误：{other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_api_key_query_appends() {
         let mut headers = Vec::new();
         let mut query = Vec::new();
         apply_auth(
@@ -556,7 +1021,9 @@ mod tests {
                 value: "secret".into(),
                 location: ApiKeyLocation::Query,
             },
-        );
+        )
+        .await
+        .unwrap();
         assert!(headers.is_empty());
         assert_eq!(query.len(), 1);
         assert_eq!(query[0].key, "apikey");

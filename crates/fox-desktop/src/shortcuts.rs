@@ -135,7 +135,7 @@ mod tests {
     /// 根组件：创建状态（挂池 + 项目已入库），选中项目后派发全部快捷键消息。
     fn root(_: ()) -> Element {
         let pool = POOL.with(|s| s.borrow().clone()).expect("连接池已就绪");
-        let project_id = PROJECT.with(|s| s.borrow().clone()).expect("项目已就绪");
+        let project_id = PROJECT.with(|s| *s.borrow()).expect("项目已就绪");
         let state = AppState::new(Services::new(pool.clone()));
         state.set_current_project(Some(project_id));
         dispatch_shortcut(&state, &json!("new-folder"));

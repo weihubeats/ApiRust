@@ -70,6 +70,10 @@ pub fn export_markdown(
                     }
                 ));
             }
+            AuthSpec::OAuth2 { .. } => {
+                out.push_str("### 认证\n\n");
+                out.push_str("- OAuth 2.0：授权码流（Bearer Token）\n\n");
+            }
         }
 
         let body_text = match &ep.request.body {
@@ -95,6 +99,15 @@ pub fn export_markdown(
             }
             BodySpec::None => None,
             BodySpec::Multipart { .. } => None,
+            BodySpec::GraphQL { spec } => {
+                out.push_str("### 请求体（GraphQL）\n\n");
+                out.push_str(&format!("```graphql\n{}\n```\n\n", spec.query));
+                let trimmed = spec.variables.trim();
+                if !trimmed.is_empty() && trimmed != "{}" {
+                    out.push_str(&format!("**变量：**\n\n```json\n{trimmed}\n```\n\n"));
+                }
+                None
+            }
         };
         if let Some(raw) = body_text {
             out.push_str("### 请求体\n\n```json\n");

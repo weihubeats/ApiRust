@@ -9,25 +9,39 @@
 //!
 //! 使用方式：
 //! ```
-//! let client = WsClient::connect("ws://127.0.0.1:8080", Default::default(), vec![]).await?;
-//! let events = client.subscribe();
-//! client.send_text("hello").unwrap();
-//! client.stop().await?;
+//! #[tokio::main]
+//! async fn main() {
+//!     let client = fox_http::ws_client::WsClient::connect(
+//!         "ws://127.0.0.1:8080",
+//!         Default::default(),
+//!         vec![],
+//!     )
+//!     .await
+//!     .unwrap();
+//!     let _events = client.subscribe();
+//!     client.send_text("hello").await.unwrap();
+//!     client.stop().await.unwrap();
+//! }
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine;
+use fox_core::model::WsMessageType;
 use fox_core::{ws_error, AppError, Result};
+use fox_storage::repository as storage;
 use futures::SinkExt;
 use futures::StreamExt;
+use sqlx::SqlitePool;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::http;
 use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Message, Utf8Bytes};
 use tokio_tungstenite::{connect_async, WebSocketStream};
+use uuid::Uuid;
 
 /// 事件广播容量。
 const EVENT_CAPACITY: usize = 256;
@@ -42,6 +56,8 @@ const DEFAULT_MAX_MISSED_PONGS: u32 = 3;
 const DEFAULT_BACKOFF_BASE: Duration = Duration::from_millis(500);
 /// 默认重连退避最大延迟。
 const DEFAULT_BACKOFF_MAX: Duration = Duration::from_secs(30);
+/// 持久化待发消息的保留期：超过 24 小时自动清理（过期丢弃）。
+const WS_MESSAGE_TTL: chrono::Duration = chrono::Duration::hours(24);
 
 /// 连接状态。所有变化都会通过 [`WsEvent::State`] 推送给订阅者。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,10 +122,46 @@ impl Default for WsOptions {
 }
 
 /// 内部发送队列载荷。
+#[derive(Debug, Clone)]
 enum WsOutgoing {
     Text(String),
     Binary(Vec<u8>),
     Ping(Vec<u8>),
+}
+
+impl WsOutgoing {
+    fn message_type(&self) -> WsMessageType {
+        match self {
+            WsOutgoing::Text(_) => WsMessageType::Text,
+            WsOutgoing::Binary(_) => WsMessageType::Binary,
+            WsOutgoing::Ping(_) => WsMessageType::Ping,
+        }
+    }
+
+    /// Text 原样；Binary / Ping 编码为 base64（落库格式）。
+    fn encoded(&self) -> String {
+        match self {
+            WsOutgoing::Text(text) => text.clone(),
+            WsOutgoing::Binary(data) | WsOutgoing::Ping(data) => {
+                base64::engine::general_purpose::STANDARD.encode(data)
+            }
+        }
+    }
+
+    /// 从持久化记录还原（解码失败的消息丢弃）。
+    fn from_record(message_type: WsMessageType, payload: &str) -> Option<WsOutgoing> {
+        match message_type {
+            WsMessageType::Text => Some(WsOutgoing::Text(payload.to_string())),
+            WsMessageType::Binary => base64::engine::general_purpose::STANDARD
+                .decode(payload)
+                .ok()
+                .map(WsOutgoing::Binary),
+            WsMessageType::Ping => base64::engine::general_purpose::STANDARD
+                .decode(payload)
+                .ok()
+                .map(WsOutgoing::Ping),
+        }
+    }
 }
 
 /// 共享内部状态。
@@ -123,12 +175,21 @@ struct WsInner {
     events: broadcast::Sender<WsEvent>,
     /// 当前连接状态。
     state: watch::Sender<WsState>,
+    /// 保持状态通道存活：无接收者时 `Sender::send` 失败且值不更新，
+    /// 导致 `state()` 读到陈旧状态（`watch::Receiver` 必须被持有）。
+    #[allow(dead_code)]
+    state_rx: watch::Receiver<WsState>,
     /// 服务端协商的子协议。
     protocol: watch::Sender<Option<String>>,
+    /// 保持子协议通道存活（同上）。
+    #[allow(dead_code)]
+    protocol_rx: watch::Receiver<Option<String>>,
     /// 停止信号（false→true，只翻转一次）。
     stop: watch::Sender<bool>,
-    /// 发送队列（有界缓冲，重连成功后自动补发；满则拒绝新消息）。
+    /// 发送队列（有界缓冲，重连成功后自动补发；满则溢出落库）。
     outbox: mpsc::Sender<WsOutgoing>,
+    /// 离线消息持久化存储（可选）：队列满时溢出落库，重连成功后补发。
+    store: Option<SqlitePool>,
     /// 后台连接任务句柄。
     task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -160,11 +221,26 @@ impl WsClient {
         subprotocols: Vec<String>,
         options: WsOptions,
     ) -> Result<WsClient> {
+        Self::connect_with_store(target, headers, subprotocols, options, None).await
+    }
+
+    /// 带自定义选项与持久化存储建立连接。
+    ///
+    /// `store` 为 SQLite 连接池（`ws_messages` 表）：发送队列满时溢出消息
+    /// 自动落库，重连成功后从库中读取并补发；`None` 时保持原有的
+    /// 「队列满即丢弃」行为。
+    pub async fn connect_with_store(
+        target: impl Into<String>,
+        headers: HashMap<String, String>,
+        subprotocols: Vec<String>,
+        options: WsOptions,
+        store: Option<SqlitePool>,
+    ) -> Result<WsClient> {
         let target = target.into();
         validate_url(&target)?;
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
-        let (state, _) = watch::channel(WsState::Connecting);
-        let (protocol, _) = watch::channel(None::<String>);
+        let (state, state_rx) = watch::channel(WsState::Connecting);
+        let (protocol, protocol_rx) = watch::channel(None::<String>);
         let (stop, _) = watch::channel(false);
         let (outbox, outbox_rx) = mpsc::channel(OUTBOX_CAPACITY);
         let inner = Arc::new(WsInner {
@@ -174,9 +250,12 @@ impl WsClient {
             options,
             events,
             state,
+            state_rx,
             protocol,
+            protocol_rx,
             stop,
             outbox,
+            store,
             task: Mutex::new(None),
         });
         let task_inner = inner.clone();
@@ -208,37 +287,57 @@ impl WsClient {
     }
 
     /// 发送消息。连接未就绪时会进入内部缓冲队列，重连成功后自动补发；
-    /// 队列满（背压）时返回错误，消息被丢弃而非无限积压。
-    pub fn send_message(&self, message: WsMessage) -> Result<()> {
+    /// 队列满（背压）时若配置了持久化存储则溢出落库（重连后补发），
+    /// 否则返回错误，消息被丢弃而非无限积压。
+    pub async fn send_message(&self, message: WsMessage) -> Result<()> {
         let outgoing = match message {
             WsMessage::Text(text) => WsOutgoing::Text(text),
             WsMessage::Binary(data) => WsOutgoing::Binary(data),
             WsMessage::Ping(data) => WsOutgoing::Ping(data),
         };
-        self.inner
-            .outbox
-            .try_send(outgoing)
-            .map_err(|err| match err {
-                mpsc::error::TrySendError::Full(_) => ws_error("发送队列已满，消息已丢弃"),
-                mpsc::error::TrySendError::Closed(_) => {
-                    ws_error("WebSocket 客户端已停止，无法发送消息")
-                }
-            })
+        match self.inner.outbox.try_send(outgoing) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(outgoing)) => self.persist_overflow(outgoing).await,
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(ws_error("WebSocket 客户端已停止，无法发送消息"))
+            }
+        }
+    }
+
+    /// 队列溢出时把消息写入 `ws_messages` 表，等待重连后补发。
+    async fn persist_overflow(&self, outgoing: WsOutgoing) -> Result<()> {
+        let Some(pool) = &self.inner.store else {
+            return Err(ws_error("发送队列已满，消息已丢弃"));
+        };
+        storage::enqueue_ws_message(
+            pool,
+            &self.inner.target,
+            outgoing.message_type(),
+            &outgoing.encoded(),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| {
+            ws_error(format!(
+                "发送队列已满，持久化待发消息失败：{}",
+                e.user_message()
+            ))
+        })
     }
 
     /// 发送文本帧。
-    pub fn send_text(&self, text: impl Into<String>) -> Result<()> {
-        self.send_message(WsMessage::Text(text.into()))
+    pub async fn send_text(&self, text: impl Into<String>) -> Result<()> {
+        self.send_message(WsMessage::Text(text.into())).await
     }
 
     /// 发送二进制帧。
-    pub fn send_binary(&self, data: Vec<u8>) -> Result<()> {
-        self.send_message(WsMessage::Binary(data))
+    pub async fn send_binary(&self, data: Vec<u8>) -> Result<()> {
+        self.send_message(WsMessage::Binary(data)).await
     }
 
     /// 发送 Ping 帧（显式客户端探测）。
-    pub fn send_ping(&self, data: Vec<u8>) -> Result<()> {
-        self.send_message(WsMessage::Ping(data))
+    pub async fn send_ping(&self, data: Vec<u8>) -> Result<()> {
+        self.send_message(WsMessage::Ping(data)).await
     }
 
     /// 优雅停止：发送 Close 帧并等待后台任务退出（最多等待 5 秒）。
@@ -398,6 +497,40 @@ fn extract_subprotocol(response: &http::Response<Option<Vec<u8>>>) -> Option<Str
         .map(str::to_string)
 }
 
+/// 读取持久化的待发消息（重连成功后补发）。
+///
+/// 先清理超过 [`WS_MESSAGE_TTL`] 的过期消息，再按时间顺序取回未发送消息。
+/// 解码失败（base64 损坏）的消息直接丢弃。
+async fn load_persisted(inner: &WsInner) -> VecDeque<(Uuid, WsOutgoing)> {
+    let Some(pool) = &inner.store else {
+        return VecDeque::new();
+    };
+    let _ = storage::purge_expired_ws_messages(pool, &inner.target, WS_MESSAGE_TTL).await;
+    match storage::list_pending_ws_messages(pool, &inner.target).await {
+        Ok(records) => records
+            .into_iter()
+            .filter_map(|r| {
+                WsOutgoing::from_record(r.message_type, &r.payload).map(|msg| (r.id, msg))
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!("读取待发 WebSocket 消息失败：{}", e.user_message());
+            VecDeque::new()
+        }
+    }
+}
+
+/// 取下一条待发送消息：优先补发持久化消息，再消费内存队列。
+async fn next_outgoing(
+    persisted: &mut VecDeque<(Uuid, WsOutgoing)>,
+    outbox_rx: &mut mpsc::Receiver<WsOutgoing>,
+) -> Option<(Option<Uuid>, WsOutgoing)> {
+    if let Some((id, message)) = persisted.pop_front() {
+        return Some((Some(id), message));
+    }
+    outbox_rx.recv().await.map(|message| (None, message))
+}
+
 /// 在位会话：消息双向转发、心跳检测、处理发送队列与停止信号。
 /// 返回 `Ok(())` 表示优雅结束（服务端 Close / 用户停止），`Err` 表示异常。
 async fn run_session<S>(
@@ -413,6 +546,8 @@ where
     let mut ping = tokio::time::interval(inner.options.heartbeat_interval);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut missed_pongs: u32 = 0;
+    // 重连成功后补发持久化消息（含过期清理）。
+    let mut persisted = load_persisted(&inner).await;
 
     if *stop_rx.borrow() {
         let _ = close_sink(&mut sink).await;
@@ -428,19 +563,30 @@ where
                     return Ok(());
                 }
             }
-            // 出站消息队列（断线期间缓冲，恢复后自动补发）。
-            outgoing = outbox_rx.recv() => {
-                let message = match outgoing {
-                    Some(WsOutgoing::Text(text)) => Message::Text(Utf8Bytes::from(text)),
-                    Some(WsOutgoing::Binary(data)) => Message::Binary(data.into()),
-                    Some(WsOutgoing::Ping(data)) => Message::Ping(data.into()),
+            // 出站消息：先补发持久化消息，再消费内存队列（断线期间缓冲，恢复后自动补发）。
+            outgoing = next_outgoing(&mut persisted, outbox_rx) => {
+                let (persisted_id, message) = match outgoing {
+                    Some(pair) => pair,
                     None => {
                         let _ = close_sink(&mut sink).await;
                         return Ok(());
                     }
                 };
+                let message = match message {
+                    WsOutgoing::Text(text) => Message::Text(Utf8Bytes::from(text)),
+                    WsOutgoing::Binary(data) => Message::Binary(data.into()),
+                    WsOutgoing::Ping(data) => Message::Ping(data.into()),
+                };
                 if let Err(err) = sink.send(message).await {
                     return Err(format!("消息发送失败：{err}"));
+                }
+                // 补发成功：删除持久化记录，避免重连后重复发送。
+                if let Some(id) = persisted_id {
+                    if let Some(pool) = &inner.store {
+                        if let Err(e) = storage::delete_ws_messages(pool, &[id]).await {
+                            tracing::warn!("删除已发送的 WebSocket 消息失败：{}", e.user_message());
+                        }
+                    }
                 }
             }
             // 入站消息。
@@ -504,6 +650,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
@@ -572,14 +719,14 @@ mod tests {
         assert_eq!(client.state(), WsState::Open);
         assert_eq!(client.subprotocol(), None);
 
-        client.send_text("你好").unwrap();
+        client.send_text("你好").await.unwrap();
         wait_event(
             &mut events,
             |e| matches!(e, WsEvent::Message(WsMessage::Text(t)) if t == "你好"),
         )
         .await;
 
-        client.send_binary(vec![1, 2, 3]).unwrap();
+        client.send_binary(vec![1, 2, 3]).await.unwrap();
         wait_event(
             &mut events,
             |e| matches!(e, WsEvent::Message(WsMessage::Binary(b)) if b == &vec![1, 2, 3]),
@@ -592,6 +739,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::result_large_err)] // tungstenite::Error 内含 Response，类型由上游定义
     async fn custom_headers_and_subprotocol() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -709,7 +857,7 @@ mod tests {
             .unwrap();
         let mut full_error = None;
         for i in 0..OUTBOX_CAPACITY + 10 {
-            match client.send_text(format!("msg{i}")) {
+            match client.send_text(format!("msg{i}")).await {
                 Ok(()) => {}
                 Err(err) => {
                     full_error = Some(err.user_message().to_string());
@@ -720,6 +868,198 @@ mod tests {
         client.stop().await.unwrap();
         let message = full_error.expect("发送队列应填满并返回错误");
         assert!(message.contains("发送队列已满"), "意外错误：{message}");
+    }
+
+    #[tokio::test]
+    async fn overflow_persists_to_store_when_enabled() {
+        // 配置持久化存储：队列填满后溢出消息应落库，而不是报错丢弃。
+        let pool = fox_storage::db::memory_pool().await.unwrap();
+        let target = "ws://127.0.0.1:1/";
+        let client = WsClient::connect_with_store(
+            target,
+            HashMap::new(),
+            vec![],
+            WsOptions::default(),
+            Some(pool.clone()),
+        )
+        .await
+        .unwrap();
+        for i in 0..OUTBOX_CAPACITY + 20 {
+            client.send_text(format!("msg{i}")).await.unwrap();
+        }
+        let pending = storage::list_pending_ws_messages(&pool, target)
+            .await
+            .unwrap();
+        assert_eq!(pending.len(), 20, "溢出消息应全部落库");
+        assert_eq!(pending[0].message_type, WsMessageType::Text);
+        assert_eq!(pending[0].payload, "msg1024");
+        client.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn persisted_messages_flushed_after_reconnect() {
+        // 断线期间积压的消息先落库；重连成功后自动补发并删除记录。
+        let pool = fox_storage::db::memory_pool().await.unwrap();
+        let received = Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn({
+            let received = received.clone();
+            async move {
+                // 第一次连接：完成握手后立即断开（模拟断线）。
+                let (stream, _) = listener.accept().await.unwrap();
+                let ws = accept_async(stream).await.unwrap();
+                drop(ws);
+                // 第二次连接：收集消息后正常关闭。
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws = accept_async(stream).await.unwrap();
+                while let Some(msg) = ws.next().await {
+                    let Ok(msg) = msg else { break };
+                    match msg {
+                        Message::Text(text) => {
+                            received.lock().await.push(text.to_string());
+                        }
+                        Message::Binary(data) => {
+                            received.lock().await.push(format!(
+                                "bin:{}",
+                                base64::engine::general_purpose::STANDARD.encode(data)
+                            ));
+                        }
+                        Message::Ping(payload) => {
+                            let _ = ws.send(Message::Pong(payload)).await;
+                        }
+                        Message::Close(_) => {
+                            let _ = ws.send(Message::Close(None)).await;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+        let target = format!("ws://{addr}");
+
+        let options = WsOptions {
+            heartbeat_interval: Duration::from_millis(50),
+            max_missed_pongs: 3,
+            backoff_base: Duration::from_millis(200),
+            backoff_max: Duration::from_millis(500),
+            ..Default::default()
+        };
+        let client = WsClient::connect_with_store(
+            target.clone(),
+            HashMap::new(),
+            vec![],
+            options,
+            Some(pool.clone()),
+        )
+        .await
+        .unwrap();
+        let mut events = client.subscribe();
+        // 第一次 Open 后立即被服务端断开。
+        wait_event(&mut events, |e| *e == WsEvent::State(WsState::Open)).await;
+        // 等待断线事件：此刻连接不可用，消息只能落库。
+        wait_event(&mut events, |e| *e == WsEvent::State(WsState::Error)).await;
+
+        // 断线期间写入持久化消息（text 原样 / binary base64）。
+        storage::enqueue_ws_message(&pool, &target, WsMessageType::Text, "p1")
+            .await
+            .unwrap();
+        storage::enqueue_ws_message(&pool, &target, WsMessageType::Text, "p2")
+            .await
+            .unwrap();
+        storage::enqueue_ws_message(
+            &pool,
+            &target,
+            WsMessageType::Binary,
+            &base64::engine::general_purpose::STANDARD.encode([1, 2, 3]),
+        )
+        .await
+        .unwrap();
+
+        // 重连成功 → 补发持久化消息。
+        wait_event(&mut events, |e| *e == WsEvent::State(WsState::Open)).await;
+
+        client.send_text("live").await.unwrap();
+
+        // 等服务端收齐 4 条消息（p1、p2、binary、live）。
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if received.lock().await.len() >= 4 {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "补发消息未收齐");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let got = received.lock().await.clone();
+        assert!(got.contains(&"p1".to_string()));
+        assert!(got.contains(&"p2".to_string()));
+        assert!(got.contains(&"live".to_string()));
+        assert!(
+            got.contains(&"bin:AQID".to_string()),
+            "二进制消息应补发：{got:?}"
+        );
+
+        // 补发成功后持久化记录应被删除。
+        let pending = storage::list_pending_ws_messages(&pool, &target)
+            .await
+            .unwrap();
+        assert!(pending.is_empty(), "补发后记录应删除：{pending:?}");
+
+        client.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn persisted_expired_messages_cleaned_on_reconnect() {
+        let pool = fox_storage::db::memory_pool().await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            while let Some(msg) = ws.next().await {
+                let Ok(msg) = msg else { break };
+                match msg {
+                    Message::Ping(payload) => {
+                        let _ = ws.send(Message::Pong(payload)).await;
+                    }
+                    Message::Close(_) => {
+                        let _ = ws.send(Message::Close(None)).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let target = format!("ws://{addr}");
+        let record = storage::enqueue_ws_message(&pool, &target, WsMessageType::Text, "stale")
+            .await
+            .unwrap();
+        let old = (chrono::Utc::now() - chrono::Duration::hours(48)).to_rfc3339();
+        sqlx::query("UPDATE ws_messages SET created_at = ? WHERE id = ?")
+            .bind(old)
+            .bind(record.id.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let client = WsClient::connect_with_store(
+            target.clone(),
+            HashMap::new(),
+            vec![],
+            WsOptions::default(),
+            Some(pool.clone()),
+        )
+        .await
+        .unwrap();
+        let mut events = client.subscribe();
+        // 连接成功 → 会话启动时清理过期消息。
+        wait_event(&mut events, |e| *e == WsEvent::State(WsState::Open)).await;
+        let pending = storage::list_pending_ws_messages(&pool, &target)
+            .await
+            .unwrap();
+        assert!(pending.is_empty(), "过期消息应被清理：{pending:?}");
+        client.stop().await.unwrap();
     }
 
     #[tokio::test]

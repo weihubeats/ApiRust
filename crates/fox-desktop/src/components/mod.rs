@@ -4,6 +4,7 @@ pub mod dropdown;
 mod dropdown_test;
 pub mod icons;
 pub mod loading_overlay;
+pub mod modal;
 pub mod project_tree;
 pub mod toasts;
 pub mod topbar;

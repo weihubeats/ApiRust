@@ -161,6 +161,86 @@ pub enum AuthSpec {
         #[serde(rename = "in")]
         location: ApiKeyLocation,
     },
+    /// OAuth2 授权码流（Authorization Code Grant）。
+    ///
+    /// 浏览器跳转 `auth_url` 完成授权 → 本地回调服务器（127.0.0.1:9090）收到 code →
+    /// `token_url` 换取 access_token / refresh_token → 存入 `token`。
+    /// 过期后由 `fox-oauth` 用 refresh_token 静默刷新。
+    #[serde(rename = "oauth2")]
+    OAuth2 {
+        client_id: String,
+        client_secret: String,
+        /// 授权页地址（GET，追加 response_type=code / state / redirect_uri / scope）。
+        auth_url: String,
+        /// 换取与刷新 token 的地址（POST，form 编码）。
+        token_url: String,
+        scope: String,
+        /// 回调地址，须与授权服务注册的一致（默认 http://127.0.0.1:9090/callback）。
+        redirect_uri: String,
+        /// 已获取的令牌；授权成功后写入，刷新后由缓存回填。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<OAuth2Token>,
+    },
+}
+
+/// OAuth2 令牌（access + refresh + 过期时刻）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OAuth2Token {
+    pub access_token: String,
+    #[serde(default = "default_token_type")]
+    pub token_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    /// 过期时刻（UTC）。
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+fn default_token_type() -> String {
+    "Bearer".to_string()
+}
+
+impl OAuth2Token {
+    /// 已过期（`expires_at` 早于当前时间）。
+    pub fn is_expired(&self) -> bool {
+        self.expires_at <= chrono::Utc::now()
+    }
+
+    /// 距过期不足 `threshold` 视为即将过期（用于提前静默刷新）。
+    pub fn expires_within(&self, threshold: chrono::Duration) -> bool {
+        self.expires_at - chrono::Utc::now() <= threshold
+    }
+}
+
+/// OAuth2 授权状态（供 UI 状态指示器）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuth2Status {
+    /// 未授权（无 token 或无 refresh_token）。
+    Unauthorized,
+    /// 已授权，token 有效且未临近过期。
+    Valid,
+    /// 即将过期（≤ 60 秒），请求时将自动刷新。
+    ExpiringSoon,
+    /// 已过期（但仍有 refresh_token，请求时将自动刷新）。
+    Expired,
+}
+
+impl AuthSpec {
+    /// 若为 OAuth2，返回其授权状态。
+    pub fn oauth2_status(&self) -> Option<OAuth2Status> {
+        let AuthSpec::OAuth2 { token, .. } = self else {
+            return None;
+        };
+        let Some(token) = token else {
+            return Some(OAuth2Status::Unauthorized);
+        };
+        if token.is_expired() {
+            return Some(OAuth2Status::Expired);
+        }
+        if token.expires_within(chrono::Duration::seconds(60)) {
+            return Some(OAuth2Status::ExpiringSoon);
+        }
+        Some(OAuth2Status::Valid)
+    }
 }
 
 /// Multipart 值类型。
@@ -179,6 +259,45 @@ pub struct MultipartField {
     pub value: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+/// GraphQL 请求。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct GraphQLSpec {
+    pub query: String,
+    /// 变量 JSON 文本（空串或 "{}" 表示无变量）。
+    pub variables: String,
+    pub operation_name: String,
+}
+
+/// GraphQL 错误位置（errors[].locations[]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphQLErrorLocation {
+    pub line: u64,
+    pub column: u64,
+}
+
+/// GraphQL 错误条目（errors[]）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphQLError {
+    pub message: String,
+    pub locations: Option<Vec<GraphQLErrorLocation>>,
+    pub path: Option<Vec<serde_json::Value>>,
+}
+
+/// 解析后的 GraphQL 响应：`data` 与 `errors` 并存或互斥。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphQLResponse {
+    pub data: Option<serde_json::Value>,
+    pub errors: Vec<GraphQLError>,
+}
+
+impl GraphQLResponse {
+    /// 是否存在错误。
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
 }
 
 /// 请求 Body。
@@ -200,6 +319,9 @@ pub enum BodySpec {
     Multipart {
         fields: Vec<MultipartField>,
     },
+    GraphQL {
+        spec: GraphQLSpec,
+    },
 }
 
 impl BodySpec {
@@ -211,6 +333,7 @@ impl BodySpec {
             BodySpec::Text { .. } => "text",
             BodySpec::UrlEncoded { .. } => "urlencoded",
             BodySpec::Multipart { .. } => "multipart",
+            BodySpec::GraphQL { .. } => "graphql",
         }
     }
 
@@ -382,6 +505,35 @@ pub struct RequestHistory {
     pub created_at: DateTime<Utc>,
 }
 
+/// WebSocket 待发消息类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WsMessageType {
+    Text,
+    Binary,
+    Ping,
+}
+
+impl WsMessageType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WsMessageType::Text => "text",
+            WsMessageType::Binary => "binary",
+            WsMessageType::Ping => "ping",
+        }
+    }
+}
+
+/// 持久化的 WebSocket 待发消息（断线 / 队列溢出时落库）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WsMessageRecord {
+    pub id: Uuid,
+    pub message_type: WsMessageType,
+    /// Text 为原文；Binary / Ping 为 base64 编码。
+    pub payload: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,5 +606,107 @@ mod tests {
         assert_eq!(json["fields"][0]["key"], "a");
         let back: BodySpec = serde_json::from_value(json).unwrap();
         assert_eq!(back, body);
+    }
+
+    #[test]
+    fn oauth2_json_shape_and_roundtrip() {
+        let auth = AuthSpec::OAuth2 {
+            client_id: "my-client".into(),
+            client_secret: "s3cret".into(),
+            auth_url: "https://idp.example.com/authorize".into(),
+            token_url: "https://idp.example.com/token".into(),
+            scope: "openid profile".into(),
+            redirect_uri: "http://127.0.0.1:9090/callback".into(),
+            token: Some(OAuth2Token {
+                access_token: "at-1".into(),
+                token_type: "Bearer".into(),
+                refresh_token: Some("rt-1".into()),
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            }),
+        };
+        let json = serde_json::to_value(&auth).unwrap();
+        assert_eq!(json["type"], "oauth2");
+        assert_eq!(json["client_id"], "my-client");
+        assert_eq!(json["token"]["access_token"], "at-1");
+        let back: AuthSpec = serde_json::from_value(json).unwrap();
+        assert_eq!(back, auth);
+    }
+
+    #[test]
+    fn oauth2_without_token_serializes_compact() {
+        let auth = AuthSpec::OAuth2 {
+            client_id: "c".into(),
+            client_secret: "s".into(),
+            auth_url: String::new(),
+            token_url: String::new(),
+            scope: String::new(),
+            redirect_uri: String::new(),
+            token: None,
+        };
+        let json = serde_json::to_value(&auth).unwrap();
+        assert!(json.get("token").is_none());
+    }
+
+    #[test]
+    fn oauth2_token_status_transitions() {
+        let make = |hours: i64| AuthSpec::OAuth2 {
+            client_id: String::new(),
+            client_secret: String::new(),
+            auth_url: String::new(),
+            token_url: String::new(),
+            scope: String::new(),
+            redirect_uri: String::new(),
+            token: Some(OAuth2Token {
+                access_token: String::new(),
+                token_type: String::new(),
+                refresh_token: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(hours),
+            }),
+        };
+        assert_eq!(make(1).oauth2_status(), Some(OAuth2Status::Valid));
+        // 30 秒后过期 → 即将过期
+        let soon = AuthSpec::OAuth2 {
+            client_id: String::new(),
+            client_secret: String::new(),
+            auth_url: String::new(),
+            token_url: String::new(),
+            scope: String::new(),
+            redirect_uri: String::new(),
+            token: Some(OAuth2Token {
+                access_token: String::new(),
+                token_type: String::new(),
+                refresh_token: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::seconds(30),
+            }),
+        };
+        assert_eq!(soon.oauth2_status(), Some(OAuth2Status::ExpiringSoon));
+        // 已过期
+        let expired = AuthSpec::OAuth2 {
+            client_id: String::new(),
+            client_secret: String::new(),
+            auth_url: String::new(),
+            token_url: String::new(),
+            scope: String::new(),
+            redirect_uri: String::new(),
+            token: Some(OAuth2Token {
+                access_token: String::new(),
+                token_type: String::new(),
+                refresh_token: None,
+                expires_at: chrono::Utc::now() - chrono::Duration::seconds(1),
+            }),
+        };
+        assert_eq!(expired.oauth2_status(), Some(OAuth2Status::Expired));
+        // 无 token
+        let none = AuthSpec::OAuth2 {
+            client_id: String::new(),
+            client_secret: String::new(),
+            auth_url: String::new(),
+            token_url: String::new(),
+            scope: String::new(),
+            redirect_uri: String::new(),
+            token: None,
+        };
+        assert_eq!(none.oauth2_status(), Some(OAuth2Status::Unauthorized));
+        assert_eq!(AuthSpec::None.oauth2_status(), None);
     }
 }

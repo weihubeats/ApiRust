@@ -159,6 +159,25 @@ mod tests {
         out
     }
 
+    /// 按动态 id 属性值找到元素 id（动态 id 会以 SetAttribute 出现）。
+    fn element_by_id_attr(muts: &Mutations, prefix: &str) -> Option<ElementId> {
+        for m in &muts.edits {
+            if let Mutation::SetAttribute {
+                name, value, id, ..
+            } = m
+            {
+                if *name == "id" {
+                    if let AttributeValue::Text(t) = value {
+                        if t.starts_with(prefix) {
+                            return Some(*id);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn mouse() -> Rc<dyn std::any::Any> {
         Rc::new(PlatformEventData::new(Box::new(
             dioxus_html::SerializedMouseData::default(),
@@ -184,10 +203,11 @@ mod tests {
             let m2 = dom.render_immediate_to_vec();
             let state = ST.with(|s| s.borrow().clone()).expect("状态已就绪");
 
-            // url-bar 的「导入 cURL」是第二个 click 监听（dropdown 之后）。
+// 「导入 cURL」按钮：按动态 id 定位（不依赖监听顺序）。
             let clicks1 = event_listeners(&m2, "click");
             let inputs1 = event_listeners(&m2, "input");
-            let import_btn = clicks1[1];
+            let import_btn = element_by_id_attr(&m2, "ub-import-")
+                .expect("应渲染「导入 cURL」按钮（ub-import-*）");
             dom.handle_event("click", mouse(), import_btn, true);
             let m3 = dom.render_immediate_to_vec();
             let clicks3 = event_listeners(&m3, "click");

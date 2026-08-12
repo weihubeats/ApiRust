@@ -9,7 +9,7 @@ use fox_codegen::{render as render_code, GenRequest, Lang};
 use fox_core::curl_parser::{parse_curl, CurlParsed};
 use fox_core::model::{
     ApiKeyLocation, AuthSpec, BodySpec, Endpoint, EndpointStatus, HttpMethod, KeyValue,
-    RequestHistory, RequestSpec, ResponseExample, TestRun,
+    OAuth2Status, RequestHistory, RequestSpec, ResponseExample, TestRun,
 };
 use fox_core::util::{build_url, format_json, is_absolute_url, is_json_content_type};
 use fox_core::variable::{resolve_variables_with, ResolveOptions};
@@ -25,9 +25,31 @@ use uuid::Uuid;
 
 use crate::components::confirm_dialog::{ConfirmDialog, ConfirmInfo};
 use crate::components::dropdown::Dropdown;
-use crate::components::icons::{ImportIcon, XIcon};
+use crate::components::icons::{
+    ClockIcon, CodeIcon, CopyIcon, ImportIcon, PlusIcon, SaveIcon, SendIcon, XIcon,
+};
+use crate::components::modal::RFModal;
 use crate::state::AppState;
 use crate::views::empty_state::EmptyState;
+
+/// 复制文本到剪贴板（webview 内 execCommand 兜底，兼容非安全上下文）。
+fn copy_text(text: &str) {
+    let quoted = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+    eval(&format!(
+        "(function(){{var ta=document.createElement('textarea');ta.value={quoted};ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();try{{document.execCommand('copy');}}catch(e){{}}document.body.removeChild(ta);}})();"
+    ));
+}
+
+/// 字节数人类可读格式（B / KB / MB）。
+fn human_size(bytes: usize) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
 
 /// 删除目标类型（区分测试历史 / 响应示例）。
 #[derive(Clone, Copy)]
@@ -63,6 +85,12 @@ enum AuthField {
     BasicPass,
     ApiKeyName,
     ApiKeyValue,
+    OAuth2ClientId,
+    OAuth2ClientSecret,
+    OAuth2AuthUrl,
+    OAuth2TokenUrl,
+    OAuth2Scope,
+    OAuth2RedirectUri,
 }
 
 fn kv_list(ep: &mut Endpoint, section: KvSection) -> &mut Vec<KeyValue> {
@@ -190,6 +218,34 @@ fn switch_auth(current: &AuthSpec, mode: &str) -> AuthSpec {
                 location: ApiKeyLocation::Header,
             },
         },
+        "oauth2" => match current {
+            AuthSpec::OAuth2 {
+                client_id,
+                client_secret,
+                auth_url,
+                token_url,
+                scope,
+                redirect_uri,
+                token,
+            } => AuthSpec::OAuth2 {
+                client_id: client_id.clone(),
+                client_secret: client_secret.clone(),
+                auth_url: auth_url.clone(),
+                token_url: token_url.clone(),
+                scope: scope.clone(),
+                redirect_uri: redirect_uri.clone(),
+                token: token.clone(),
+            },
+            _ => AuthSpec::OAuth2 {
+                client_id: String::new(),
+                client_secret: String::new(),
+                auth_url: String::new(),
+                token_url: String::new(),
+                scope: String::new(),
+                redirect_uri: fox_oauth::DEFAULT_REDIRECT_URI.to_string(),
+                token: None,
+            },
+        },
         _ => AuthSpec::None,
     }
 }
@@ -200,7 +256,130 @@ fn auth_mode(auth: &AuthSpec) -> &'static str {
         AuthSpec::Bearer { .. } => "bearer",
         AuthSpec::Basic { .. } => "basic",
         AuthSpec::ApiKey { .. } => "apikey",
+        AuthSpec::OAuth2 { .. } => "oauth2",
     }
+}
+
+/// OAuth2 状态指示器：未授权 / 已授权 / 即将过期 / 已过期。
+fn oauth_status_ui(ep: &Endpoint) -> Element {
+    let AuthSpec::OAuth2 { token, .. } = &ep.request.auth else {
+        return rsx! {};
+    };
+    let (class, text) = match ep.request.auth.oauth2_status() {
+        Some(OAuth2Status::Unauthorized) => ("oauth-badge oauth-unauthorized", "未授权"),
+        Some(OAuth2Status::Valid) => ("oauth-badge oauth-valid", "已授权"),
+        Some(OAuth2Status::ExpiringSoon) => ("oauth-badge oauth-expiring", "即将过期（自动刷新）"),
+        Some(OAuth2Status::Expired) => ("oauth-badge oauth-expired", "已过期（请求时自动刷新）"),
+        None => return rsx! {},
+    };
+    let expires = token
+        .as_ref()
+        .map(|t| {
+            format!(
+                "，过期时间 {}",
+                t.expires_at
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+            )
+        })
+        .unwrap_or_default();
+    rsx! {
+        div { class: "{class}", "{text}{expires}" }
+    }
+}
+
+/// 「立即授权」：启动授权码流，成功后把 token 写回接口草稿并持久化。
+fn authorize_oauth2(state: AppState, draft: Signal<Option<Endpoint>>) {
+    let Some(ep) = draft.peek().clone() else {
+        state.toast_error("没有可授权的接口");
+        return;
+    };
+    let AuthSpec::OAuth2 { .. } = &ep.request.auth else {
+        state.toast_error("认证方式不是 OAuth2");
+        return;
+    };
+    // 配置校验。
+    if ep.request.auth.oauth2_status() == Some(OAuth2Status::Unauthorized) {
+        let auth = &ep.request.auth;
+        if let AuthSpec::OAuth2 {
+            client_id,
+            auth_url,
+            token_url,
+            ..
+        } = auth
+        {
+            if client_id.trim().is_empty() {
+                state.toast_error("请先填写 Client ID");
+                return;
+            }
+            if auth_url.trim().is_empty() {
+                state.toast_error("请先填写授权地址 Auth URL");
+                return;
+            }
+            if token_url.trim().is_empty() {
+                state.toast_error("请先填写令牌地址 Token URL");
+                return;
+            }
+        }
+    }
+    let st = state.clone();
+    let mut d = draft;
+    spawn(async move {
+        let auth = d
+            .peek()
+            .clone()
+            .map(|ep| ep.request.auth)
+            .unwrap_or_default();
+        st.toast_info("已打开浏览器，请在授权页完成授权…");
+        match fox_oauth::authorize(&auth).await {
+            Ok(token) => {
+                tracing::info!("[OAuth2] 授权成功，access_token 已获取");
+                let mut guard = d.write();
+                if let Some(ep) = guard.as_mut() {
+                    if let AuthSpec::OAuth2 {
+                        token: slot,
+                        client_id,
+                        token_url,
+                        ..
+                    } = &mut ep.request.auth
+                    {
+                        *slot = Some(token.clone());
+                        // 与进程内缓存保持同步（请求路径优先读缓存）。
+                        fox_oauth::store_token(client_id, token_url, token.clone());
+                    }
+                    st.save_endpoint(ep.clone());
+                }
+                st.toast_success("OAuth2 授权成功");
+            }
+            Err(e) => {
+                tracing::warn!("[OAuth2] 授权失败: {e}");
+                st.toast_error(format!("OAuth2 授权失败：{e}"));
+            }
+        }
+    });
+}
+
+/// 「清除令牌」：清空本地 token（缓存 + 草稿 + 持久化），需重新授权。
+fn clear_oauth2_token(state: AppState, draft: Signal<Option<Endpoint>>) {
+    let st = state.clone();
+    let mut d = draft;
+    spawn(async move {
+        let mut guard = d.write();
+        if let Some(ep) = guard.as_mut() {
+            if let AuthSpec::OAuth2 {
+                token,
+                client_id,
+                token_url,
+                ..
+            } = &mut ep.request.auth
+            {
+                *token = None;
+                fox_oauth::clear_token(client_id, token_url);
+            }
+            st.save_endpoint(ep.clone());
+        }
+        st.toast_info("已清除 OAuth2 令牌，请重新授权");
+    });
 }
 
 fn loc_name(loc: ApiKeyLocation) -> &'static str {
@@ -412,7 +591,10 @@ struct ResponseView {
     truncated: bool,
     headers: Vec<(String, String)>,
     content_type: String,
+    /// Pretty 格式化后的正文（JSON 时格式化，其余同 raw）。
     body: String,
+    /// 原始正文（Pretty/Raw 切换用）。
+    raw_body: String,
 }
 
 /// 测试结果视图（供 UI 展示）。
@@ -1053,6 +1235,27 @@ fn render_request(ep: &Endpoint, vars: &HashMap<String, String>) -> (String, Req
             *key = resolve_text(key, vars);
             *value = resolve_text(value, vars);
         }
+        AuthSpec::OAuth2 {
+            client_id,
+            client_secret,
+            auth_url,
+            token_url,
+            scope,
+            redirect_uri,
+            token,
+        } => {
+            // OAuth2 配置字段支持变量插值。
+            *client_id = resolve_text(client_id, vars);
+            *client_secret = resolve_text(client_secret, vars);
+            *auth_url = resolve_text(auth_url, vars);
+            *token_url = resolve_text(token_url, vars);
+            *scope = resolve_text(scope, vars);
+            *redirect_uri = resolve_text(redirect_uri, vars);
+            // 进程内缓存中的新令牌优先（自动刷新后保持最新）。
+            if let Some(cached) = fox_oauth::cached_token(client_id, token_url) {
+                *token = Some(cached);
+            }
+        }
         AuthSpec::None => {}
     }
     (url, spec)
@@ -1123,9 +1326,9 @@ fn to_response_view(data: HttpResponseData) -> Option<ResponseView> {
     let content_type = data.content_type();
     let raw = data.body_text();
     let body = if is_json_content_type(&content_type) {
-        format_json(&raw).unwrap_or(raw)
+        format_json(&raw).unwrap_or(raw.clone())
     } else {
-        raw
+        raw.clone()
     };
     Some(ResponseView {
         status: data.status,
@@ -1135,6 +1338,7 @@ fn to_response_view(data: HttpResponseData) -> Option<ResponseView> {
         headers: data.headers,
         content_type,
         body,
+        raw_body: raw,
     })
 }
 
@@ -1145,6 +1349,16 @@ fn auth_value(auth: &AuthSpec, field: AuthField) -> String {
         (AuthSpec::Basic { password, .. }, AuthField::BasicPass) => password.clone(),
         (AuthSpec::ApiKey { key, .. }, AuthField::ApiKeyName) => key.clone(),
         (AuthSpec::ApiKey { value, .. }, AuthField::ApiKeyValue) => value.clone(),
+        (AuthSpec::OAuth2 { client_id, .. }, AuthField::OAuth2ClientId) => client_id.clone(),
+        (AuthSpec::OAuth2 { client_secret, .. }, AuthField::OAuth2ClientSecret) => {
+            client_secret.clone()
+        }
+        (AuthSpec::OAuth2 { auth_url, .. }, AuthField::OAuth2AuthUrl) => auth_url.clone(),
+        (AuthSpec::OAuth2 { token_url, .. }, AuthField::OAuth2TokenUrl) => token_url.clone(),
+        (AuthSpec::OAuth2 { scope, .. }, AuthField::OAuth2Scope) => scope.clone(),
+        (AuthSpec::OAuth2 { redirect_uri, .. }, AuthField::OAuth2RedirectUri) => {
+            redirect_uri.clone()
+        }
         _ => String::new(),
     }
 }
@@ -1156,6 +1370,14 @@ fn set_auth_value(auth: &mut AuthSpec, field: AuthField, v: String) {
         (AuthSpec::Basic { password, .. }, AuthField::BasicPass) => *password = v,
         (AuthSpec::ApiKey { key, .. }, AuthField::ApiKeyName) => *key = v,
         (AuthSpec::ApiKey { value, .. }, AuthField::ApiKeyValue) => *value = v,
+        (AuthSpec::OAuth2 { client_id, .. }, AuthField::OAuth2ClientId) => *client_id = v,
+        (AuthSpec::OAuth2 { client_secret, .. }, AuthField::OAuth2ClientSecret) => {
+            *client_secret = v
+        }
+        (AuthSpec::OAuth2 { auth_url, .. }, AuthField::OAuth2AuthUrl) => *auth_url = v,
+        (AuthSpec::OAuth2 { token_url, .. }, AuthField::OAuth2TokenUrl) => *token_url = v,
+        (AuthSpec::OAuth2 { scope, .. }, AuthField::OAuth2Scope) => *scope = v,
+        (AuthSpec::OAuth2 { redirect_uri, .. }, AuthField::OAuth2RedirectUri) => *redirect_uri = v,
         _ => {}
     }
 }
@@ -1246,6 +1468,7 @@ fn kv_row(draft: Signal<Option<Endpoint>>, section: KvSection, index: usize) -> 
             td { class: "row-actions",
                 button {
                     class: "rf-tree-action",
+                    title: "删除此行",
                     onclick: move |_| {
                         let mut d = draft;
                         let mut guard = d.write();
@@ -1256,20 +1479,40 @@ fn kv_row(draft: Signal<Option<Endpoint>>, section: KvSection, index: usize) -> 
                             }
                         }
                     },
-                    "删除",
+                    XIcon {}
                 }
             }
         }
     }
 }
 
-/// 渲染 KeyValue 编辑表。
-fn kv_table(draft: Signal<Option<Endpoint>>, section: KvSection) -> Element {
+/// 渲染 KeyValue 编辑表（空表时显示居中空状态 + 添加按钮）。
+fn kv_table(
+    draft: Signal<Option<Endpoint>>,
+    section: KvSection,
+    item_name: &'static str,
+) -> Element {
     let len = draft
         .peek()
         .as_ref()
         .map(|ep| kv_len(ep, section))
         .unwrap_or(0);
+    let add_row = move |_| {
+        let mut d = draft;
+        let mut guard = d.write();
+        if let Some(ep) = guard.as_mut() {
+            kv_list(ep, section).push(KeyValue::new("", ""));
+        }
+    };
+    if len == 0 {
+        return rsx! {
+            div { class: "rf-kv-empty",
+                div { class: "rf-empty-icon", PlusIcon {} }
+                div { class: "rf-empty-title", "暂无{item_name}" }
+                button { class: "rf-btn rf-btn-sm", onclick: add_row, PlusIcon {} "添加{item_name}" }
+            }
+        };
+    }
     rsx! {
         table { class: "kv-table",
             thead {
@@ -1287,11 +1530,29 @@ fn kv_table(draft: Signal<Option<Endpoint>>, section: KvSection) -> Element {
                 }
             }
         }
+        div { class: "kv-add",
+            button { class: "rf-btn rf-btn-ghost rf-btn-sm", onclick: add_row, PlusIcon {} "添加{item_name}" }
+        }
     }
 }
 
 /// 渲染一个 Auth 文本字段。
 fn label_field(label: &'static str, draft: Signal<Option<Endpoint>>, field: AuthField) -> Element {
+    auth_field(label, draft, field, None)
+}
+
+/// 渲染一个 Auth 密码字段（输入内容打码）。
+fn secret_field(label: &'static str, draft: Signal<Option<Endpoint>>, field: AuthField) -> Element {
+    auth_field(label, draft, field, Some("password"))
+}
+
+/// Auth 字段通用渲染。
+fn auth_field(
+    label: &'static str,
+    draft: Signal<Option<Endpoint>>,
+    field: AuthField,
+    input_type: Option<&'static str>,
+) -> Element {
     let value = draft
         .peek()
         .as_ref()
@@ -1302,6 +1563,7 @@ fn label_field(label: &'static str, draft: Signal<Option<Endpoint>>, field: Auth
             label { class: "label-hint", "{label}" }
             input {
                 class: "rf-input grow",
+                r#type: input_type.unwrap_or("text"),
                 value: "{value}",
                 oninput: move |e| {
                     let v = e.data().value();
@@ -1357,6 +1619,10 @@ pub fn WorkspacePage() -> Element {
     let active_tab: Signal<EditorTab> = use_signal(|| EditorTab::Params);
     let sending: Signal<bool> = use_signal(|| false);
     let response: Signal<Option<ResponseView>> = use_signal(|| None);
+    // 描述行：聚焦后展开为多行。
+    let desc_open: Signal<bool> = use_signal(|| false);
+    // 响应正文视图：Pretty（默认）/ Raw。
+    let resp_pretty: Signal<bool> = use_signal(|| true);
     let abort_tx: Signal<Option<tokio::sync::oneshot::Sender<()>>> = use_signal(|| None);
     let show_history: Signal<bool> = use_signal(|| false);
     let histories: Signal<Vec<RequestHistory>> = use_signal(Vec::new);
@@ -1508,16 +1774,17 @@ pub fn WorkspacePage() -> Element {
 
     if let Some(ep) = ep_opt {
         let method_str = ep.method.to_string();
-        // 环境展示与拼接 URL 预览：变量经 项目 < 环境 合并后由 base_url 拼出完整地址。
+        let method_cls = ep.method.to_string().to_lowercase();
+        // 拼接 URL 预览：变量经 项目 < 环境 合并后由 base_url 拼出完整地址。
         let env_id = *state.current_environment_id.read();
-        let env_name: Option<String> = env_id.and_then(|id| {
-            state
-                .environments
-                .read()
-                .iter()
-                .find(|e| e.id == id)
-                .map(|e| e.name.clone())
-        });
+        let env_options: Vec<(String, String)> = state
+            .environments
+            .read()
+            .iter()
+            .map(|e| (e.id.to_string(), e.name.clone()))
+            .collect();
+        let env_selected: String = env_id.map(|id| id.to_string()).unwrap_or_default();
+        let st_env_dd = state.clone();
         let vars = state
             .current_project_id
             .peek()
@@ -1537,6 +1804,18 @@ pub fn WorkspacePage() -> Element {
         let active = *active_tab.read();
         let sending_visible = *sending.peek();
         let resp = response.peek().clone();
+        let resp_pretty_flag = *resp_pretty.peek();
+        let resp_body_text = resp
+            .as_ref()
+            .map(|r| {
+                if resp_pretty_flag {
+                    r.body.clone()
+                } else {
+                    r.raw_body.clone()
+                }
+            })
+            .unwrap_or_default();
+        let desc_expanded = *desc_open.peek();
         let show_history_flag = *show_history.peek();
         let history_list = histories.read().clone();
         // M9 渲染局部。
@@ -1968,6 +2247,28 @@ pub fn WorkspacePage() -> Element {
                                 data.status,
                                 data.duration_ms
                             );
+                            // OAuth2：请求过程可能自动刷新了 token（缓存更新），
+                            // 若草稿仍是旧令牌则静默持久化最新令牌。
+                            if let AuthSpec::OAuth2 {
+                                client_id,
+                                token_url,
+                                token: spec_token,
+                                ..
+                            } = &spec.auth
+                            {
+                                if let Some(cached) = fox_oauth::cached_token(client_id, token_url)
+                                {
+                                    if spec_token.as_ref() != Some(&cached) {
+                                        let mut refreshed = ep.clone();
+                                        if let AuthSpec::OAuth2 { token, .. } =
+                                            &mut refreshed.request.auth
+                                        {
+                                            *token = Some(cached.clone());
+                                        }
+                                        st_task.save_endpoint_quiet(refreshed);
+                                    }
+                                }
+                            }
                             let history = build_history(&ep, project_id, &url, &data);
                             rv.set(to_response_view(data));
                             let db = db.clone();
@@ -2048,74 +2349,118 @@ pub fn WorkspacePage() -> Element {
                             for node in tab_nodes {
                                 { node }
                             }
-                            button { class: "rf-btn rf-btn-sm", onclick: move |_| new_tab(), "＋ 新建" }
+                            button {
+                                id: "tab-add-endpoint",
+                                class: "rf-btn tab-add-btn",
+                                title: "新建接口",
+                                onclick: move |_| new_tab(),
+                                PlusIcon {}
+                            }
+                            div { class: "tab-bar-right",
+                                Dropdown {
+                                    class: "tab-env-dd",
+                                    options: env_options.clone(),
+                                    selected: env_selected.clone(),
+                                    placeholder: "未选环境",
+                                    on_select: move |v: String| {
+                                        let id = uuid::Uuid::parse_str(&v).ok();
+                                        st_env_dd.select_environment(id);
+                                    },
+                                }
+                            }
                         }
                         div { class: "url-bar",
-                            Dropdown {
-                                class: "rf-dd-method",
-                                options: HttpMethod::all()
-                                    .iter()
-                                    .map(|m| (m.to_string(), m.to_string()))
-                                    .collect(),
-                                selected: method_str.clone(),
-                                on_select: move |v: String| {
-                                    if let Ok(m) = v.parse::<HttpMethod>() {
+                            div { class: "ub-group",
+                                Dropdown {
+                                    class: "rf-dd-method rf-dd-method-{method_cls}",
+                                    options: HttpMethod::all()
+                                        .iter()
+                                        .map(|m| (m.to_string(), m.to_string()))
+                                        .collect(),
+                                    selected: method_str.clone(),
+                                    on_select: move |v: String| {
+                                        if let Ok(m) = v.parse::<HttpMethod>() {
+                                            let mut d = draft;
+                                            let mut guard = d.write();
+                                            if let Some(ep) = guard.as_mut() { ep.method = m; }
+                                        }
+                                    },
+                                }
+                                if let Some((base, _)) = &base_prefix {
+                                    span { class: "ub-base-url", "{base}" }
+                                }
+                                input {
+                                    class: "rf-input ub-url-input",
+                                    value: "{ep.path}",
+                                    placeholder: "请求路径，如 /api/users 或 {{base_url}}/api/users",
+                                    oninput: move |e| {
+                                        let v = e.data().value();
                                         let mut d = draft;
                                         let mut guard = d.write();
-                                        if let Some(ep) = guard.as_mut() { ep.method = m; }
-                                    }
-                                },
-                            }
-                            button { class: "rf-btn rf-btn-sm", onclick: move |_| {
-                                let mut co = curl_open;
-                                co.set(true);
-                            }, ImportIcon {}, "导入 cURL" }
-                            input {
-                                class: "rf-input grow",
-                                value: "{ep.path}",
-                                placeholder: "请求路径，如 /api/users 或 {{base_url}}/api/users",
-                                oninput: move |e| {
-                                    let v = e.data().value();
-                                    let mut d = draft;
-                                    let mut guard = d.write();
-                                    if let Some(ep) = guard.as_mut() { ep.path = v; }
-                                },
-                            }
-                            button { class: "rf-btn rf-btn-primary", onclick: move |_| save(), "保存" }
-                            button { class: "rf-btn", onclick: move |_| {
-                                let Some(ep) = draft.peek().clone() else {
-                                    return;
-                                };
-                                let lang_str = codegen_lang.peek().clone();
-                                let lang = Lang::from_str_cn(&lang_str).unwrap_or(Lang::Curl);
-                                if let Some(code) = build_codegen_code(&st_btn, &ep, lang) {
-                                    let mut cc = codegen_code;
-                                    cc.set(code);
+                                        if let Some(ep) = guard.as_mut() { ep.path = v; }
+                                    },
                                 }
-                                let mut co = codegen_open;
-                                co.set(true);
-                            }, "生成代码" }
-                            button { class: "rf-btn rf-btn-send", onclick: move |_| do_send(), "发送" }
+                                button {
+                                    class: "ub-send",
+                                    disabled: sending_visible,
+                                    title: "发送请求（Ctrl+Enter）",
+                                    onclick: move |_| do_send(),
+                                    if sending_visible {
+                                        span { class: "rf-spin-sm" }
+                                        "发送中"
+                                    } else {
+                                        SendIcon {}
+                                        "发送"
+                                    }
+                                }
+                            }
                             if sending_visible {
-                                button { class: "rf-btn rf-btn-danger", onclick: move |_| cancel_send(), "取消" }
+                                button {
+                                    class: "rf-btn rf-btn-ghost rf-btn-sm",
+                                    onclick: move |_| cancel_send(),
+                                    "取消",
+                                }
                             }
-                        }
-                        div { class: "url-preview",
-                            if let Some(name) = &env_name {
-                                span { class: "url-preview-env", "环境：{name}" }
-                            } else {
-                                span { class: "url-preview-env none", "未选环境" }
-                            }
-                            if let Some((base, rest)) = &base_prefix {
-                                span { class: "url-preview-base", "{base}" }
-                                span { class: "url-preview-rest", "{rest}" }
-                            } else {
-                                span { class: "url-preview-rest", "{full_url}" }
+                            div { class: "ub-actions",
+                                button {
+                                    id: "ub-import-{ep.id}",
+                                    class: "rf-btn rf-btn-ghost ub-btn",
+                                    title: "导入 cURL 命令",
+                                    onclick: move |_| {
+                                        let mut co = curl_open;
+                                        co.set(true);
+                                    },
+                                    ImportIcon {}
+                                }
+                                button {
+                                    class: "rf-btn rf-btn-ghost ub-btn",
+                                    title: "保存接口",
+                                    onclick: move |_| save(),
+                                    SaveIcon {}
+                                }
+                                button {
+                                    class: "rf-btn rf-btn-ghost ub-btn",
+                                    title: "生成客户端代码",
+                                    onclick: move |_| {
+                                        let Some(ep) = draft.peek().clone() else {
+                                            return;
+                                        };
+                                        let lang_str = codegen_lang.peek().clone();
+                                        let lang = Lang::from_str_cn(&lang_str).unwrap_or(Lang::Curl);
+                                        if let Some(code) = build_codegen_code(&st_btn, &ep, lang) {
+                                            let mut cc = codegen_code;
+                                            cc.set(code);
+                                        }
+                                        let mut co = codegen_open;
+                                        co.set(true);
+                                    },
+                                    CodeIcon {}
+                                }
                             }
                         }
                         div { class: "editor-meta",
                             input {
-                                class: "rf-input grow",
+                                class: "rf-input",
                                 value: "{ep.name}",
                                 placeholder: "接口名称",
                                 oninput: move |e| {
@@ -2125,27 +2470,49 @@ pub fn WorkspacePage() -> Element {
                                     if let Some(ep) = guard.as_mut() { ep.name = v; }
                                 },
                             }
-                            textarea {
-                                rows: "2",
-                                class: "rf-textarea rf-editor-desc grow",
-                                value: "{ep.description}",
-                                placeholder: "接口描述",
-                                oninput: move |e| {
-                                    let v = e.data().value();
-                                    let mut d = draft;
-                                    let mut guard = d.write();
-                                    if let Some(ep) = guard.as_mut() { ep.description = v; }
-                                },
+                            if desc_expanded {
+                                textarea {
+                                    rows: "3",
+                                    class: "rf-textarea",
+                                    value: "{ep.description}",
+                                    placeholder: "接口描述",
+                                    oninput: move |e| {
+                                        let v = e.data().value();
+                                        let mut d = draft;
+                                        let mut guard = d.write();
+                                        if let Some(ep) = guard.as_mut() { ep.description = v; }
+                                    },
+                                    onblur: move |_| {
+                                        let mut do_ = desc_open;
+                                        do_.set(false);
+                                    },
+                                }
+                            } else {
+                                input {
+                                    class: "rf-input",
+                                    value: "{ep.description}",
+                                    placeholder: "接口描述",
+                                    onfocus: move |_| {
+                                        let mut do_ = desc_open;
+                                        do_.set(true);
+                                    },
+                                    oninput: move |e| {
+                                        let v = e.data().value();
+                                        let mut d = draft;
+                                        let mut guard = d.write();
+                                        if let Some(ep) = guard.as_mut() { ep.description = v; }
+                                    },
+                                }
                             }
                         }
                         div { class: "tabs",
-                            for (tab_enum, label) in [
-                                (EditorTab::Params, "Params"),
-                                (EditorTab::Headers, "Headers"),
-                                (EditorTab::Body, "Body"),
-                                (EditorTab::Auth, "Auth"),
-                                (EditorTab::Tests, "Tests"),
-                                (EditorTab::Docs, "Docs"),
+                            for (tab_enum, label, count) in [
+                                (EditorTab::Params, "Params", ep.request.params.len()),
+                                (EditorTab::Headers, "Headers", ep.request.headers.len()),
+                                (EditorTab::Body, "Body", usize::from(body_mode != "none")),
+                                (EditorTab::Auth, "Auth", usize::from(auth_type != "none")),
+                                (EditorTab::Tests, "Tests", usize::from(ep.request.tests.is_some())),
+                                (EditorTab::Docs, "Docs", 0),
                             ] {
                                 button {
                                     class: if active == tab_enum { "rf-tab active" } else { "rf-tab" },
@@ -2154,40 +2521,30 @@ pub fn WorkspacePage() -> Element {
                                         t.set(tab_enum);
                                     },
                                     "{label}"
+                                    if count > 0 {
+                                        span { class: "rf-tab-badge", "{count}" }
+                                    }
                                 }
                             }
                             div { class: "spacer" }
                             button {
-                                class: "rf-tab",
+                                class: "rf-tab rf-tab-icon",
+                                title: "请求历史（抽屉）",
                                 onclick: move |_| {
                                     load_history_list(state.clone(), histories);
                                     let mut sh = show_history;
                                     sh.set(true);
                                 },
-                                "历史"
+                                ClockIcon {}
                             }
                         }
                         div { class: "tab-body",
                             match active {
                                 EditorTab::Params => rsx! {
-                                    button { class: "rf-btn rf-btn-sm", onclick: move |_| {
-                                        let mut d = draft;
-                                        let mut guard = d.write();
-                                        if let Some(ep) = guard.as_mut() {
-                                            kv_list(ep, KvSection::Params).push(KeyValue::new("", ""));
-                                        }
-                                    }, "添加参数" }
-                                    { kv_table(draft, KvSection::Params) }
+                                    { kv_table(draft, KvSection::Params, "参数") }
                                 },
                                 EditorTab::Headers => rsx! {
-                                    button { class: "rf-btn rf-btn-sm", onclick: move |_| {
-                                        let mut d = draft;
-                                        let mut guard = d.write();
-                                        if let Some(ep) = guard.as_mut() {
-                                            kv_list(ep, KvSection::Headers).push(KeyValue::new("", ""));
-                                        }
-                                    }, "添加请求头" }
-                                    { kv_table(draft, KvSection::Headers) }
+                                    { kv_table(draft, KvSection::Headers, "请求头") }
                                 },
                                 EditorTab::Body => rsx! {
                                     div { class: "row rf-mb-2",
@@ -2210,8 +2567,8 @@ pub fn WorkspacePage() -> Element {
                                                     let next = switch_body_mode_keep(
                                                         &ep.request.body,
                                                         &v,
-                                                        &mut *rk_guard,
-                                                        &mut *fk_guard,
+                                                        &mut rk_guard,
+                                                        &mut fk_guard,
                                                     );
                                                     ep.request.body = next;
                                                 }
@@ -2224,14 +2581,7 @@ pub fn WorkspacePage() -> Element {
                                     if body_mode == "none" {
                                         div { class: "empty", "暂无请求体" }
                                     } else if body_mode == "urlencoded" {
-                                        button { class: "rf-btn rf-btn-sm", onclick: move |_| {
-                                            let mut d = draft;
-                                            let mut guard = d.write();
-                                            if let Some(ep) = guard.as_mut() {
-                                                kv_list(ep, KvSection::UrlEncoded).push(KeyValue::new("", ""));
-                                            }
-                                        }, "添加字段" }
-                                        { kv_table(draft, KvSection::UrlEncoded) }
+                                        { kv_table(draft, KvSection::UrlEncoded, "字段") }
                                     } else {
                                         div { class: "body-editor-fl",
                                             pre { id: "body-pre-hl", class: "body-editor-hl", {highlight_json(raw_body.clone())} }
@@ -2250,7 +2600,10 @@ pub fn WorkspacePage() -> Element {
                                         }
                                     }
                                 },
-                                EditorTab::Auth => rsx! {
+                                EditorTab::Auth => {
+                                    let st_oauth_authorize = state.clone();
+                                    let st_oauth_clear = state.clone();
+                                    rsx! {
                                     div { class: "row rf-mb-2",
                                         Dropdown {
                                             options: vec![
@@ -2258,6 +2611,7 @@ pub fn WorkspacePage() -> Element {
                                                 ("bearer".into(), "Bearer Token".into()),
                                                 ("basic".into(), "Basic Auth".into()),
                                                 ("apikey".into(), "API Key".into()),
+                                                ("oauth2".into(), "OAuth 2.0".into()),
                                             ],
                                             selected: auth_type,
                                             on_select: move |v: String| {
@@ -2302,6 +2656,31 @@ pub fn WorkspacePage() -> Element {
                                                 }
                                             }
                                         },
+                                        AuthSpec::OAuth2 { .. } => rsx! {
+                                            div { class: "oauth-status", { oauth_status_ui(&ep) } }
+                                            { label_field("Client ID", draft, AuthField::OAuth2ClientId) }
+                                            { secret_field("Client Secret", draft, AuthField::OAuth2ClientSecret) }
+                                            { label_field("授权地址 Auth URL", draft, AuthField::OAuth2AuthUrl) }
+                                            { label_field("令牌地址 Token URL", draft, AuthField::OAuth2TokenUrl) }
+                                            { label_field("Scope（空格分隔）", draft, AuthField::OAuth2Scope) }
+                                            { label_field("回调地址 Redirect URI", draft, AuthField::OAuth2RedirectUri) }
+                                            div { class: "row rf-mt-2",
+                                                button {
+                                                    class: "rf-btn rf-btn-primary rf-btn-sm",
+                                                    onclick: move |_| authorize_oauth2(st_oauth_authorize.clone(), draft),
+                                                    "立即授权"
+                                                }
+                                                button {
+                                                    class: "rf-btn rf-btn-sm rf-btn-ghost",
+                                                    onclick: move |_| clear_oauth2_token(st_oauth_clear.clone(), draft),
+                                                    "清除令牌"
+                                                }
+                                            }
+                                            div { class: "oauth-hint",
+                                                "授权码流流程：点击「立即授权」→ 浏览器打开授权页 → 授权后自动回调本机 9090 端口换取 token；token 过期后请求时自动用 refresh_token 静默刷新。"
+                                            }
+                                        },
+                                    }
                                     }
                                 },
                                 EditorTab::Docs => rsx! {
@@ -2349,6 +2728,7 @@ pub fn WorkspacePage() -> Element {
                                             BodySpec::UrlEncoded { .. } => rsx! { div { class: "hint", "URL 编码表单参数" } },
                                             BodySpec::Text { raw, .. } => rsx! { pre { class: "doc-body", "{raw}" } },
                                             BodySpec::Multipart { .. } => rsx! { div { class: "hint", "Multipart 表单" } },
+                                            BodySpec::GraphQL { .. } => rsx! { div { class: "hint", "GraphQL 查询（POST JSON）" } },
                                             BodySpec::None => rsx! { div { class: "hint", "无请求体" } },
                                         }
                                         h4 { "认证" }
@@ -2545,26 +2925,78 @@ pub fn WorkspacePage() -> Element {
                             div { class: "response",
                                 div { class: "resp-head",
                                     if let Some(r) = &resp {
-                                        span { class: if r.status < 400 { "status-ok" } else { "status-err" }, "{r.status}" }
-                                        span { "{r.duration_ms} ms" }
-                                        span { "{r.size_bytes} B" }
-                                        if r.truncated {
-                                            span { class: "warn-pill", "已截断（>20MB）" }
-                                        }
-                                        span { "{r.content_type}" }
-                                        div { class: "spacer" }
-                                        button {
-                                            class: "rf-btn rf-btn-sm",
-                                            onclick: move |_| save_response_example(
-                                                st_save.clone(),
-                                                ep.id,
-                                                resp_view.clone().expect("响应存在"),
-                                                examples,
-                                            ),
-                                            "保存为示例"
+                                        {
+                                            let status_cls = if r.status < 300 {
+                                                "rf-status-2xx"
+                                            } else if r.status < 400 {
+                                                "rf-status-3xx"
+                                            } else if r.status < 500 {
+                                                "rf-status-4xx"
+                                            } else {
+                                                "rf-status-5xx"
+                                            };
+                                            let size_str = human_size(r.size_bytes);
+                                            let body_text = resp_body_text.clone();
+                                            let st_cp = st_save.clone();
+                                            let st_ex = st_save.clone();
+                                            rsx! {
+                                                span { class: "rf-status-pill {status_cls}", "{r.status}" }
+                                                div { class: "resp-stats",
+                                                    span { title: "耗时", "{r.duration_ms} ms" }
+                                                    span { title: "响应大小", "{size_str}" }
+                                                    if r.truncated {
+                                                        span { class: "warn-pill", "已截断（>20MB）" }
+                                                    }
+                                                }
+                                                span { class: "resp-ctype", "{r.content_type}" }
+                                                div { class: "spacer" }
+                                                div { class: "rf-seg",
+                                                    button {
+                                                        class: if resp_pretty_flag { "active" } else { "" },
+                                                        onclick: move |_| {
+                                                            let mut p = resp_pretty;
+                                                            p.set(true);
+                                                        },
+                                                        "Pretty"
+                                                    }
+                                                    button {
+                                                        class: if resp_pretty_flag { "" } else { "active" },
+                                                        onclick: move |_| {
+                                                            let mut p = resp_pretty;
+                                                            p.set(false);
+                                                        },
+                                                        "Raw"
+                                                    }
+                                                }
+                                                button {
+                                                    class: "rf-btn rf-btn-ghost rf-btn-sm",
+                                                    title: "复制响应正文",
+                                                    onclick: move |_| {
+                                                        copy_text(&body_text);
+                                                        st_cp.toast_success("响应正文已复制");
+                                                    },
+                                                    CopyIcon {}
+                                                    "复制"
+                                                }
+                                                button {
+                                                    class: "rf-btn rf-btn-sm",
+                                                    onclick: move |_| {
+                                                        if let Some(resp_view) = resp_view.clone() {
+                                                            save_response_example(
+                                                                st_ex.clone(),
+                                                                ep.id,
+                                                                resp_view,
+                                                                examples,
+                                                            )
+                                                        }
+                                                    },
+                                                    "保存为示例"
+                                                }
+                                            }
                                         }
                                     }
                                     if sending_visible {
+                                        span { class: "rf-spin-sm" }
                                         span { class: "hint-inline", "发送中……" }
                                     }
                                 }
@@ -2578,22 +3010,35 @@ pub fn WorkspacePage() -> Element {
                                             }
                                         }
                                     }
-                                    pre { "{r.body}" }
+                                    pre { "{resp_body_text}" }
                                 }
                             }
                         }
-                        // M5：历史面板。
+                        // M5：历史抽屉（替代弹窗）。
                         if show_history_flag {
                             div {
-                                class: "modal-backdrop",
+                                class: "rf-drawer-backdrop",
                                 onclick: move |_| {
                                     let mut sh = show_history;
                                     sh.set(false);
                                 },
-                                div {
-                                    class: "modal history-modal",
-                                    onclick: |e| { e.stop_propagation(); },
+                            }
+                            div {
+                                class: "rf-drawer",
+                                onclick: |e| { e.stop_propagation(); },
+                                div { class: "rf-drawer-head",
                                     h3 { "请求历史" }
+                                    button {
+                                        class: "rf-tree-action",
+                                        title: "关闭",
+                                        onclick: move |_| {
+                                            let mut sh = show_history;
+                                            sh.set(false);
+                                        },
+                                        XIcon {}
+                                    }
+                                }
+                                div { class: "rf-drawer-body",
                                     div { class: "history-list",
                                         for h in history_list.clone() {
                                             { history_item(&h, selected_history) }
@@ -2614,16 +3059,12 @@ pub fn WorkspacePage() -> Element {
                         }
                         // M13：代码生成弹窗。
                         if codegen_open_flag {
-                            div {
-                                class: "modal-backdrop",
-                                onclick: move |_| {
+                            RFModal {
+                                on_close: move |_| {
                                     let mut co = codegen_open;
                                     co.set(false);
                                 },
-                                div {
-                                    class: "modal codegen-modal",
-                                    onclick: |e| { e.stop_propagation(); },
-                                    div { class: "row rf-mb-2",
+                                div { class: "row rf-mb-2",
                                         span { class: "kv-title", "生成客户端代码" }
                                         div { class: "spacer" }
                                         Dropdown {
@@ -2656,19 +3097,14 @@ pub fn WorkspacePage() -> Element {
                                     }
                                 }
                             }
-                        }
                         // M17：导入 cURL 弹窗。
                         if curl_open_flag {
-                            div {
-                                class: "modal-backdrop",
-                                onclick: move |_| {
+                            RFModal {
+                                on_close: move |_| {
                                     let mut co = curl_open;
                                     co.set(false);
                                 },
-                                div {
-                                    class: "modal curl-modal",
-                                    onclick: |e| { e.stop_propagation(); },
-                                    div { class: "kv-title", "从 cURL 命令导入" }
+                                div { class: "kv-title", "从 cURL 命令导入" }
                                     div {
                                         class: "hint",
                                         "粘贴浏览器开发者工具「Copy as cURL」复制的命令，自动识别方法、URL、请求头、请求体与 Basic 认证。",
@@ -2694,7 +3130,6 @@ pub fn WorkspacePage() -> Element {
                                 }
                             }
                         }
-                    }
                     if let Some((info, _)) = confirm.read().as_ref() {
                         ConfirmDialog {
                             info: Some(info.clone()),

@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use fox_storage::db::memory_pool;
 use fox_storage::repository as repo;
 
+use fox_core::model::WsMessageType;
+
 async fn pool() -> SqlitePool {
     memory_pool().await.unwrap()
 }
@@ -83,9 +85,15 @@ async fn delete_folder_cascades_subtree() {
     let db = pool().await;
     let project = repo::create_project(&db, "P", "").await.unwrap();
 
-    let root = repo::create_folder(&db, project.id, None, "根").await.unwrap();
-    let child = repo::create_folder(&db, project.id, Some(root.id), "子").await.unwrap();
-    let grand = repo::create_folder(&db, project.id, Some(child.id), "孙").await.unwrap();
+    let root = repo::create_folder(&db, project.id, None, "根")
+        .await
+        .unwrap();
+    let child = repo::create_folder(&db, project.id, Some(root.id), "子")
+        .await
+        .unwrap();
+    let grand = repo::create_folder(&db, project.id, Some(child.id), "孙")
+        .await
+        .unwrap();
 
     let ep_root = repo::create_endpoint(&db, project.id, Some(root.id), "R")
         .await
@@ -113,7 +121,9 @@ async fn delete_folder_cascades_subtree() {
     // 子树外接口不受影响。
     assert!(repo::get_endpoint(&db, ep_free.id).await.is_ok());
     // 删除不存在的文件夹返回 NotFound。
-    assert!(repo::delete_folder(&db, uuid::Uuid::new_v4()).await.is_err());
+    assert!(repo::delete_folder(&db, uuid::Uuid::new_v4())
+        .await
+        .is_err());
 }
 
 #[tokio::test]
@@ -262,4 +272,68 @@ async fn settings_roundtrip() {
         repo::get_setting(&db, "port").await.unwrap(),
         Some("4011".into())
     );
+}
+
+#[tokio::test]
+async fn ws_message_enqueue_list_delete() {
+    let db = pool().await;
+
+    repo::enqueue_ws_message(&db, "ws://a", WsMessageType::Text, "hello")
+        .await
+        .unwrap();
+    repo::enqueue_ws_message(&db, "ws://a", WsMessageType::Binary, "AQID")
+        .await
+        .unwrap();
+    // 其它目标地址互不影响。
+    repo::enqueue_ws_message(&db, "ws://b", WsMessageType::Ping, "p1")
+        .await
+        .unwrap();
+
+    let list = repo::list_pending_ws_messages(&db, "ws://a").await.unwrap();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].message_type, WsMessageType::Text);
+    assert_eq!(list[0].payload, "hello");
+    assert_eq!(list[1].message_type, WsMessageType::Binary);
+    assert_eq!(list[1].payload, "AQID");
+
+    repo::delete_ws_messages(&db, &[list[0].id]).await.unwrap();
+    let after = repo::list_pending_ws_messages(&db, "ws://a").await.unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].id, list[1].id);
+    assert_eq!(
+        repo::list_pending_ws_messages(&db, "ws://b")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn ws_message_purges_expired() {
+    let db = pool().await;
+    let record = repo::enqueue_ws_message(&db, "ws://a", WsMessageType::Text, "old")
+        .await
+        .unwrap();
+    // 把记录改到 48 小时前，模拟过期消息。
+    let old = (chrono::Utc::now() - chrono::Duration::hours(48)).to_rfc3339();
+    sqlx::query("UPDATE ws_messages SET created_at = ? WHERE id = ?")
+        .bind(old)
+        .bind(record.id.to_string())
+        .execute(&db)
+        .await
+        .unwrap();
+
+    // 24 小时内的新消息不受影响。
+    repo::enqueue_ws_message(&db, "ws://a", WsMessageType::Text, "fresh")
+        .await
+        .unwrap();
+
+    let removed = repo::purge_expired_ws_messages(&db, "ws://a", chrono::Duration::hours(24))
+        .await
+        .unwrap();
+    assert_eq!(removed, 1);
+    let list = repo::list_pending_ws_messages(&db, "ws://a").await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].payload, "fresh");
 }

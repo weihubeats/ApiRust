@@ -3,12 +3,12 @@
 > 约 21 MB 的轻量跨平台 API 调试工具。一个安装包，开箱即用。
 
 <!--
-  示例图片占位：把真实截图放到 docs/imags/ 后替换下面两行路径即可。
-  推荐：浅色/深色主题各一张主界面截图 + 一张首页截图。
+  示例图片：docs/imags/home.png（主页）、docs/imags/api-home.png（工作区）。
+  更新截图后替换下面两行的路径即可。
 -->
-[![RustFox 主页截图](docs/imags/YOUR-HOME-SCREENSHOT.png)](docs/imags/YOUR-HOME-SCREENSHOT.png)
+[![RustFox 主页截图](docs/imags/home.png)](docs/imags/home.png)
 
-[![RustFox 工作区截图](docs/imags/YOUR-WORKSPACE-SCREENSHOT.png)](docs/imags/YOUR-WORKSPACE-SCREENSHOT.png)
+[![RustFox 工作区截图](docs/imags/api-home.png)](docs/imags/api-home.png)
 
 ## 为什么选择 RustFox？
 

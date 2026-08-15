@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" font-family="-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <style>
+      .box { fill: #ffffff; stroke: #d8d4e3; stroke-width: 2; rx: 12 }
+      .layer { fill: #f3f0fb; stroke: #d8d4e3; stroke-width: 2; rx: 16 }
+      .title { font-size: 20px; font-weight: 700; fill: #2c2640 }
+      .sub { font-size: 14px; fill: #6b6590 }
+      .item { font-size: 14px; fill: #333; font-weight: 600 }
+      .item2 { font-size: 13px; fill: #6b6590 }
+      .arrow { stroke: #7c69f5; stroke-width: 2.5; fill: none; marker-end: url(#ah) }
+      .arrow2 { stroke: #b3a9e8; stroke-width: 2; stroke-dasharray: 6 5; fill: none; marker-end: url(#ah2) }
+      .lbl { font-size: 13px; fill: #7c69f5; font-weight: 600 }
+      .lbl2 { font-size: 13px; fill: #8d87ab }
+    </style>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#7c69f5"/></marker>
+    <marker id="ah2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#b3a9e8"/></marker>
+  </defs>
+  <rect width="1200" height="900" fill="#faf9fd"/>
+
+  <text x="600" y="46" text-anchor="middle" font-size="26" font-weight="800" fill="#2c2640">RustFox 系统架构（Tauri 2）</text>
+  <text x="600" y="70" text-anchor="middle" font-size="14" fill="#8d87ab">Vue 3 前端 ── Tauri IPC ── Rust 领域逻辑 ── SQLite 本地存储</text>
+
+  <!-- Layer 1: 前端 -->
+  <rect class="layer" x="60" y="100" width="1080" height="220"/>
+  <text x="80" y="130" class="title">Layer 1 · 前端（Vue 3 + TypeScript）</text>
+  <text x="80" y="152" class="sub">frontend/ · Vite 6 · Pinia · Tailwind 4 · WebView 渲染（macOS WKWebView / Windows WebView2 / Linux WebKitGTK）</text>
+
+  <rect class="box" x="90" y="175" width="200" height="70"/>
+  <text x="190" y="203" text-anchor="middle" class="item">视图层 · router-view</text>
+  <text x="190" y="225" text-anchor="middle" class="item2">Home / Workspace / Settings</text>
+
+  <rect class="box" x="320" y="175" width="200" height="70"/>
+  <text x="420" y="203" text-anchor="middle" class="item">状态层 · Pinia store</text>
+  <text x="420" y="225" text-anchor="middle" class="item2">stores/workspace.ts</text>
+
+  <rect class="box" x="550" y="175" width="200" height="70"/>
+  <text x="650" y="203" text-anchor="middle" class="item">组件库 · components/</text>
+  <text x="650" y="225" text-anchor="middle" class="item2">Toast / Dialog / Tree …</text>
+
+  <rect class="box" x="780" y="175" width="330" height="70"/>
+  <text x="945" y="203" text-anchor="middle" class="item">Tauri API 桥 · src/lib/</text>
+  <text x="945" y="225" text-anchor="middle" class="item2">invoke('plugin:fox|...') · 事件监听 · 文件对话框</text>
+
+  <!-- Layer 2: 命令层 -->
+  <rect class="layer" x="60" y="350" width="1080" height="170"/>
+  <text x="80" y="380" class="title">Layer 2 · 命令层（Tauri 插件 fox）</text>
+  <text x="80" y="402" class="sub">crates/fox-tauri/ · Builder::new("fox") 注册全部命令 · 独立 Cargo workspace · 生成 plugin:fox|* 命令</text>
+
+  <rect class="box" x="90" y="420" width="240" height="70"/>
+  <text x="210" y="448" text-anchor="middle" class="item">HTTP 命令组</text>
+  <text x="210" y="470" text-anchor="middle" class="item2">request / history / import</text>
+
+  <rect class="box" x="360" y="420" width="240" height="70"/>
+  <text x="480" y="448" text-anchor="middle" class="item">数据命令组</text>
+  <text x="480" y="470" text-anchor="middle" class="item2">projects / folders / apis / envs</text>
+
+  <rect class="box" x="630" y="420" width="240" height="70"/>
+  <text x="750" y="448" text-anchor="middle" class="item">Mock 命令组</text>
+  <text x="750" y="470" text-anchor="middle" class="item2">mock server / rules / docs</text>
+
+  <rect class="box" x="900" y="420" width="210" height="70"/>
+  <text x="1005" y="448" text-anchor="middle" class="item">系统命令组</text>
+  <text x="1005" y="470" text-anchor="middle" class="item2">backup / restore / settings</text>
+
+  <!-- Layer 3: 领域层 -->
+  <rect class="layer" x="60" y="560" width="1080" height="210"/>
+  <text x="80" y="590" class="title">Layer 3 · 领域层（纯 Rust 库，无 UI 依赖）</text>
+  <text x="80" y="612" class="sub">crates/ · 其余 crate 为独立 Cargo workspace · 命令层经路径依赖直接调用</text>
+
+  <rect class="box" x="90" y="630" width="170" height="70"/>
+  <text x="175" y="658" text-anchor="middle" class="item">fox-http</text>
+  <text x="175" y="680" text-anchor="middle" class="item2">reqwest 请求引擎</text>
+
+  <rect class="box" x="290" y="630" width="170" height="70"/>
+  <text x="375" y="658" text-anchor="middle" class="item">fox-storage</text>
+  <text x="375" y="680" text-anchor="middle" class="item2">SQLite 读写层</text>
+
+  <rect class="box" x="490" y="630" width="170" height="70"/>
+  <text x="575" y="658" text-anchor="middle" class="item">fox-oauth</text>
+  <text x="575" y="680" text-anchor="middle" class="item2">OAuth 2.0 流程</text>
+
+  <rect class="box" x="690" y="630" width="170" height="70"/>
+  <text x="775" y="658" text-anchor="middle" class="item">fox-test</text>
+  <text x="775" y="680" text-anchor="middle" class="item2">测试脚本与压测</text>
+
+  <rect class="box" x="890" y="630" width="220" height="70"/>
+  <text x="1000" y="658" text-anchor="middle" class="item">fox-openapi / fox-shared</text>
+  <text x="1000" y="680" text-anchor="middle" class="item2">OpenAPI 导入导出 · 共享类型</text>
+
+  <!-- 数据层 -->
+  <rect class="box" x="420" y="810" width="360" height="60"/>
+  <text x="600" y="837" text-anchor="middle" class="item">SQLite · rustfox.db（AES-256-GCM 加密环境变量）</text>
+  <text x="600" y="857" text-anchor="middle" class="item2">系统数据目录 under RustFox/master.key</text>
+
+  <!-- 箭头 -->
+  <path class="arrow" d="M945 250 L945 330"/>
+  <text x="960" y="295" class="lbl">invoke (IPC)</text>
+  <text x="960" y="312" class="lbl2">前端→命令层</text>
+
+  <path class="arrow2" d="M600 250 L600 335"/>
+  <text x="560" y="295" class="lbl2">事件回调</text>
+
+  <path class="arrow" d="M600 490 L600 560"/>
+  <text x="615" y="530" class="lbl">路径依赖调用</text>
+
+  <path class="arrow" d="M600 700 L600 790"/>
+  <text x="615" y="750" class="lbl">rusqlite 读写</text>
+</svg>

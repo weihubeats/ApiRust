@@ -122,9 +122,7 @@ UI 规范：`src/style.css` 定义设计令牌（`--bg-* / --text-* / --accent: 
 
 ### 首页（/projects）
 
-![RustFox 首页布局](imags/ui-home.png)
-
-（可编辑源文件：[imags/ui-home.svg](imags/ui-home.svg)）
+![RustFox 首页布局](imags/home.png)
 
 - 顶栏：RustFox 品牌 + 设置。
 - 左侧导航：仪表板（当前页）/ API 项目 / 集合 / API 文档 / 设置（未实现项 Toast 提示）。
@@ -133,9 +131,7 @@ UI 规范：`src/style.css` 定义设计令牌（`--bg-* / --text-* / --accent: 
 
 ### 工作区（/workspace）
 
-![RustFox 工作区布局](imags/ui-workspace.png)
-
-（可编辑源文件：[imags/ui-workspace.svg](imags/ui-workspace.svg)）
+![RustFox 工作区布局](imags/api-home.png)
 
 - 顶栏：品牌 / 项目切换 / 环境切换 / Mock 状态指示灯（`127.0.0.1:4010`）/ 搜索 /
   文档与 Mock 下拉 / 设置。

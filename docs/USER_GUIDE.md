@@ -57,11 +57,11 @@
 
 首页布局：
 
-![RustFox 首页布局](imags/ui-home.png)
+![RustFox 首页布局](imags/home.png)
 
 工作区布局：
 
-![RustFox 工作区布局](imags/ui-workspace.png)
+![RustFox 工作区布局](imags/api-home.png)
 
 ## 3. 项目管理
 

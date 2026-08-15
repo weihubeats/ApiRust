@@ -2,7 +2,9 @@
  * useFoxApi：Tauri IPC 的统一前端封装（Vue 3 Composable）。
  *
  * 职责：
- * 1. 把 `invoke('command', args)` 收敛为类型安全的 API 方法（类型来自 foxApi.d.ts）；
+ * 1. 把 `invoke('plugin:fox|command', args)` 收敛为类型安全的 API 方法（类型来自 foxApi.d.ts）；
+ *    前缀 `plugin:fox` 对应 fox-tauri 插件名（`Builder::new("fox")`），
+ *    插件命令必须带命名空间，与 capabilities 里 `fox:default` 权限对应；
  * 2. 统一错误处理：后端 `{ code, message }` → 携带 code 的 Error；
  * 3. 维护「当前激活项目 / 环境」的响应式缓存，与后端 RwLock 状态保持单向同步；
  * 4. `pending` 标志位供全局 loading 指示。
@@ -19,13 +21,32 @@ import { invoke } from '@tauri-apps/api/core'
 import { ref } from 'vue'
 import { useProgress } from './useProgress'
 import type {
+  AuthSpec,
+  BackupSummary,
+  BodySpec,
+  CodeLang,
   CommandError,
+  CurlParsed,
   Endpoint,
+  EndpointResult,
   Environment,
   ExecuteRequestArgs,
   ExecuteResponse,
+  Folder,
+  HttpMethod,
+  ImportResult,
+  KeyValue,
+  LoadResult,
+  MockRule,
+  OAuth2Token,
   Project,
+  RequestHistory,
+  RequestSpec,
+  ResponseExample,
 } from '../types/foxApi'
+
+/** 插件命令统一前缀：`plugin:{插件名}|{命令名}`。 */
+const PLUGIN = 'plugin:fox'
 
 /** 后端 `{ code, message }` → 前端 Error（code 挂载在 err.code，供程序化分支）。 */
 export function toFoxError(raw: unknown): Error {
@@ -50,10 +71,10 @@ function warnDecryptionFailed(): void {
   window.alert(DECRYPT_WARNING)
 }
 
-/** 统一的带错误映射的 invoke 封装。 */
+/** 统一的带错误映射的 invoke 封装（自动加插件命名空间前缀）。 */
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
-    return await invoke<T>(command, args)
+    return await invoke<T>(`${PLUGIN}|${command}`, args)
   } catch (e) {
     const err = toFoxError(e)
     if ('code' in err && err.code === 'DECRYPT') {
@@ -126,6 +147,19 @@ export function useFoxApi() {
   const duplicateEndpoint = (endpointId: string) =>
     run(() => call<Endpoint>('duplicate_endpoint', { endpointId }))
 
+  // ---------- 文件夹 ----------
+  const listFolders = (projectId: string) =>
+    run(() => call<Folder[]>('list_folders', { projectId }))
+
+  const saveFolder = (folder: Folder) => run(() => call<Folder>('save_folder', { folder }))
+
+  const deleteFolder = (folderId: string) =>
+    run(() => call<void>('delete_folder', { folderId }))
+
+  // ---------- cURL 导入 ----------
+  const parseCurlCommand = (command: string) =>
+    run(() => call<CurlParsed>('parse_curl_command', { command }))
+
   // ---------- 环境 ----------
   const listEnvironments = (projectId: string) =>
     run(() => call<Environment[]>('list_environments', { projectId }))
@@ -147,6 +181,80 @@ export function useFoxApi() {
   const executeRequest = (args: ExecuteRequestArgs) =>
     run(() => call<ExecuteResponse>('execute_request', { args }))
 
+  // ---------- 响应示例 ----------
+  const listExamples = (endpointId: string) =>
+    run(() => call<ResponseExample[]>('list_examples', { endpointId }))
+
+  const saveExample = (example: ResponseExample) =>
+    run(() => call<ResponseExample>('save_example', { example }))
+
+  const deleteExample = (exampleId: string) =>
+    run(() => call<void>('delete_example', { exampleId }))
+
+  // ---------- OAuth2 ----------
+  const oauthAuthorize = (auth: AuthSpec) =>
+    run(() => call<OAuth2Token>('oauth_authorize', { auth }))
+
+  const oauthAccessToken = (auth: AuthSpec) =>
+    run(() => call<string>('oauth_access_token', { auth }))
+
+  // ---------- 代码生成 ----------
+  const codegenRender = (args: {
+    lang: CodeLang
+    method: HttpMethod
+    url: string
+    headers: KeyValue[]
+    body: BodySpec
+    auth: AuthSpec
+  }) => run(() => call<string>('codegen_render', { args }))
+
+  // ---------- 请求历史 ----------
+  const listRequestHistories = (projectId: string, limit?: number) =>
+    run(() => call<RequestHistory[]>('list_request_histories', { projectId, limit }))
+
+  // ---------- Mock 服务 ----------
+  const mockStart = () => run(() => call<string>('mock_start'))
+
+  const mockStop = () => run(() => call<void>('mock_stop'))
+
+  const mockStatus = () => run(() => call<string | null>('mock_status'))
+
+  // ---------- Mock 规则 ----------
+  const listMockRules = (projectId: string) =>
+    run(() => call<MockRule[]>('list_mock_rules', { projectId }))
+
+  const saveMockRule = (rule: MockRule) => run(() => call<MockRule>('save_mock_rule', { rule }))
+
+  const deleteMockRule = (ruleId: string) =>
+    run(() => call<void>('delete_mock_rule', { ruleId }))
+
+  // ---------- 备份/恢复 ----------
+  const backupExport = (projectId: string) =>
+    run(() => call<string>('backup_export', { projectId }))
+
+  const backupRestore = (text: string) =>
+    run(() => call<BackupSummary>('backup_restore', { text }))
+
+  // ---------- 导入导出 ----------
+  const importDocument = (text: string) =>
+    run(() => call<ImportResult>('import_document', { text }))
+
+  const exportOpenapi = (projectId: string) =>
+    run(() => call<string>('export_openapi', { projectId }))
+
+  // ---------- 测试 / 压测 ----------
+  const testEndpoint = (args: { endpoint: Endpoint; url: string; environment_id: string | null }) =>
+    run(() => call<EndpointResult>('test_endpoint', { args }))
+
+  const loadTest = (args: {
+    url: string
+    method: HttpMethod
+    spec: RequestSpec
+    environment_id: string | null
+    concurrency: number
+    total: number
+  }) => run(() => call<LoadResult>('load_test', { args }))
+
   return {
     pending,
     activeProject,
@@ -161,11 +269,34 @@ export function useFoxApi() {
     saveEndpoint,
     deleteEndpoint,
     duplicateEndpoint,
+    listFolders,
+    saveFolder,
+    deleteFolder,
+    parseCurlCommand,
     listEnvironments,
     saveEnvironment,
     setActiveEnvironment,
     getActiveEnvironment,
     executeRequest,
+    listExamples,
+    saveExample,
+    deleteExample,
+    oauthAuthorize,
+    oauthAccessToken,
+    codegenRender,
+    listRequestHistories,
+    mockStart,
+    mockStop,
+    mockStatus,
+    listMockRules,
+    saveMockRule,
+    deleteMockRule,
+    backupExport,
+    backupRestore,
+    importDocument,
+    exportOpenapi,
+    testEndpoint,
+    loadTest,
   }
 }
 

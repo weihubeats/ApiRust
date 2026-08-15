@@ -44,7 +44,7 @@ export const TOAST_TYPE_META: Record<ToastType, { label: string; color: string }
 
 function push(item: Omit<ToastItem, 'id'>): number {
   const id = nextId++
-  const entry: ToastItem = { duration: 3500, ...item, id }
+  const entry: ToastItem = { ...item, id, duration: item.duration ?? 3500 }
   toasts.value = [...toasts.value.slice(-(MAX_VISIBLE - 1)), entry]
   if (entry.duration > 0) {
     window.setTimeout(() => dismiss(id), entry.duration)

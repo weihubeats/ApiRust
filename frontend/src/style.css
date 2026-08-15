@@ -1,0 +1,83 @@
+/**
+ * RustFox 设计令牌（CSS 变量）+ 全局基础样式。
+ *
+ * 令牌与 crates/fox-desktop/src/styles.rs 的 --rf-* 一一对应：
+ * 深色为默认主题，light 通过根元素 [data-theme="light"] 覆盖。
+ * 各视图/组件的样式均引用 var(--rf-*)，这里只负责定义。
+ */
+:root {
+  --rf-bg: #0b1220;
+  --rf-bg-panel: #111827;
+  --rf-bg-panel-2: #1f2937;
+  --rf-border: #1f2937;
+  --rf-input-bg: #0f172a;
+  --rf-text: #f9fafb;
+  --rf-text-secondary: #9ca3af;
+  --rf-text-muted: #6b7280;
+  --rf-accent: #6366f1;
+  --rf-accent-weak: #4f46e5;
+  --rf-danger: #ef4444;
+  --rf-warning: #f59e0b;
+  --rf-success: #10b981;
+  --rf-info: #3b82f6;
+  --rf-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --rf-radius: 8px;
+  --rf-radius-sm: 6px;
+}
+
+[data-theme='light'] {
+  --rf-bg: #f3f4f6;
+  --rf-bg-panel: #ffffff;
+  --rf-bg-panel-2: #f3f4f6;
+  --rf-border: #e5e7eb;
+  --rf-input-bg: #ffffff;
+  --rf-text: #111827;
+  --rf-text-secondary: #4b5563;
+  --rf-text-muted: #9ca3af;
+  --rf-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--rf-bg);
+  color: var(--rf-text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+#app,
+.rf-app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--rf-border);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--rf-text-muted);
+}

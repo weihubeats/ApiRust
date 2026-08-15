@@ -18,7 +18,9 @@
  *
  * `snapshot` 用法（提交时校验整个表单）：
  * ```ts
- * if (nameField.validate()) { /* 通过 */ }
+ * if (nameField.validate()) {
+ *   // 通过
+ * }
  * ```
  */
 import { computed, ref } from 'vue'

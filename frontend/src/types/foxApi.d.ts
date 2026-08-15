@@ -188,6 +188,22 @@ export interface ExecuteRequestArgs {
   method: HttpMethod
   spec: RequestSpec
   environment_id: string | null
+  project_id?: string | null
+  endpoint_id?: string | null
+}
+
+/** 请求历史（Rust `RequestHistory`，fox-tauri `list_request_histories` 返回）。 */
+export interface RequestHistory {
+  id: string
+  project_id: string
+  endpoint_id: string | null
+  method: string
+  url: string
+  status: number | null
+  duration_ms: number | null
+  request_summary_json: string
+  response_summary_json: string
+  created_at: string
 }
 
 /** 执行请求出参（Rust `ExecuteResponse`）。 */
@@ -199,4 +215,129 @@ export interface ExecuteResponse {
   duration_ms: number
   size_bytes: number
   truncated: boolean
+}
+
+/** cURL 命令解析结果（Rust `CurlParsed`，fox-tauri `parse_curl_command` 返回）。 */
+export interface CurlParsed {
+  url: string
+  method: HttpMethod
+  headers: KeyValue[]
+  body: BodySpec | null
+  auth: AuthSpec
+}
+
+/** 响应示例（Rust `ResponseExample`，fox-tauri `list_examples` 等返回）。 */
+export interface ResponseExample {
+  id: string
+  endpoint_id: string
+  name: string
+  status: number
+  headers: Record<string, string>
+  body: string
+  content_type: string
+  created_at: string
+  updated_at: string
+}
+
+/** 代码生成语言（Rust `Lang`，fox-tauri `codegen_render` 的 `lang` 取值）。 */
+export type CodeLang = 'curl' | 'python' | 'js' | 'go' | 'java' | 'php'
+
+/** 备份恢复摘要（fox-tauri `backup_restore` 返回）。 */
+export interface BackupSummary {
+  id: string
+  name: string
+  folders: number
+  endpoints: number
+  environments: number
+  mock_rules: number
+  response_examples: number
+}
+
+/** 导入文档格式（Rust `ImportFormat`）。 */
+export type ImportFormat = 'openapi30' | 'swagger20' | 'postman21' | 'unknown'
+
+/** 导入的示例（Rust `ImportedExample`）。 */
+export interface ImportedExample {
+  name: string
+  status: number
+  content_type: string
+  headers: Record<string, string>
+  body: string
+}
+
+/** 导入的接口（Rust `ImportedEndpoint`，fox-tauri `import_document` 返回）。 */
+export interface ImportedEndpoint {
+  name: string
+  method: HttpMethod
+  path: string
+  description: string
+  request: RequestSpec
+  examples: ImportedExample[]
+  folder_hint: string | null
+}
+
+/** 导入解析结果。 */
+export interface ImportResult {
+  format: ImportFormat
+  endpoints: ImportedEndpoint[]
+}
+
+/** 单条断言结果（Rust `Outcome`）。 */
+export interface Outcome {
+  description: string
+  passed: boolean
+  reason: string | null
+}
+
+/** 单接口测试结果（Rust `EndpointResult`）。 */
+export interface EndpointResult {
+  endpoint_id: string
+  endpoint_name: string
+  method: string
+  path: string
+  ok: boolean
+  status: number | null
+  duration_ms: number | null
+  request_error: string | null
+  outcomes: Outcome[]
+}
+
+/** 压测结果（Rust `LoadResult`）。 */
+export interface LoadResult {
+  total: number
+  ok: number
+  failed: number
+  total_ms: number
+  avg_ms: number
+  p50_ms: number
+  p90_ms: number
+  p99_ms: number
+  rps: number
+  errors: string[]
+}
+
+/** Mock 匹配项（Rust `MockMatchItem`，query / header 匹配键值）。 */
+export interface MockMatchItem {
+  key: string
+  value: string
+}
+
+/** Mock 规则（Rust `MockRule`，fox-tauri `list_mock_rules` 等返回）。 */
+export interface MockRule {
+  id: string
+  project_id: string
+  endpoint_id: string | null
+  name: string
+  method: HttpMethod
+  path: string
+  match_query: MockMatchItem[]
+  match_headers: MockMatchItem[]
+  response_status: number
+  response_headers: Record<string, string>
+  response_body_template: string
+  delay_ms: number
+  enabled: boolean
+  priority: number
+  created_at: string
+  updated_at: string
 }

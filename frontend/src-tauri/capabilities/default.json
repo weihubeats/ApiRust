@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "RustFox 主窗口能力：core 默认能力 + fox 插件全部命令（默认权限集）",
+  "windows": ["main"],
+  "permissions": ["core:default", "fox:default", "window-state:default"]
+}

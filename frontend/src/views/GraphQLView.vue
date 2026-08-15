@@ -14,35 +14,46 @@
  * crates/fox-desktop/src/styles.rs 的 DESIGN_SYSTEM_CSS 对齐）。
  */
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { useFoxApi } from '../composables/useFoxApi'
 import { useToast } from '../composables/useToast'
+import { useWorkspaceStore } from '../stores/workspace'
 import type { BodySpec, ExecuteRequestArgs, ExecuteResponse, GraphQLSpec } from '../types/foxApi'
 
-const props = defineProps<{
-  url: string
-  environmentId: string | null
-  /** 当前接口的 BodySpec（mode !== 'graphql' 时使用默认空模板） */
-  body: BodySpec
-}>()
+const router = useRouter()
+
+const props = withDefaults(
+  defineProps<{
+    url?: string
+    environmentId?: string | null
+    /** 当前接口的 BodySpec（mode !== 'graphql' 时使用默认空模板） */
+    body?: BodySpec
+  }>(),
+  { url: '', environmentId: null, body: undefined },
+)
 
 const emit = defineEmits<{
   (e: 'save', body: BodySpec): void
 }>()
+
+const store = useWorkspaceStore()
 
 const api = useFoxApi()
 const toast = useToast()
 
 // ---------- 编辑器状态 ----------
 function initSpec(): GraphQLSpec {
-  if (props.body.mode === 'graphql') {
+  if (props.body?.mode === 'graphql') {
     return { ...props.body.spec }
   }
   return { query: '', variables: '{}', operation_name: '' }
 }
 
 const gql = ref<GraphQLSpec>(initSpec())
-const url = ref(props.url)
+const url = ref(props.url ?? '')
 const sending = ref(false)
+const queryEditor = ref<HTMLElement | null>(null)
+const varsEditor = ref<HTMLElement | null>(null)
 const saving = ref(false)
 const statusText = ref('')
 const response = ref<{ status: number; body: string; durationMs: number } | null>(null)
@@ -94,7 +105,7 @@ function highlightGraphQL(code: string): string {
   let last = 0
   for (const m of code.matchAll(re)) {
     out += escapeHtml(code.slice(last, m.index))
-    const [full, comment, str, variable, ident, num, punct] = m
+    const [full, comment, str, variable, ident, num, _punct] = m
     if (comment) out += `<span class="hl-c">${escapeHtml(full)}</span>`
     else if (str) out += `<span class="hl-s">${escapeHtml(full)}</span>`
     else if (variable) out += `<span class="hl-v">${escapeHtml(full)}</span>`
@@ -177,7 +188,7 @@ function buildArgs(): ExecuteRequestArgs {
       follow_redirects: true,
       tests: null,
     },
-    environment_id: props.environmentId,
+    environment_id: props.environmentId ?? store.activeEnvId ?? null,
   }
 }
 
@@ -386,6 +397,7 @@ async function copyCode() {
 <template>
   <div class="gql-root">
     <div class="row rf-mb-2">
+      <button class="rf-btn rf-btn-sm" type="button" @click="router.push('/workspace')">← 返回工作区</button>
       <input v-model="url" class="rf-input gql-url" placeholder="GraphQL 接口地址（支持 &#123;&#123;变量&#125;&#125; 与环境替换）" spellcheck="false" />
       <button class="rf-btn rf-btn-sm" :disabled="saving" @click="save">保存</button>
       <button class="rf-btn rf-btn-sm rf-btn-primary" :disabled="sending" @click="send">

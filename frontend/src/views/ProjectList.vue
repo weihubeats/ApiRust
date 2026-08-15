@@ -11,6 +11,7 @@
  * 样式沿用 rf- 设计系统（变量与 fox-desktop/src/styles.rs 对齐）。
  */
 import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { useFoxApi } from '../composables/useFoxApi'
 import { useFieldValidation } from '../composables/useFieldValidation'
 import { useToast } from '../composables/useToast'
@@ -18,6 +19,7 @@ import type { Project } from '../types/foxApi'
 
 const api = useFoxApi()
 const toast = useToast()
+const router = useRouter()
 
 const NAME_MAX = 50
 
@@ -77,11 +79,11 @@ async function enter(project: Project) {
     await api.setActiveProject(project.id)
     await api.listEndpoints(project.id)
     toast.info(`已进入项目：${project.name}`)
+    router.push('/workspace')
   } catch (e) {
-    toast.error('进入项目失败', {
-      message: e instanceof Error ? e.message : String(e),
-      duration: 6000,
-    })
+    const message = e instanceof Error ? e.message : String(e)
+    console.error('[ProjectList.enter]', e)
+    toast.error('进入项目失败', { message, duration: 6000 })
   }
 }
 

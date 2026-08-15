@@ -1,0 +1,18 @@
+[package]
+name = "rustfox-app"
+version = "0.0.1"
+edition = "2021"
+description = "RustFox Tauri 2 应用壳：装配 fox-tauri 插件与窗口生命周期"
+
+# 独立工作区：不加入仓库根 workspace，避免 tauri/wry 依赖拖慢主仓构建。
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-window-state = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+fox-tauri = { path = "../../crates/fox-tauri" }

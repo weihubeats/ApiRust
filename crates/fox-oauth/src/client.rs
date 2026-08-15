@@ -739,41 +739,43 @@ mod tests {
 
             // IdP 收到：authorize(带 response_type/client_id/redirect_uri/state) 与
             // authorization_code 换 token。
-            let log = log.lock().unwrap();
-            let auth_line = log
-                .iter()
-                .find(|(k, _)| k == "authorize")
-                .map(|(_, v)| v.clone())
-                .unwrap();
-            for expected in [
-                "response_type\": \"code\"",
-                "client_id\": \"c-e2e\"",
-                &format!("redirect_uri\": \"{redirect_uri}\""),
-                "state\": \"",
-                "scope\": \"read\"",
-            ] {
+            {
+                let log = log.lock().unwrap();
+                let auth_line = log
+                    .iter()
+                    .find(|(k, _)| k == "authorize")
+                    .map(|(_, v)| v.clone())
+                    .unwrap();
+                for expected in [
+                    "response_type\": \"code\"",
+                    "client_id\": \"c-e2e\"",
+                    &format!("redirect_uri\": \"{redirect_uri}\""),
+                    "state\": \"",
+                    "scope\": \"read\"",
+                ] {
+                    assert!(
+                        auth_line.contains(expected),
+                        "authorize 参数缺失 {expected}: {auth_line}"
+                    );
+                }
+                let token_line = log
+                    .iter()
+                    .find(|(k, _)| k == "token")
+                    .map(|(_, v)| v.clone())
+                    .unwrap();
                 assert!(
-                    auth_line.contains(expected),
-                    "authorize 参数缺失 {expected}: {auth_line}"
+                    token_line.contains("grant_type=authorization_code"),
+                    "{token_line}"
+                );
+                assert!(
+                    token_line.contains("code=Some(\"mock-code-1\")"),
+                    "{token_line}"
+                );
+                assert!(
+                    token_line.contains("client_id=Some(\"c-e2e\")"),
+                    "{token_line}"
                 );
             }
-            let token_line = log
-                .iter()
-                .find(|(k, _)| k == "token")
-                .map(|(_, v)| v.clone())
-                .unwrap();
-            assert!(
-                token_line.contains("grant_type=authorization_code"),
-                "{token_line}"
-            );
-            assert!(
-                token_line.contains("code=Some(\"mock-code-1\")"),
-                "{token_line}"
-            );
-            assert!(
-                token_line.contains("client_id=Some(\"c-e2e\")"),
-                "{token_line}"
-            );
             // 令牌应已入缓存，后续 access_token_for 直接命中。
             assert_eq!(access_token_for(&auth).await.unwrap(), "at-code-1");
         });

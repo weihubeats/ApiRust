@@ -87,8 +87,7 @@ pub async fn run_load(
         }));
     }
 
-    let mut done = 0usize;
-    for h in handles {
+    for (done, h) in handles.into_iter().enumerate() {
         match h.await {
             Ok((is_ok, _status, d, err)) => {
                 samples.push(d);
@@ -105,7 +104,6 @@ pub async fn run_load(
             }
             Err(_) => failed += 1,
         }
-        done += 1;
         if let Some(cb) = progress {
             cb(LoadProgress {
                 done,

@@ -4,6 +4,11 @@
 > 目标是实现一个本地优先、单机可用的 API 管理工具，覆盖 API 设计、调试、Mock、测试、文档管理等核心能力。
 > 第一阶段目标是可交付的 MVP，后续再扩展协作与云端能力。
 
+> **架构迁移说明(2026-08)**:UI 层已从 Dioxus 桌面(`crates/fox-desktop`,已删除)迁移至
+> Tauri 2(`frontend/src-tauri` + `frontend/` Vue 3)。本文下方目录结构为历史设计蓝图,
+> 当前实际结构以 [TAURI_MIGRATION.md](TAURI_MIGRATION.md) 与仓库为准,`fox-core/fox-storage/fox-http/
+> fox-openapi/fox-mock/fox-test/fox-oauth/fox-backup/fox-codegen/fox-smoke` 核心 crate 全部保留。
+
 ---
 
 ## 0. 给 AI Coder 的强制执行指令

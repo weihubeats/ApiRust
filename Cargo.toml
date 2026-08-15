@@ -12,7 +12,6 @@ members = [
     "crates/fox-codegen",
     "crates/fox-oauth",
     "crates/fox-smoke",
-    "crates/fox-desktop",
 ]
 
 [workspace.package]
@@ -71,5 +70,3 @@ jsonpath-rust = "0.5"
 fake = "2.9"
 rand = "0.8"
 rfd = "0.14"
-
-dioxus = { version = "0.5", features = ["desktop"] }

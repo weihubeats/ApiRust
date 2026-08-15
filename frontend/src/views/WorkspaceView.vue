@@ -170,8 +170,8 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   padding: 12px;
-  border-right: 1px solid var(--rf-border, #1f2937);
-  background: var(--rf-bg-panel, #111827);
+  border-right: 1px solid var(--rf-border);
+  background: var(--rf-bg-panel);
   overflow-y: auto;
 }
 
@@ -200,7 +200,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--rf-bg-panel-2, #0b1220);
+  background: var(--rf-bg);
   overflow: hidden;
 }
 
@@ -210,14 +210,14 @@ onMounted(() => {
   justify-content: space-between;
   gap: 8px;
   padding: 10px 12px;
-  border-radius: 6px;
-  background: rgba(239, 68, 68, 0.1);
+  border-radius: var(--rf-radius-sm);
+  background: var(--rf-danger-tint);
   border: 1px solid rgba(239, 68, 68, 0.35);
 }
 
 .rf-inline-error-text {
   font-size: 12.5px;
-  color: #fca5a5;
+  color: var(--rf-danger);
   word-break: break-all;
 }
 
@@ -227,20 +227,20 @@ onMounted(() => {
   justify-content: flex-end;
   gap: 10px;
   padding: 6px 12px;
-  border-bottom: 1px solid var(--rf-border, #1f2937);
+  border-bottom: 1px solid var(--rf-border);
 }
 
 .mock-status {
   font-size: 12px;
-  color: var(--rf-text-muted, #6b7280);
+  color: var(--rf-text-muted);
 }
 
 .mock-status.on {
-  color: #34d399;
+  color: var(--rf-success);
 }
 
 .mock-stop {
-  color: #f87171;
-  border-color: rgba(248, 113, 113, 0.4);
+  color: var(--rf-danger);
+  border-color: rgba(239, 68, 68, 0.4);
 }
 </style>

@@ -87,23 +87,23 @@ function onClose(item: ToastItem): void {
   gap: 10px;
   padding: 12px 12px 12px 14px;
   border-radius: 8px;
-  background: var(--rf-bg-panel, #111827);
-  border: 1px solid var(--rf-border, #1f2937);
+  background: var(--rf-bg-panel);
+  border: 1px solid var(--rf-border);
   border-left-width: 3px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--rf-shadow);
 }
 
 .rf-toast-success {
-  border-left-color: #22c55e;
+  border-left-color: var(--rf-success);
 }
 .rf-toast-info {
-  border-left-color: #3b82f6;
+  border-left-color: var(--rf-info);
 }
 .rf-toast-warning {
-  border-left-color: #f59e0b;
+  border-left-color: var(--rf-warning);
 }
 .rf-toast-error {
-  border-left-color: #ef4444;
+  border-left-color: var(--rf-danger);
 }
 
 .rf-toast-icon {
@@ -120,14 +120,14 @@ function onClose(item: ToastItem): void {
 .rf-toast-title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--rf-text, #f9fafb);
+  color: var(--rf-text);
   line-height: 1.4;
 }
 
 .rf-toast-message {
   margin-top: 2px;
   font-size: 12px;
-  color: var(--rf-text-secondary, #9ca3af);
+  color: var(--rf-text-secondary);
   line-height: 1.45;
   word-break: break-all;
 }
@@ -139,14 +139,14 @@ function onClose(item: ToastItem): void {
   padding: 2px;
   margin-top: 1px;
   cursor: pointer;
-  color: var(--rf-text-muted, #6b7280);
+  color: var(--rf-text-muted);
   border-radius: 4px;
   line-height: 1;
 }
 
 .rf-toast-close:hover {
-  color: var(--rf-text, #f9fafb);
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--rf-text);
+  background: var(--rf-hover);
 }
 
 .rf-toast-enter-active,

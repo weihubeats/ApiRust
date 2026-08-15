@@ -134,14 +134,14 @@ async function onRetry(): Promise<void> {
   margin: 24px;
   padding: 20px;
   border-radius: 10px;
-  background: var(--rf-bg-panel-2, #111827);
-  border: 1px solid var(--rf-border, #1f2937);
-  border-left: 3px solid #ef4444;
+  background: var(--rf-bg-panel-2);
+  border: 1px solid var(--rf-border);
+  border-left: 3px solid var(--rf-danger);
 }
 
 .rf-boundary-glyph {
   flex: none;
-  color: #ef4444;
+  color: var(--rf-danger);
   margin-top: 2px;
 }
 
@@ -153,13 +153,13 @@ async function onRetry(): Promise<void> {
 .rf-boundary-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--rf-text, #f9fafb);
+  color: var(--rf-text);
 }
 
 .rf-boundary-message {
   margin-top: 4px;
   font-size: 12.5px;
-  color: var(--rf-text-secondary, #9ca3af);
+  color: var(--rf-text-secondary);
   word-break: break-all;
 }
 
@@ -169,41 +169,15 @@ async function onRetry(): Promise<void> {
   gap: 8px;
 }
 
-.rf-btn {
-  border: 1px solid var(--rf-border, #1f2937);
-  background: var(--rf-bg-panel, #111827);
-  color: var(--rf-text, #f9fafb);
-  border-radius: 6px;
-  font-size: 12.5px;
-  padding: 5px 12px;
-  cursor: pointer;
-}
-
-.rf-btn-primary {
-  background: linear-gradient(135deg, #2563eb, #3b82f6);
-  border-color: transparent;
-  color: #fff;
-}
-
-.rf-btn-sm {
-  padding: 4px 10px;
-  font-size: 12px;
-}
-
-.rf-btn:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
 .rf-boundary-detail {
   margin-top: 12px;
   padding: 10px;
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--rf-border, #1f2937);
+  background: var(--rf-input-bg);
+  border: 1px solid var(--rf-border);
   font-size: 11.5px;
   line-height: 1.5;
-  color: var(--rf-text-secondary, #9ca3af);
+  color: var(--rf-text-secondary);
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 220px;

@@ -34,7 +34,7 @@ function close(id: string): void {
   gap: 2px;
   padding: 4px 4px 0;
   overflow-x: auto;
-  border-bottom: 1px solid var(--rf-border, #1f2937);
+  border-bottom: 1px solid var(--rf-border);
 }
 
 .tab {
@@ -46,7 +46,7 @@ function close(id: string): void {
   border: 1px solid transparent;
   border-bottom: none;
   font-size: 12.5px;
-  color: var(--rf-text-secondary, #9ca3af);
+  color: var(--rf-text-secondary);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
@@ -54,13 +54,13 @@ function close(id: string): void {
 }
 
 .tab:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--rf-hover);
 }
 
 .tab.active {
-  background: var(--rf-bg-panel-2, #111827);
-  border-color: var(--rf-border, #1f2937);
-  color: var(--rf-text, #f9fafb);
+  background: var(--rf-bg-panel-2);
+  border-color: var(--rf-border);
+  color: var(--rf-text);
 }
 
 .tab-title {
@@ -69,14 +69,14 @@ function close(id: string): void {
 }
 
 .tab-dirty {
-  color: #f59e0b;
+  color: var(--rf-warning);
   font-size: 10px;
 }
 
 .tab-close {
   border: none;
   background: none;
-  color: var(--rf-text-muted, #6b7280);
+  color: var(--rf-text-muted);
   font-size: 11px;
   padding: 0 2px;
   border-radius: 4px;
@@ -85,7 +85,7 @@ function close(id: string): void {
 }
 
 .tab-close:hover {
-  color: #fca5a5;
-  background: rgba(239, 68, 68, 0.15);
+  color: var(--rf-danger);
+  background: var(--rf-danger-tint);
 }
 </style>

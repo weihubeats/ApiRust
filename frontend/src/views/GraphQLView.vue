@@ -536,26 +536,26 @@ async function copyCode() {
 </template>
 
 <style scoped>
-/* ---------- rf- 设计系统（与 crates/fox-desktop/src/styles.rs 对齐） ---------- */
+/* 私有色板映射到全局 rf-* 令牌，随主题联动 */
 .gql-root {
-  --bg: #0f172a;
-  --panel: #1e293b;
-  --panel-2: #334155;
-  --border: #334155;
-  --border-2: #475569;
-  --text: #f8fafc;
-  --text-2: #94a3b8;
-  --muted: #64748b;
-  --accent: #3b82f6;
-  --accent-2: #2563eb;
-  --accent-soft: rgba(59, 130, 246, 0.16);
+  --bg: var(--rf-bg);
+  --panel: var(--rf-bg-panel);
+  --panel-2: var(--rf-bg-panel-2);
+  --border: var(--rf-border);
+  --border-2: var(--rf-text-muted);
+  --text: var(--rf-text);
+  --text-2: var(--rf-text-secondary);
+  --muted: var(--rf-text-muted);
+  --accent: var(--rf-info);
+  --accent-2: var(--rf-accent-weak);
+  --accent-soft: var(--rf-info-tint);
   --accent-line: rgba(59, 130, 246, 0.45);
-  --success: #34d399;
-  --warning: #fbbf24;
-  --danger: #f87171;
-  --danger-weak: rgba(248, 113, 113, 0.14);
+  --success: var(--rf-success);
+  --warning: var(--rf-warning);
+  --danger: var(--rf-danger);
+  --danger-weak: var(--rf-danger-tint);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
-  --r-s: 6px;
+  --r-s: var(--rf-radius-sm);
   --s-2: 8px;
   --s-3: 12px;
   --s-4: 16px;
@@ -574,73 +574,10 @@ async function copyCode() {
   margin-bottom: var(--s-2);
 }
 
-.rf-input {
-  padding: 6px 10px;
-  background: #0c1526;
-  border: 1px solid var(--border);
-  border-radius: var(--r-s);
-  color: var(--text);
-  font-size: 13px;
-  transition: border-color 0.15s;
-}
-
-.rf-input::placeholder {
-  color: var(--muted);
-}
-
-.rf-input:hover {
-  border-color: var(--border-2);
-}
-
-.rf-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
 .rf-input-sm {
   flex: 1;
   min-width: 0;
   padding: 4px 8px;
-}
-
-.rf-btn {
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-s);
-  font-weight: 500;
-  cursor: pointer;
-  user-select: none;
-  background: var(--panel-2);
-  color: var(--text);
-  font-size: 13px;
-}
-
-.rf-btn:hover {
-  background: var(--border-2);
-  border-color: var(--border-2);
-}
-
-.rf-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.rf-btn-sm {
-  padding: 4px 10px;
-  font-size: 12.5px;
-}
-
-.rf-btn-primary {
-  background: linear-gradient(180deg, #4f8ffa 0%, var(--accent) 55%, #2f74ea 100%);
-  border-color: var(--accent-2);
-  color: #fff;
-  font-weight: 600;
-}
-
-.rf-btn-primary:hover {
-  background: linear-gradient(180deg, #63a0ff 0%, var(--accent-2) 60%, #2563eb 100%);
-  border-color: var(--accent-2);
 }
 
 .rf-btn-ghost {
@@ -649,7 +586,7 @@ async function copyCode() {
   color: var(--text-2);
 }
 
-.rf-btn-ghost:hover {
+.rf-btn-ghost:hover:not(:disabled) {
   background: var(--panel-2);
   color: var(--text);
   border-color: var(--border-2);
@@ -778,7 +715,7 @@ async function copyCode() {
 /* ---------- 高亮编辑器（透明 textarea + pre 覆盖层） ---------- */
 .hl-wrap {
   position: relative;
-  background: #0c1526;
+  background: var(--rf-input-bg);
   border: 1px solid var(--border);
   border-radius: var(--r-s);
   height: 300px;
@@ -909,7 +846,7 @@ async function copyCode() {
 
 .resp-body {
   margin-top: var(--s-2);
-  background: #0c1526;
+  background: var(--rf-input-bg);
   border: 1px solid var(--border);
   border-radius: var(--r-s);
   max-height: 320px;
@@ -988,7 +925,7 @@ async function copyCode() {
 .codegen-out {
   margin: 0;
   padding: 12px;
-  background: #0c1526;
+  background: var(--rf-input-bg);
   border: 1px solid var(--border);
   border-radius: var(--r-s);
   font-family: var(--mono);

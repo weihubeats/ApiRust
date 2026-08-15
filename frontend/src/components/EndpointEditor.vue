@@ -770,11 +770,12 @@ onUnmounted(() => {
   font-weight: 700;
 }
 
-.m-select-get { color: #34d399; }
-.m-select-post { color: #fbbf24; }
-.m-select-put { color: #93c5fd; }
-.m-select-delete { color: #fca5a5; }
-.m-select-patch { color: #c4b5fd; }
+.m-select-get { color: var(--rf-success); }
+.m-select-post { color: var(--rf-warning); }
+.m-select-put { color: var(--rf-info); }
+.m-select-delete { color: var(--rf-danger); }
+.m-select-patch { color: #a78bfa; }
+.m-select-head, .m-select-options { color: var(--rf-text-muted); }
 
 .path-input {
   flex: 1;
@@ -816,7 +817,7 @@ onUnmounted(() => {
 }
 
 .kv-check {
-  accent-color: #3b82f6;
+  accent-color: var(--rf-info);
 }
 
 .kv-key {
@@ -856,7 +857,7 @@ onUnmounted(() => {
 }
 
 .oauth-status.ok {
-  color: #34d399;
+  color: var(--rf-success);
 }
 
 .code-lang-select {
@@ -888,12 +889,12 @@ onUnmounted(() => {
 }
 
 .history-status {
-  color: #34d399;
+  color: var(--rf-success);
   font-weight: 600;
 }
 
 .history-status.err {
-  color: #f87171;
+  color: var(--rf-danger);
 }
 
 .history-meta {
@@ -907,11 +908,11 @@ onUnmounted(() => {
 }
 
 .test-badge.ok {
-  color: #34d399;
+  color: var(--rf-success);
 }
 
 .test-badge.fail {
-  color: #f87171;
+  color: var(--rf-danger);
 }
 
 .test-hint {
@@ -937,11 +938,11 @@ onUnmounted(() => {
 }
 
 .outcome-row.ok {
-  color: #34d399;
+  color: var(--rf-success);
 }
 
 .outcome-row.fail {
-  color: #f87171;
+  color: var(--rf-danger);
 }
 
 .outcome-text {
@@ -980,7 +981,7 @@ onUnmounted(() => {
 
 .load-bar-fill {
   height: 100%;
-  background: #3b82f6;
+  background: var(--rf-info);
   transition: width 0.15s ease;
 }
 
@@ -1037,17 +1038,17 @@ onUnmounted(() => {
 }
 
 .example-main.open {
-  border-color: #3b82f6;
+  border-color: var(--rf-info);
 }
 
 .example-status {
   font-weight: 700;
   font-size: 11px;
-  color: #34d399;
+  color: var(--rf-success);
 }
 
 .example-status.err {
-  color: #fca5a5;
+  color: var(--rf-danger);
 }
 
 .example-name {
@@ -1112,7 +1113,7 @@ onUnmounted(() => {
   border-radius: 6px;
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.35);
-  color: #fca5a5;
+  color: var(--rf-danger);
   font-size: 12.5px;
 }
 
@@ -1138,11 +1139,11 @@ onUnmounted(() => {
 .response-status {
   font-weight: 700;
   font-size: 13px;
-  color: #34d399;
+  color: var(--rf-success);
 }
 
 .response.error .response-status {
-  color: #fca5a5;
+  color: var(--rf-danger);
 }
 
 .response-meta,

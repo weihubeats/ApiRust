@@ -241,7 +241,7 @@ async function duplicate(e: Endpoint): Promise<void> {
           />
         </template>
         <template v-else>
-          <span class="tree-method" :class="`m-${e.method.toLowerCase()}`">{{ e.method }}</span>
+          <span class="tree-method rf-method" :class="`rf-method-${e.method.toLowerCase()}`">{{ e.method }}</span>
           <span class="tree-name" :class="{ dirty: store.isDirty(e.id) }" @click="store.openEndpoint(e)">
             {{ e.name || e.path }}
           </span>
@@ -316,7 +316,7 @@ async function duplicate(e: Endpoint): Promise<void> {
 
 .tree-name.dirty::after {
   content: ' ●';
-  color: #f59e0b;
+  color: var(--rf-warning);
 }
 
 .tree-method {
@@ -327,13 +327,6 @@ async function duplicate(e: Endpoint): Promise<void> {
   min-width: 44px;
   text-align: center;
 }
-
-.m-get { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-.m-post { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
-.m-put { background: rgba(59, 130, 246, 0.15); color: #93c5fd; }
-.m-delete { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
-.m-patch { background: rgba(139, 92, 246, 0.15); color: #c4b5fd; }
-.m-head, .m-options { background: rgba(107, 114, 128, 0.15); color: #9ca3af; }
 
 .tree-actions {
   display: none;
@@ -360,7 +353,7 @@ async function duplicate(e: Endpoint): Promise<void> {
 }
 
 .tree-btn.danger:hover {
-  color: #fca5a5;
+  color: var(--rf-danger);
 }
 
 .tree-btn.root {

@@ -36,7 +36,7 @@ const { visible, progress } = useProgress()
 .rf-progress-bar {
   height: 100%;
   border-radius: 0 2px 2px 0;
-  background: linear-gradient(90deg, #2563eb, #3b82f6 60%, #60a5fa);
+  background: linear-gradient(90deg, var(--rf-accent-weak), var(--rf-accent) 60%, var(--rf-info));
   box-shadow: 0 0 8px rgba(59, 130, 246, 0.7);
   transition: width 0.2s ease;
 }

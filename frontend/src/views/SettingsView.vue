@@ -203,7 +203,7 @@ async function onImportFile(event: Event): Promise<void> {
       <template v-else-if="project">
         <div class="env-toolbar">
           <select
-            class="rf-input rf-input-sm env-select"
+            class="rf-select env-select"
             :value="selectedEnv?.id ?? ''"
             @change="
               selectEnv(environments.find((e) => e.id === ($event.target as HTMLSelectElement).value)!)
@@ -269,34 +269,28 @@ async function onImportFile(event: Event): Promise<void> {
   margin: 0 auto;
   padding: 20px;
   border-radius: 10px;
-  background: var(--rf-bg-panel-2, #111827);
-  border: 1px solid var(--rf-border, #1f2937);
 }
 
 .rf-heading {
   margin: 0 0 16px;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--rf-text, #f9fafb);
 }
 
 .rf-subheading {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
-  color: var(--rf-text, #f9fafb);
 }
 
 .rf-hint {
   margin: 0;
-  font-size: 12.5px;
-  color: var(--rf-text-secondary, #9ca3af);
 }
 
 .settings-section {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rf-border);
 }
 
 .settings-actions {
@@ -319,6 +313,10 @@ async function onImportFile(event: Event): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--rf-border);
+  border-radius: var(--rf-radius);
+  background: var(--rf-input-bg);
 }
 
 .env-name-input {
@@ -326,7 +324,7 @@ async function onImportFile(event: Event): Promise<void> {
 }
 
 .env-error {
-  color: #fca5a5;
+  color: var(--rf-danger);
 }
 
 .settings-file {

@@ -190,10 +190,10 @@ async function save(): Promise<void> {
 .import-error {
   margin: 10px 0 0;
   padding: 8px 10px;
-  border-radius: 6px;
-  background: rgba(239, 68, 68, 0.1);
+  border-radius: var(--rf-radius-sm);
+  background: var(--rf-danger-tint);
   border: 1px solid rgba(239, 68, 68, 0.35);
-  color: #fca5a5;
+  color: var(--rf-danger);
   font-size: 12px;
 }
 
@@ -220,8 +220,8 @@ async function save(): Promise<void> {
   font-size: 11px;
   padding: 2px 7px;
   border-radius: 4px;
-  background: rgba(59, 130, 246, 0.15);
-  color: #93c5fd;
+  background: var(--rf-info-tint);
+  color: var(--rf-info);
 }
 
 .preview-url {

@@ -290,7 +290,7 @@ const listTitle = computed(() => `Mock 规则 (${rules.value.length})`)
 .rule-status {
   width: 40px;
   font-weight: 600;
-  color: #34d399;
+  color: var(--rf-success);
 }
 
 .rule-meta {

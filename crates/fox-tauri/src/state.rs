@@ -32,6 +32,8 @@ pub struct AppState {
     pub db: SqlitePool,
     /// 激活上下文（读写并发安全）。
     pub active: RwLock<ActiveContext>,
+    /// 正在运行的 Mock 服务（未启动为 `None`）。
+    pub mock: RwLock<Option<fox_mock::server::MockServer>>,
 }
 
 impl AppState {
@@ -39,6 +41,7 @@ impl AppState {
         AppState {
             db,
             active: RwLock::new(ActiveContext::default()),
+            mock: RwLock::new(None),
         }
     }
 
@@ -113,12 +116,8 @@ impl AppState {
             Some(id) => Some(repo::get_environment(&self.db, id).await?),
             None => self.active_environment().await?,
         };
-        let project_vars = project
-            .map(|p| p.variables)
-            .unwrap_or_default();
-        let environment_vars = environment
-            .map(|e| e.variables)
-            .unwrap_or_default();
+        let project_vars = project.map(|p| p.variables).unwrap_or_default();
+        let environment_vars = environment.map(|e| e.variables).unwrap_or_default();
         Ok(fox_core::merge_variables(
             &HashMap::new(),
             &environment_vars,

@@ -1,0 +1,29 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = """
+RustFox 核心插件的默认权限：允许前端调用全部 fox 命令
+（项目 / 接口 / 文件夹 / 环境 / cURL 解析 / 请求执行）。
+命令的 allow-* 权限由 tauri-build 依据 invoke_handler 自动生成。
+"""
+permissions = [
+    "allow-get-projects",
+    "allow-save-project",
+    "allow-delete-project",
+    "allow-set-active-project",
+    "allow-get-active-project",
+    "allow-list-endpoints",
+    "allow-get-endpoint",
+    "allow-save-endpoint",
+    "allow-delete-endpoint",
+    "allow-duplicate-endpoint",
+    "allow-list-folders",
+    "allow-save-folder",
+    "allow-delete-folder",
+    "allow-parse-curl-command",
+    "allow-list-environments",
+    "allow-save-environment",
+    "allow-set-active-environment",
+    "allow-get-active-environment",
+    "allow-execute-request",
+]

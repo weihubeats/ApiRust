@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-execute-request"
+description = "Enables the execute_request command without any pre-configured scope."
+commands.allow = ["execute_request"]
+
+[[permission]]
+identifier = "deny-execute-request"
+description = "Denies the execute_request command without any pre-configured scope."
+commands.deny = ["execute_request"]

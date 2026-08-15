@@ -58,21 +58,26 @@ pub use error::{CommandError, CommandResult};
 pub use state::AppState;
 
 /// 插件命名空间。`init()` 注册状态与全部 Command。
+///
+/// 非泛型 `Wry` 实现:便于 Command 直接取 `tauri::AppHandle` 推送事件
+/// (如 `load_test` 的 `fox:load-progress` 进度)。
 pub mod plugin {
     use super::*;
 
     /// 注册 Fox 核心插件。
-    pub fn init<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         tauri::plugin::Builder::new("fox")
-            .setup(|app: &tauri::AppHandle<R>, _api: tauri::plugin::PluginApi<R, ()>| {
-                // 初始化数据库（建目录 + 迁移）。阻塞主线程代价低（本地 SQLite）。
-                let db = tauri::async_runtime::block_on(fox_storage::db::init_db(
-                    &fox_storage::db::database_path(),
-                ))
-                .map_err(CommandError::from)?;
-                app.manage(AppState::new(db));
-                Ok(())
-            })
+            .setup(
+                |app: &tauri::AppHandle, _api: tauri::plugin::PluginApi<tauri::Wry, ()>| {
+                    // 初始化数据库（建目录 + 迁移）。阻塞主线程代价低（本地 SQLite）。
+                    let db = tauri::async_runtime::block_on(fox_storage::db::init_db(
+                        &fox_storage::db::database_path(),
+                    ))
+                    .map_err(CommandError::from)?;
+                    app.manage(AppState::new(db));
+                    Ok(())
+                },
+            )
             .invoke_handler(tauri::generate_handler![
                 commands::get_projects,
                 commands::save_project,
@@ -84,11 +89,34 @@ pub mod plugin {
                 commands::save_endpoint,
                 commands::delete_endpoint,
                 commands::duplicate_endpoint,
+                commands::list_folders,
+                commands::save_folder,
+                commands::delete_folder,
+                commands::parse_curl_command,
                 commands::list_environments,
                 commands::save_environment,
                 commands::set_active_environment,
                 commands::get_active_environment,
                 commands::execute_request,
+                commands::list_examples,
+                commands::save_example,
+                commands::delete_example,
+                commands::oauth_authorize,
+                commands::oauth_access_token,
+                commands::codegen_render,
+                commands::list_request_histories,
+                commands::mock_start,
+                commands::mock_stop,
+                commands::mock_status,
+                commands::backup_export,
+                commands::backup_restore,
+                commands::import_document,
+                commands::export_openapi,
+                commands::test_endpoint,
+                commands::load_test,
+                commands::list_mock_rules,
+                commands::save_mock_rule,
+                commands::delete_mock_rule,
             ])
             .build()
     }

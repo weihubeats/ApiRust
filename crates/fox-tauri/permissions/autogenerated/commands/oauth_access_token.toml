@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-oauth-access-token"
+description = "Enables the oauth_access_token command without any pre-configured scope."
+commands.allow = ["oauth_access_token"]
+
+[[permission]]
+identifier = "deny-oauth-access-token"
+description = "Denies the oauth_access_token command without any pre-configured scope."
+commands.deny = ["oauth_access_token"]

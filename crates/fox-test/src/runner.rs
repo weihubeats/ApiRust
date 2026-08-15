@@ -12,7 +12,7 @@ use crate::config::TestSpec;
 use crate::extract::extract_variables;
 
 /// 单个接口的测试结果。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct EndpointResult {
     pub endpoint_id: Uuid,
     pub endpoint_name: String,

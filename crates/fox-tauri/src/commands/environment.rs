@@ -10,7 +10,7 @@ use crate::error::{CommandError, CommandResult};
 use crate::state::AppState;
 
 /// 列出项目下的全部环境。
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn list_environments(
     state: State<'_, AppState>,
     project_id: Uuid,
@@ -21,7 +21,7 @@ pub async fn list_environments(
 }
 
 /// 保存环境（upsert）。名称必填。
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn save_environment(
     state: State<'_, AppState>,
     environment: Environment,
@@ -34,7 +34,7 @@ pub async fn save_environment(
 }
 
 /// 切换激活环境（`null` 表示不使用环境变量）。返回切换后的环境缓存。
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn set_active_environment(
     state: State<'_, AppState>,
     environment_id: Option<Uuid>,
@@ -44,7 +44,7 @@ pub async fn set_active_environment(
 }
 
 /// 读取当前激活环境。
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn get_active_environment(
     state: State<'_, AppState>,
 ) -> CommandResult<Option<Environment>> {

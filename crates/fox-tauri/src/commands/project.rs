@@ -10,7 +10,7 @@ use crate::error::{CommandError, CommandResult};
 use crate::state::AppState;
 
 /// 列出全部项目。
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn get_projects(state: State<'_, AppState>) -> CommandResult<Vec<Project>> {
     repo::list_projects(&state.db).await.map_err(Into::into)
 }
@@ -18,7 +18,7 @@ pub async fn get_projects(state: State<'_, AppState>) -> CommandResult<Vec<Proje
 /// 创建或覆盖保存项目。
 ///
 /// 参数校验示例：项目名称必填。校验失败返回 `{ code: "VALIDATION", message }`。
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn save_project(state: State<'_, AppState>, project: Project) -> CommandResult<Project> {
     if project.name.trim().is_empty() {
         return Err(CommandError::validation("项目名称不能为空"));
@@ -28,11 +28,8 @@ pub async fn save_project(state: State<'_, AppState>, project: Project) -> Comma
 }
 
 /// 删除项目（同时清理激活上下文缓存）。
-#[tauri::command]
-pub async fn delete_project(
-    state: State<'_, AppState>,
-    project_id: Uuid,
-) -> CommandResult<()> {
+#[tauri::command(rename_all = "camelCase")]
+pub async fn delete_project(state: State<'_, AppState>, project_id: Uuid) -> CommandResult<()> {
     repo::delete_project(&state.db, project_id).await?;
     let mut active = state.active.write().await;
     if active.project_id == Some(project_id) {
@@ -45,7 +42,7 @@ pub async fn delete_project(
 }
 
 /// 切换激活项目（`null` 表示清空）。返回切换后的项目缓存。
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn set_active_project(
     state: State<'_, AppState>,
     project_id: Option<Uuid>,
@@ -55,9 +52,7 @@ pub async fn set_active_project(
 }
 
 /// 读取当前激活项目。
-#[tauri::command]
-pub async fn get_active_project(
-    state: State<'_, AppState>,
-) -> CommandResult<Option<Project>> {
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_active_project(state: State<'_, AppState>) -> CommandResult<Option<Project>> {
     state.active_project().await
 }

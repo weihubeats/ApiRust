@@ -7,6 +7,7 @@ use fox_core::model::{BodySpec, HttpMethod, KeyValue, RequestSpec};
 use fox_core::AppError;
 use indexmap::IndexMap;
 use openapiv3::{MediaType, OpenAPI, Parameter, ReferenceOr, RequestBody};
+use serde::Serialize;
 
 /// 导入冲突策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -48,7 +49,7 @@ impl ConflictStrategy {
 }
 
 /// 导入的响应示例（尚未落库）。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ImportedExample {
     pub name: String,
     pub status: u16,
@@ -58,7 +59,7 @@ pub struct ImportedExample {
 }
 
 /// 导入的接口（尚未落库）。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ImportedEndpoint {
     pub name: String,
     pub method: HttpMethod,
@@ -93,7 +94,7 @@ impl ImportedEndpoint {
 }
 
 /// 支持的导入文档格式（M12）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ImportFormat {
     OpenApi30,
     Swagger20,

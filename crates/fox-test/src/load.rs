@@ -9,7 +9,7 @@ use tokio::sync::Semaphore;
 use fox_http::client::send_request;
 
 /// 压测配置。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct LoadConfig {
     /// 并发数（同时进行的请求数）。
     pub concurrency: usize,
@@ -18,7 +18,7 @@ pub struct LoadConfig {
 }
 
 /// 压测结果。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct LoadResult {
     pub total: usize,
     pub ok: usize,
@@ -41,12 +41,23 @@ fn percentile(sorted: &[u64], q: usize) -> u64 {
     sorted[idx]
 }
 
+/// 压测进度快照（回调参数）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct LoadProgress {
+    pub done: usize,
+    pub total: usize,
+    pub ok: usize,
+    pub failed: usize,
+}
+
 /// 并发压测：`total` 次请求，最多 `concurrency` 个同时进行。
+/// `progress` 可选：每完成一次请求回调一次快照（用于进度推送）。
 pub async fn run_load(
     method: HttpMethod,
     url: &str,
     spec: &RequestSpec,
     cfg: &LoadConfig,
+    progress: Option<&(dyn Fn(LoadProgress) + Send + Sync)>,
 ) -> LoadResult {
     let concurrency = cfg.concurrency.max(1);
     let total = cfg.total.max(1);
@@ -76,6 +87,7 @@ pub async fn run_load(
         }));
     }
 
+    let mut done = 0usize;
     for h in handles {
         match h.await {
             Ok((is_ok, _status, d, err)) => {
@@ -92,6 +104,15 @@ pub async fn run_load(
                 }
             }
             Err(_) => failed += 1,
+        }
+        done += 1;
+        if let Some(cb) = progress {
+            cb(LoadProgress {
+                done,
+                total,
+                ok,
+                failed,
+            });
         }
     }
 
@@ -148,7 +169,14 @@ mod tests {
             concurrency: 4,
             total: 20,
         };
-        let result = run_load(HttpMethod::GET, &format!("http://{addr}/ping"), &spec, &cfg).await;
+        let result = run_load(
+            HttpMethod::GET,
+            &format!("http://{addr}/ping"),
+            &spec,
+            &cfg,
+            None,
+        )
+        .await;
         assert_eq!(result.total, 20, "总请求数应等于配置");
         assert_eq!(result.failed, 0, "本地服务不应失败");
         assert_eq!(result.ok, 20);
@@ -165,7 +193,14 @@ mod tests {
             concurrency: 2,
             total: 6,
         };
-        let result = run_load(HttpMethod::GET, &format!("http://{addr}/nope"), &spec, &cfg).await;
+        let result = run_load(
+            HttpMethod::GET,
+            &format!("http://{addr}/nope"),
+            &spec,
+            &cfg,
+            None,
+        )
+        .await;
         assert_eq!(result.total, 6);
         assert_eq!(result.ok, 0);
         assert_eq!(result.failed, 6);

@@ -74,7 +74,7 @@ pub fn build_backup(
 }
 
 /// 恢复结果：所有实体均已重映射到新的 UUID，且原本的引用关系保持一致。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Restored {
     pub project: Project,
     pub folders: Vec<Folder>,

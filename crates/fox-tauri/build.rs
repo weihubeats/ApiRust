@@ -1,0 +1,47 @@
+//! 插件权限构建脚本:基于命令清单自动生成 `allow-<cmd>` / `deny-<cmd>` 权限。
+//! 清单必须与 lib.rs 中 `generate_handler!` 注册的命令逐一对应。
+
+const COMMANDS: &[&str] = &[
+    "get_projects",
+    "save_project",
+    "delete_project",
+    "set_active_project",
+    "get_active_project",
+    "list_endpoints",
+    "get_endpoint",
+    "save_endpoint",
+    "delete_endpoint",
+    "duplicate_endpoint",
+    "list_folders",
+    "save_folder",
+    "delete_folder",
+    "parse_curl_command",
+    "list_environments",
+    "save_environment",
+    "set_active_environment",
+    "get_active_environment",
+    "execute_request",
+    "list_examples",
+    "save_example",
+    "delete_example",
+    "oauth_authorize",
+    "oauth_access_token",
+    "codegen_render",
+    "list_request_histories",
+    "mock_start",
+    "mock_stop",
+    "mock_status",
+    "backup_export",
+    "backup_restore",
+    "import_document",
+    "export_openapi",
+    "test_endpoint",
+    "load_test",
+    "list_mock_rules",
+    "save_mock_rule",
+    "delete_mock_rule",
+];
+
+fn main() {
+    tauri_plugin::Builder::new(COMMANDS).build();
+}

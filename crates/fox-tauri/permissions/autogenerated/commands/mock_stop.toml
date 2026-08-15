@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-mock-stop"
+description = "Enables the mock_stop command without any pre-configured scope."
+commands.allow = ["mock_stop"]
+
+[[permission]]
+identifier = "deny-mock-stop"
+description = "Denies the mock_stop command without any pre-configured scope."
+commands.deny = ["mock_stop"]

@@ -9,7 +9,7 @@ use crate::error::AppError;
 use crate::model::{AuthSpec, BodySpec, HttpMethod, KeyValue};
 
 /// cURL 解析结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CurlParsed {
     /// 请求 URL（完整地址或相对路径）。
     pub url: String,

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-delete-mock-rule"
+description = "Enables the delete_mock_rule command without any pre-configured scope."
+commands.allow = ["delete_mock_rule"]
+
+[[permission]]
+identifier = "deny-delete-mock-rule"
+description = "Denies the delete_mock_rule command without any pre-configured scope."
+commands.deny = ["delete_mock_rule"]

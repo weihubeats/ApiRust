@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-save-mock-rule"
+description = "Enables the save_mock_rule command without any pre-configured scope."
+commands.allow = ["save_mock_rule"]
+
+[[permission]]
+identifier = "deny-save-mock-rule"
+description = "Denies the save_mock_rule command without any pre-configured scope."
+commands.deny = ["save_mock_rule"]

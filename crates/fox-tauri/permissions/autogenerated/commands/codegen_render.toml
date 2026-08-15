@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-codegen-render"
+description = "Enables the codegen_render command without any pre-configured scope."
+commands.allow = ["codegen_render"]
+
+[[permission]]
+identifier = "deny-codegen-render"
+description = "Denies the codegen_render command without any pre-configured scope."
+commands.deny = ["codegen_render"]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-save-endpoint"
+description = "Enables the save_endpoint command without any pre-configured scope."
+commands.allow = ["save_endpoint"]
+
+[[permission]]
+identifier = "deny-save-endpoint"
+description = "Denies the save_endpoint command without any pre-configured scope."
+commands.deny = ["save_endpoint"]

@@ -1,0 +1,762 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PermissionFile",
+  "description": "Permission file that can define a default permission, a set of permissions or a list of inlined permissions.",
+  "type": "object",
+  "properties": {
+    "default": {
+      "description": "The default permission set for the plugin",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DefaultPermission"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "set": {
+      "description": "A list of permissions sets defined",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/PermissionSet"
+      }
+    },
+    "permission": {
+      "description": "A list of inlined permissions",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Permission"
+      }
+    }
+  },
+  "definitions": {
+    "DefaultPermission": {
+      "description": "The default permission set of the plugin.\n\nWorks similarly to a permission with the \"default\" identifier.",
+      "type": "object",
+      "required": [
+        "permissions"
+      ],
+      "properties": {
+        "version": {
+          "description": "The version of the permission.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1.0
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does. Tauri convention is to use `<h4>` headings in markdown content for Tauri documentation generation purposes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permissions": {
+          "description": "All permissions this set contains.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PermissionSet": {
+      "description": "A set of direct permissions grouped together under a new name.",
+      "type": "object",
+      "required": [
+        "description",
+        "identifier",
+        "permissions"
+      ],
+      "properties": {
+        "identifier": {
+          "description": "A unique identifier for the permission.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does.",
+          "type": "string"
+        },
+        "permissions": {
+          "description": "All permissions this set contains.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PermissionKind"
+          }
+        }
+      }
+    },
+    "Permission": {
+      "description": "Descriptions of explicit privileges of commands.\n\nIt can enable commands to be accessible in the frontend of the application.\n\nIf the scope is defined it can be used to fine grain control the access of individual or multiple commands.",
+      "type": "object",
+      "required": [
+        "identifier"
+      ],
+      "properties": {
+        "version": {
+          "description": "The version of the permission.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1.0
+        },
+        "identifier": {
+          "description": "A unique identifier for the permission.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does. Tauri internal convention is to use `<h4>` headings in markdown content for Tauri documentation generation purposes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commands": {
+          "description": "Allowed or denied commands when using this permission.",
+          "default": {
+            "allow": [],
+            "deny": []
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Commands"
+            }
+          ]
+        },
+        "scope": {
+          "description": "Allowed or denied scoped when using this permission.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Scopes"
+            }
+          ]
+        },
+        "platforms": {
+          "description": "Target platforms this permission applies. By default all platforms are affected by this permission.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Target"
+          }
+        }
+      }
+    },
+    "Commands": {
+      "description": "Allowed and denied commands inside a permission.\n\nIf two commands clash inside of `allow` and `deny`, it should be denied by default.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Allowed command.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deny": {
+          "description": "Denied command, which takes priority.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Scopes": {
+      "description": "An argument for fine grained behavior control of Tauri commands.\n\nIt can be of any serde serializable type and is used to allow or prevent certain actions inside a Tauri command. The configured scope is passed to the command and will be enforced by the command implementation.\n\n## Example\n\n```json { \"allow\": [{ \"path\": \"$HOME/**\" }], \"deny\": [{ \"path\": \"$HOME/secret.txt\" }] } ```",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Data that defines what is allowed by the scope.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        },
+        "deny": {
+          "description": "Data that defines what is denied by the scope. This should be prioritized by validation logic.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        }
+      }
+    },
+    "Value": {
+      "description": "All supported ACL values.",
+      "anyOf": [
+        {
+          "description": "Represents a null JSON value.",
+          "type": "null"
+        },
+        {
+          "description": "Represents a [`bool`].",
+          "type": "boolean"
+        },
+        {
+          "description": "Represents a valid ACL [`Number`].",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Number"
+            }
+          ]
+        },
+        {
+          "description": "Represents a [`String`].",
+          "type": "string"
+        },
+        {
+          "description": "Represents a list of other [`Value`]s.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        },
+        {
+          "description": "Represents a map of [`String`] keys to [`Value`]s.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Value"
+          }
+        }
+      ]
+    },
+    "Number": {
+      "description": "A valid ACL number.",
+      "anyOf": [
+        {
+          "description": "Represents an [`i64`].",
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "description": "Represents a [`f64`].",
+          "type": "number",
+          "format": "double"
+        }
+      ]
+    },
+    "Target": {
+      "description": "Platform target.",
+      "oneOf": [
+        {
+          "description": "MacOS.",
+          "type": "string",
+          "enum": [
+            "macOS"
+          ]
+        },
+        {
+          "description": "Windows.",
+          "type": "string",
+          "enum": [
+            "windows"
+          ]
+        },
+        {
+          "description": "Linux.",
+          "type": "string",
+          "enum": [
+            "linux"
+          ]
+        },
+        {
+          "description": "Android.",
+          "type": "string",
+          "enum": [
+            "android"
+          ]
+        },
+        {
+          "description": "iOS.",
+          "type": "string",
+          "enum": [
+            "iOS"
+          ]
+        }
+      ]
+    },
+    "PermissionKind": {
+      "type": "string",
+      "oneOf": [
+        {
+          "description": "Enables the backup_export command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-backup-export",
+          "markdownDescription": "Enables the backup_export command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the backup_export command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-backup-export",
+          "markdownDescription": "Denies the backup_export command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the backup_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-backup-restore",
+          "markdownDescription": "Enables the backup_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the backup_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-backup-restore",
+          "markdownDescription": "Denies the backup_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the codegen_render command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-codegen-render",
+          "markdownDescription": "Enables the codegen_render command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the codegen_render command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-codegen-render",
+          "markdownDescription": "Denies the codegen_render command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-endpoint",
+          "markdownDescription": "Enables the delete_endpoint command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-endpoint",
+          "markdownDescription": "Denies the delete_endpoint command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_example command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-example",
+          "markdownDescription": "Enables the delete_example command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_example command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-example",
+          "markdownDescription": "Denies the delete_example command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-folder",
+          "markdownDescription": "Enables the delete_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-folder",
+          "markdownDescription": "Denies the delete_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_mock_rule command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-mock-rule",
+          "markdownDescription": "Enables the delete_mock_rule command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_mock_rule command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-mock-rule",
+          "markdownDescription": "Denies the delete_mock_rule command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_project command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-project",
+          "markdownDescription": "Enables the delete_project command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_project command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-project",
+          "markdownDescription": "Denies the delete_project command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the duplicate_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-duplicate-endpoint",
+          "markdownDescription": "Enables the duplicate_endpoint command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the duplicate_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-duplicate-endpoint",
+          "markdownDescription": "Denies the duplicate_endpoint command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the execute_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-execute-request",
+          "markdownDescription": "Enables the execute_request command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the execute_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-execute-request",
+          "markdownDescription": "Denies the execute_request command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the export_openapi command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-openapi",
+          "markdownDescription": "Enables the export_openapi command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the export_openapi command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-openapi",
+          "markdownDescription": "Denies the export_openapi command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_active_environment command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-active-environment",
+          "markdownDescription": "Enables the get_active_environment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_active_environment command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-active-environment",
+          "markdownDescription": "Denies the get_active_environment command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_active_project command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-active-project",
+          "markdownDescription": "Enables the get_active_project command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_active_project command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-active-project",
+          "markdownDescription": "Denies the get_active_project command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-endpoint",
+          "markdownDescription": "Enables the get_endpoint command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-endpoint",
+          "markdownDescription": "Denies the get_endpoint command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_projects command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-projects",
+          "markdownDescription": "Enables the get_projects command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_projects command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-projects",
+          "markdownDescription": "Denies the get_projects command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the import_document command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-document",
+          "markdownDescription": "Enables the import_document command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the import_document command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-document",
+          "markdownDescription": "Denies the import_document command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_endpoints command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-endpoints",
+          "markdownDescription": "Enables the list_endpoints command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_endpoints command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-endpoints",
+          "markdownDescription": "Denies the list_endpoints command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_environments command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-environments",
+          "markdownDescription": "Enables the list_environments command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_environments command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-environments",
+          "markdownDescription": "Denies the list_environments command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_examples command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-examples",
+          "markdownDescription": "Enables the list_examples command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_examples command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-examples",
+          "markdownDescription": "Denies the list_examples command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_folders command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-folders",
+          "markdownDescription": "Enables the list_folders command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_folders command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-folders",
+          "markdownDescription": "Denies the list_folders command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_mock_rules command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-mock-rules",
+          "markdownDescription": "Enables the list_mock_rules command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_mock_rules command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-mock-rules",
+          "markdownDescription": "Denies the list_mock_rules command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_request_histories command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-request-histories",
+          "markdownDescription": "Enables the list_request_histories command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_request_histories command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-request-histories",
+          "markdownDescription": "Denies the list_request_histories command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the load_test command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-load-test",
+          "markdownDescription": "Enables the load_test command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the load_test command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-load-test",
+          "markdownDescription": "Denies the load_test command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mock_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mock-start",
+          "markdownDescription": "Enables the mock_start command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mock_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mock-start",
+          "markdownDescription": "Denies the mock_start command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mock_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mock-status",
+          "markdownDescription": "Enables the mock_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mock_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mock-status",
+          "markdownDescription": "Denies the mock_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mock_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mock-stop",
+          "markdownDescription": "Enables the mock_stop command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mock_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mock-stop",
+          "markdownDescription": "Denies the mock_stop command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the oauth_access_token command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-oauth-access-token",
+          "markdownDescription": "Enables the oauth_access_token command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the oauth_access_token command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-oauth-access-token",
+          "markdownDescription": "Denies the oauth_access_token command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the oauth_authorize command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-oauth-authorize",
+          "markdownDescription": "Enables the oauth_authorize command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the oauth_authorize command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-oauth-authorize",
+          "markdownDescription": "Denies the oauth_authorize command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the parse_curl_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-parse-curl-command",
+          "markdownDescription": "Enables the parse_curl_command command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the parse_curl_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-parse-curl-command",
+          "markdownDescription": "Denies the parse_curl_command command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-endpoint",
+          "markdownDescription": "Enables the save_endpoint command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-endpoint",
+          "markdownDescription": "Denies the save_endpoint command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_environment command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-environment",
+          "markdownDescription": "Enables the save_environment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_environment command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-environment",
+          "markdownDescription": "Denies the save_environment command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_example command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-example",
+          "markdownDescription": "Enables the save_example command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_example command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-example",
+          "markdownDescription": "Denies the save_example command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-folder",
+          "markdownDescription": "Enables the save_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-folder",
+          "markdownDescription": "Denies the save_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_mock_rule command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-mock-rule",
+          "markdownDescription": "Enables the save_mock_rule command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_mock_rule command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-mock-rule",
+          "markdownDescription": "Denies the save_mock_rule command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_project command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-project",
+          "markdownDescription": "Enables the save_project command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_project command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-project",
+          "markdownDescription": "Denies the save_project command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_active_environment command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-active-environment",
+          "markdownDescription": "Enables the set_active_environment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_active_environment command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-active-environment",
+          "markdownDescription": "Denies the set_active_environment command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_active_project command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-active-project",
+          "markdownDescription": "Enables the set_active_project command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_active_project command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-active-project",
+          "markdownDescription": "Denies the set_active_project command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the test_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-test-endpoint",
+          "markdownDescription": "Enables the test_endpoint command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the test_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-test-endpoint",
+          "markdownDescription": "Denies the test_endpoint command without any pre-configured scope."
+        },
+        {
+          "description": "RustFox 核心插件的默认权限：允许前端调用全部 fox 命令\n（项目 / 接口 / 文件夹 / 环境 / cURL 解析 / 请求执行）。\n命令的 allow-* 权限由 tauri-build 依据 invoke_handler 自动生成。\n\n#### This default permission set includes:\n\n- `allow-get-projects`\n- `allow-save-project`\n- `allow-delete-project`\n- `allow-set-active-project`\n- `allow-get-active-project`\n- `allow-list-endpoints`\n- `allow-get-endpoint`\n- `allow-save-endpoint`\n- `allow-delete-endpoint`\n- `allow-duplicate-endpoint`\n- `allow-list-folders`\n- `allow-save-folder`\n- `allow-delete-folder`\n- `allow-parse-curl-command`\n- `allow-list-environments`\n- `allow-save-environment`\n- `allow-set-active-environment`\n- `allow-get-active-environment`\n- `allow-execute-request`",
+          "type": "string",
+          "const": "default",
+          "markdownDescription": "RustFox 核心插件的默认权限：允许前端调用全部 fox 命令\n（项目 / 接口 / 文件夹 / 环境 / cURL 解析 / 请求执行）。\n命令的 allow-* 权限由 tauri-build 依据 invoke_handler 自动生成。\n\n#### This default permission set includes:\n\n- `allow-get-projects`\n- `allow-save-project`\n- `allow-delete-project`\n- `allow-set-active-project`\n- `allow-get-active-project`\n- `allow-list-endpoints`\n- `allow-get-endpoint`\n- `allow-save-endpoint`\n- `allow-delete-endpoint`\n- `allow-duplicate-endpoint`\n- `allow-list-folders`\n- `allow-save-folder`\n- `allow-delete-folder`\n- `allow-parse-curl-command`\n- `allow-list-environments`\n- `allow-save-environment`\n- `allow-set-active-environment`\n- `allow-get-active-environment`\n- `allow-execute-request`"
+        }
+      ]
+    }
+  }
+}

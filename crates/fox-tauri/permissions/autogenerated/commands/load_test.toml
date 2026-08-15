@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-load-test"
+description = "Enables the load_test command without any pre-configured scope."
+commands.allow = ["load_test"]
+
+[[permission]]
+identifier = "deny-load-test"
+description = "Denies the load_test command without any pre-configured scope."
+commands.deny = ["load_test"]

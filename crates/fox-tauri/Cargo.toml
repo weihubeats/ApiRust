@@ -3,6 +3,9 @@ name = "fox-tauri"
 version = "0.0.1"
 edition = "2021"
 description = "fox-core / fox-storage 的 Tauri 2 插件封装：Vue 3 前端通过 IPC 调用的 Command 层"
+# links 决定权限命名空间前缀（与 lib.rs 中 Builder::new("fox") 一致），
+# 否则生成 fox-tauri:allow-* 与运行时 plugin:fox|* 不匹配导致「not allowed」。
+links = "fox"
 
 # 独立工作区：不加入根 workspace，避免 tauri 依赖拖慢主仓构建。
 # 依赖的 fox-* crate 通过路径引用，其 workspace 继承仍解析到仓库根。
@@ -12,6 +15,12 @@ description = "fox-core / fox-storage 的 Tauri 2 插件封装：Vue 3 前端通
 fox-core = { path = "../fox-core" }
 fox-storage = { path = "../fox-storage" }
 fox-http = { path = "../fox-http" }
+fox-oauth = { path = "../fox-oauth" }
+fox-codegen = { path = "../fox-codegen" }
+fox-mock = { path = "../fox-mock" }
+fox-backup = { path = "../fox-backup" }
+fox-openapi = { path = "../fox-openapi" }
+fox-test = { path = "../fox-test" }
 
 tauri = "2"
 
@@ -29,3 +38,6 @@ sqlx = { version = "0.7", features = [
     "json",
     "migrate",
 ] }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

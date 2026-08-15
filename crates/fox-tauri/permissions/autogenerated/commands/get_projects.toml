@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-get-projects"
+description = "Enables the get_projects command without any pre-configured scope."
+commands.allow = ["get_projects"]
+
+[[permission]]
+identifier = "deny-get-projects"
+description = "Denies the get_projects command without any pre-configured scope."
+commands.deny = ["get_projects"]

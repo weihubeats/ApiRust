@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::config::AssertionSpec;
 
 /// 单条断言结果。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Outcome {
     pub description: String,
     pub passed: bool,

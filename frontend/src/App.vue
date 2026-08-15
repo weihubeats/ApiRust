@@ -27,26 +27,14 @@ const showAbout = ref(false)
 let unlistenAbout: UnlistenFn | null = null
 
 onMounted(async () => {
-  const report = (msg: string, err: unknown): void => {
-    try {
-      fetch('http://127.0.0.1:9999/log', {
-        method: 'POST',
-        body: JSON.stringify({ msg, stack: err instanceof Error ? err.stack : String(err) }),
-      })
-    } catch {
-      /* ignore */
-    }
-  }
   window.addEventListener('error', (event) => {
     console.error('[window.error]', event.message, event.error)
-    report(String(event.error?.message ?? event.message), event.error)
     const msg = String(event.error?.message ?? event.message)
     toast.error('页面错误', { message: msg, duration: 6000 })
   })
   window.addEventListener('unhandledrejection', (event) => {
     const reason = event.reason
     console.error('[unhandledrejection]', reason)
-    report('unhandledrejection: ' + String(reason), reason)
     const msg = reason instanceof Error ? reason.message : String(reason)
     toast.error('未处理的 Promise 错误', { message: msg, duration: 6000 })
   })

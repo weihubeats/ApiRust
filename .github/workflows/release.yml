@@ -98,6 +98,11 @@ jobs:
       - name: Show artifacts
         run: ls -laR artifacts
 
+      - name: Delete existing release for this tag (retry safety)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete "${{ github.ref_name }}" --yes || true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:

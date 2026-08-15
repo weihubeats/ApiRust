@@ -6,7 +6,8 @@ use fox_storage::repository as repo;
 use uuid::Uuid;
 
 use crate::components::{
-    loading_overlay::LoadingOverlay, project_tree::SideBar, toasts::Toasts, topbar::TopBar,
+    debug_overlay::{DebugOverlay, DEBUG_OVERLAY_JS}, loading_overlay::LoadingOverlay,
+    project_tree::SideBar, toasts::Toasts, topbar::TopBar,
 };
 use crate::pages::{home::HomePage, settings::SettingsPage, workspace::WorkspacePage};
 use crate::services::Services;
@@ -102,6 +103,7 @@ pub fn App() -> Element {
                 });
             }
             subscribe_window_state();
+            eval(DEBUG_OVERLAY_JS);
             // 启动时静默检查更新（仅在 release 构建生效，测试/开发不触发网络请求）。
             if !cfg!(debug_assertions) {
                 state_for_effect.check_for_update(false);
@@ -142,7 +144,15 @@ pub fn App() -> Element {
         div {
             class: "app",
             "data-theme": "{theme_attr}",
-            style { "{crate::styles::DESIGN_SYSTEM_CSS}" }
+            onmousemove: move |e| {
+                let s = state.debug_mode;
+                if *s.read() {
+                    let coords = e.data().client_coordinates();
+                    let xy = coords.x.to_string() + "|" + &coords.y.to_string();
+                    eval(&format!("if (window.__rfShowTooltip) window.__rfShowTooltip('{}');", xy));
+                }
+            },
+            style { "{crate::styles::DESIGN_SYSTEM_CSS}" },
             TopBar {}
             div { class: "body",
                 if has_project {
@@ -160,6 +170,7 @@ pub fn App() -> Element {
             Toasts {}
             UpdateModal {}
             LoadingOverlay {}
+            DebugOverlay {}
             KeyboardShortcuts {}
         }
     }

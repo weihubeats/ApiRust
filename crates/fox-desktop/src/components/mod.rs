@@ -1,4 +1,5 @@
 pub mod confirm_dialog;
+pub mod debug_overlay;
 pub mod dropdown;
 #[cfg(test)]
 mod dropdown_test;

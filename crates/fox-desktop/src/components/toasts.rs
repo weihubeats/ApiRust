@@ -20,7 +20,15 @@ pub fn Toasts() -> Element {
     let items = toasts.read().clone();
 
     // 周期性清理过期 Toast（覆盖所有直接写入的 Toast，统一 4 秒自动消失）。
+    // Dioxus 0.5 的 use_effect 每次重渲染都重跑：若直接 spawn，每次 toast
+    // 推送/淡出/过期都会新增一个永不退出的轮询任务，造成内存持续增长。
+    // 用标志保证整棵生命周期内只注册一次轮询任务。
+    let started = use_hook(|| std::cell::Cell::new(false));
     use_effect(move || {
+        if started.get() {
+            return;
+        }
+        started.set(true);
         spawn(async move {
             let mut born: HashMap<u64, Instant> = HashMap::new();
             loop {

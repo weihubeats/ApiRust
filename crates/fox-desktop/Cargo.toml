@@ -33,6 +33,7 @@ dioxus = { workspace = true }
 sqlx = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
 dioxus-html = { version = "0.5", features = ["serialize"] }

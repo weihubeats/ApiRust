@@ -44,6 +44,19 @@ const SHORTCUTS_JS: &str = r#"
       e.preventDefault();
       dioxus.send('new-folder');
     }
+    if (key === 's' && !e.shiftKey) {
+      e.preventDefault();
+      dioxus.send('save-endpoint');
+      return;
+    }
+    if (key === 'd' && e.shiftKey) {
+      e.preventDefault();
+      dioxus.send('toggle-debug');
+    }
+    if (key === 'x' && e.shiftKey && e.altKey) {
+      e.preventDefault();
+      dioxus.send('toggle-debug');
+    }
   });
 })();
 "#;
@@ -110,6 +123,22 @@ fn dispatch_shortcut(state: &AppState, value: &Value) {
     match value.as_str() {
         Some("new-endpoint") => state.create_endpoint_at(None, "未命名接口".into()),
         Some("new-folder") => state.create_folder_at(None, "新建文件夹".into()),
+        Some("save-endpoint") => {
+            // 统一走保存入口：未落库接口弹命名确认框，已落库直接保存当前草稿。
+            state.save_active_endpoint();
+        }
+        Some("toggle-debug") => {
+            let mut dm = state.debug_mode;
+            let cur = *dm.read();
+            let new_state = !cur;
+            dm.set(new_state);
+            let script = if new_state {
+                "document.body.setAttribute('data-rf-debug','1'); if (window.__rfDebugApply) window.__rfDebugApply(true);"
+            } else {
+                "document.body.removeAttribute('data-rf-debug'); if (window.__rfDebugApply) window.__rfDebugApply(false); if (window.__rfHideTooltip) window.__rfHideTooltip();"
+            };
+            eval(script);
+        }
         _ => {}
     }
 }

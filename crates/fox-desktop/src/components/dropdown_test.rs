@@ -118,7 +118,11 @@ mod tests {
             let m2 = dom.render_immediate_to_vec();
             let clicks_after = click_listeners(&m2).len();
             // 初始 1 个（trigger），打开后 3 个（backdrop + 选项 + footer 按钮）
-            assert_eq!(clicks_after, clicks_before + 2, "打开后应有新增的选项 + footer 监听");
+            assert_eq!(
+                clicks_after,
+                clicks_before + 2,
+                "打开后应有新增的选项 + footer 监听"
+            );
             assert!(clicks_after >= 3, "应有 backdrop + 选项 + footer 按钮");
         });
     }

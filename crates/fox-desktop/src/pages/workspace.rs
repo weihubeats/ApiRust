@@ -26,7 +26,7 @@ use uuid::Uuid;
 use crate::components::confirm_dialog::{ConfirmDialog, ConfirmInfo};
 use crate::components::dropdown::Dropdown;
 use crate::components::icons::{
-    ClockIcon, CodeIcon, CopyIcon, ImportIcon, PlusIcon, SaveIcon, SendIcon, XIcon,
+    ClockIcon, CodeIcon, CopyIcon, PlusIcon, SaveIcon, SendIcon, XIcon,
 };
 use crate::components::modal::RFModal;
 use crate::state::{AppState, Page};
@@ -1615,12 +1615,10 @@ const RESIZER_JS: &str = r#"
 #[component]
 pub fn WorkspacePage() -> Element {
     let state = use_context::<AppState>();
-    let draft: Signal<Option<Endpoint>> = use_signal(|| None);
+    let mut draft: Signal<Option<Endpoint>> = use_signal(|| None);
     let active_tab: Signal<EditorTab> = use_signal(|| EditorTab::Params);
     let sending: Signal<bool> = use_signal(|| false);
     let response: Signal<Option<ResponseView>> = use_signal(|| None);
-    // 描述行：聚焦后展开为多行。
-    let desc_open: Signal<bool> = use_signal(|| false);
     // 响应正文视图：Pretty（默认）/ Raw。
     let resp_pretty: Signal<bool> = use_signal(|| true);
     let abort_tx: Signal<Option<tokio::sync::oneshot::Sender<()>>> = use_signal(|| None);
@@ -1657,6 +1655,25 @@ pub fn WorkspacePage() -> Element {
     let curl_input: Signal<String> = use_signal(String::new);
     // 删除二次确认弹窗（测试历史 / 响应示例）。
     let confirm: Signal<Option<(ConfirmInfo, DeleteTarget)>> = use_signal(|| None);
+    // 未落库接口保存时的命名输入框。
+    let save_name: Signal<String> = use_signal(String::new);
+    let mut save_name_synced: Signal<Option<Uuid>> = use_signal(|| None);
+
+    // 命名弹窗打开 / 切换接口时预填名称（防每次渲染重置用户输入）。
+    {
+        let mut sn = save_name;
+        let mut synced = save_name_synced;
+        let st = state.clone();
+        use_effect(move || {
+            let Some(ep) = st.pending_save.peek().as_ref().cloned() else {
+                return;
+            };
+            if *synced.peek() != Some(ep.id) {
+                synced.set(Some(ep.id));
+                sn.set(ep.name);
+            }
+        });
+    }
 
     // M9：draft 变化时同步 tests 配置文本。
     {
@@ -1677,7 +1694,7 @@ pub fn WorkspacePage() -> Element {
 
     // M15：活动标签同步 —— active_endpoint_id 变化时切换草稿（先写回旧标签缓存）。
     {
-        let st = state.clone();
+        let mut st = state.clone();
         let mut d = draft;
         let mut tds = tab_drafts;
         let mut rk = raw_keep;
@@ -1695,7 +1712,17 @@ pub fn WorkspacePage() -> Element {
                         // 标签切换：清空 Body 模式切换暂存，避免暂存数据串到其他接口。
                         rk.write().clear();
                         fk.write().clear();
-                        let ep = tds.peek().get(&id).cloned().or_else(|| {
+                        // 未持久化的导入草稿（cURL 导入）：拾取后清空，不落库。
+                        let unsaved = st
+                            .unsaved_draft
+                            .peek()
+                            .as_ref()
+                            .filter(|e| e.id == id)
+                            .cloned();
+                        if unsaved.is_some() {
+                            st.unsaved_draft.set(None);
+                        }
+                        let ep = tds.peek().get(&id).cloned().or(unsaved).or_else(|| {
                             let list = st.endpoints.read().clone();
                             list.into_iter().find(|e| e.id == id)
                         });
@@ -1712,7 +1739,7 @@ pub fn WorkspacePage() -> Element {
 
     // M15：草稿 → 缓存 + 脏标记（对比仓库中的已保存副本）。
     {
-        let st = state.clone();
+        let mut st = state.clone();
         let d = draft;
         let mut tds = tab_drafts;
         let mut dirty = dirty;
@@ -1721,6 +1748,17 @@ pub fn WorkspacePage() -> Element {
                 return;
             };
             tds.write().insert(ep.id, ep.clone());
+            // 同步全局草稿（快捷键 / 保存按钮读取最新编辑）。
+            st.active_draft.set(Some(ep.clone()));
+            // 未落库草稿保持最新编辑，快捷键保存时以它为准。
+            if st
+                .unsaved_draft
+                .peek()
+                .as_ref()
+                .is_some_and(|u| u.id == ep.id)
+            {
+                st.unsaved_draft.set(Some(ep.clone()));
+            }
             let saved = st.endpoints.read().iter().find(|e| e.id == ep.id).cloned();
             match saved {
                 Some(s) if eq_ignoring_updated_at(&s, &ep) => {
@@ -1804,7 +1842,7 @@ pub fn WorkspacePage() -> Element {
         let auth_type = auth_mode(&ep.request.auth);
         let raw_body = body_raw(&ep);
         let active = *active_tab.read();
-        let sending_visible = *sending.peek();
+        let sending_visible = *sending.read();
         let resp = response.peek().clone();
         let resp_pretty_flag = *resp_pretty.peek();
         let resp_body_text = resp
@@ -1817,7 +1855,7 @@ pub fn WorkspacePage() -> Element {
                 }
             })
             .unwrap_or_default();
-        let desc_expanded = *desc_open.peek();
+
         let show_history_flag = *show_history.peek();
         let history_list = histories.read().clone();
         // M9 渲染局部。
@@ -1913,6 +1951,13 @@ pub fn WorkspacePage() -> Element {
         let resp_view = resp.clone();
         // M13 渲染局部。
         let st_cg = state.clone();
+        let st_cg_copy = st_cg.clone();
+        // M18 渲染局部：未落库接口保存命名弹窗。
+        // 注意必须用 read()（订阅信号）而非 peek()：弹窗开关与输入框值依赖重渲染。
+        let pending_save_ep = (*state.pending_save.read()).clone();
+        let pending_save = state.pending_save;
+        let save_name_str = save_name.read().clone();
+        let st_confirm_save = state.clone();
         let st_btn = state.clone();
         let codegen_open_flag = *codegen_open.read();
         // M17 渲染局部。
@@ -2128,9 +2173,10 @@ pub fn WorkspacePage() -> Element {
                 }
                 let id = ep.id;
                 let name = ep.name.clone();
-                tracing::info!("用户保存接口 id={} name={}", id, name);
+                tracing::info!("用户保存接口 id={id} name={name}");
                 st.record_step(format!("保存接口「{name}」"));
-                st.save_endpoint(ep);
+                // 未落库接口统一走命名确认弹框；已落库直接保存当前草稿。
+                st.save_active_endpoint();
                 dirty.write().remove(&id);
             }
         };
@@ -2205,18 +2251,21 @@ pub fn WorkspacePage() -> Element {
                 if *sending.peek() {
                     return;
                 }
+                sending.set(true);
                 let Some(ep) = d.peek().clone() else {
+                    sending.set(false);
                     st.toast_error("没有可发送的接口");
                     return;
                 };
                 let Some(project_id) = *st.current_project_id.peek() else {
+                    sending.set(false);
                     st.toast_error("未选择项目");
                     return;
                 };
                 let vars = merged_vars(&st, project_id);
                 let (url, spec) = render_request(&ep, &vars);
-                // URL 校验：完整 URL 直接用；相对路径且缺少 base_url 时明确提示。
                 if !is_absolute_url(&url) {
+                    sending.set(false);
                     tracing::warn!("[HTTP] URL 不是完整地址，且未配置 base_url: {url}");
                     st.toast_error("请输入完整的 URL，或在环境变量中配置 base_url");
                     return;
@@ -2233,6 +2282,8 @@ pub fn WorkspacePage() -> Element {
                 let mut rv = response;
                 let mut ht = histories;
                 spawn(async move {
+                    // 先 yield 确保 UI 已渲染发送中状态（转圈 + 取消按钮）。
+                    tokio::task::yield_now().await;
                     // 无论成功 / 失败 / 取消，最后统一恢复按钮状态。
                     let outcome = tokio::select! {
                         _ = rx => None,
@@ -2319,7 +2370,7 @@ pub fn WorkspacePage() -> Element {
             let mut co = curl_open;
             let mut ci = curl_input;
             move || {
-                let Some(ep) = d.peek().clone() else {
+                let Some(_ep) = d.peek().clone() else {
                     st.toast_error("未选择接口，无法导入");
                     return;
                 };
@@ -2336,11 +2387,15 @@ pub fn WorkspacePage() -> Element {
                     apply_curl(ep, &parsed);
                 }
                 drop(guard);
-                tds.write().insert(ep.id, ep.clone());
-                dirty.write().insert(ep.id);
-                co.set(false);
-                ci.set(String::new());
-                st.toast_success("导入成功");
+                let ep2 = d.read().clone();
+                if let Some(ep2) = ep2 {
+                    tds.write().insert(ep2.id, ep2.clone());
+                    dirty.write().insert(ep2.id);
+                    st.save_endpoint(ep2);
+                    co.set(false);
+                    ci.set(String::new());
+                    return;
+                }
             }
         };
 
@@ -2444,20 +2499,10 @@ pub fn WorkspacePage() -> Element {
                                     "取消",
                                 }
                             }
-                            div { class: "ub-actions",
-                                button {
-                                    id: "ub-import-{ep.id}",
-                                    class: "rf-btn rf-btn-ghost ub-btn",
-                                    title: "导入 cURL 命令",
-                                    onclick: move |_| {
-                                        let mut co = curl_open;
-                                        co.set(true);
-                                    },
-                                    ImportIcon {}
-                                }
-                                button {
-                                    class: "rf-btn rf-btn-ghost ub-btn",
-                                    title: "保存接口",
+div { class: "ub-actions",
+                                 button {
+                                     class: "rf-btn rf-btn-ghost ub-btn",
+                                     title: "保存接口",
                                     onclick: move |_| save(),
                                     SaveIcon {}
                                 }
@@ -2478,53 +2523,6 @@ pub fn WorkspacePage() -> Element {
                                         co.set(true);
                                     },
                                     CodeIcon {}
-                                }
-                            }
-                        }
-                        div { class: "editor-meta",
-                            input {
-                                class: "rf-input",
-                                value: "{ep.name}",
-                                placeholder: "接口名称",
-                                oninput: move |e| {
-                                    let v = e.data().value();
-                                    let mut d = draft;
-                                    let mut guard = d.write();
-                                    if let Some(ep) = guard.as_mut() { ep.name = v; }
-                                },
-                            }
-                            if desc_expanded {
-                                textarea {
-                                    rows: "3",
-                                    class: "rf-textarea",
-                                    value: "{ep.description}",
-                                    placeholder: "接口描述",
-                                    oninput: move |e| {
-                                        let v = e.data().value();
-                                        let mut d = draft;
-                                        let mut guard = d.write();
-                                        if let Some(ep) = guard.as_mut() { ep.description = v; }
-                                    },
-                                    onblur: move |_| {
-                                        let mut do_ = desc_open;
-                                        do_.set(false);
-                                    },
-                                }
-                            } else {
-                                input {
-                                    class: "rf-input",
-                                    value: "{ep.description}",
-                                    placeholder: "接口描述",
-                                    onfocus: move |_| {
-                                        let mut do_ = desc_open;
-                                        do_.set(true);
-                                    },
-                                    oninput: move |e| {
-                                        let v = e.data().value();
-                                        let mut d = draft;
-                                        let mut guard = d.write();
-                                        if let Some(ep) = guard.as_mut() { ep.description = v; }
-                                    },
                                 }
                             }
                         }
@@ -3033,7 +3031,16 @@ pub fn WorkspacePage() -> Element {
                                             }
                                         }
                                     }
-                                    pre { "{resp_body_text}" }
+                                    pre {
+                                        class: if is_json_content_type(&r.content_type) { "resp-body-hl" } else { "" },
+                                        {
+                                            if is_json_content_type(&r.content_type) {
+                                                highlight_json(resp_body_text.clone())
+                                            } else {
+                                                rsx! { {resp_body_text.clone()} }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3113,6 +3120,21 @@ pub fn WorkspacePage() -> Element {
                                                 }
                                             },
                                         }
+                                        button {
+                                            class: "rf-btn rf-btn-sm",
+                                            title: "复制到剪贴板",
+                                            onclick: move |_| {
+                                                let code = codegen_code.peek().clone();
+                                                if code.is_empty() {
+                                                    st_cg_copy.toast_info("暂无生成的代码");
+                                                    return;
+                                                }
+                                                copy_text(&code);
+                                                st_cg_copy.toast_success("已复制到剪贴板");
+                                            },
+                                            CopyIcon {}
+                                            "复制"
+                                        }
                                     }
                                     pre {
                                         class: "codegen-out",
@@ -3120,6 +3142,57 @@ pub fn WorkspacePage() -> Element {
                                     }
                                 }
                             }
+                        // M18：未落库接口保存命名弹窗。
+                        if pending_save_ep.is_some() {
+                            RFModal {
+                                on_close: move |_| {
+                                    let mut ps = pending_save;
+                                    ps.set(None);
+                                    save_name_synced.set(None);
+                                },
+                                div { class: "kv-title", "保存接口" }
+                                div { class: "rf-mb-2 hint-inline", "该接口尚未保存，请输入接口名称" }
+                                input {
+                                    class: "rf-input",
+                                    placeholder: "接口名称",
+                                    value: "{save_name_str}",
+                                    oninput: move |e| {
+                                        let mut sn = save_name;
+                                        sn.set(e.data().value());
+                                    },
+                                }
+                                div { class: "row rf-mb-2",
+                                    div { class: "spacer" }
+                                    button {
+                                        class: "rf-btn rf-btn-sm",
+                                        onclick: move |_| {
+                                            let mut ps = pending_save;
+                                            ps.set(None);
+                                            save_name_synced.set(None);
+                                        },
+                                        "取消"
+                                    }
+                                    button {
+                                        class: "rf-btn rf-btn-primary rf-btn-sm",
+                                        onclick: move |_| {
+                                            let name = save_name.peek().clone();
+                                            // 先同步本地草稿名，保存后脏标记才能正确清除。
+                                            let local_draft = draft.peek().clone();
+                                            if let (Some(mut ep), Some(pending_ep)) =
+                                                (local_draft, pending_save_ep.clone())
+                                            {
+                                                if ep.id == pending_ep.id {
+                                                    ep.name = name.clone();
+                                                    draft.set(Some(ep));
+                                                }
+                                            }
+                                            st_confirm_save.confirm_save_name(name);
+                                        },
+                                        "保存"
+                                    }
+                                }
+                            }
+                        }
                         // M17：导入 cURL 弹窗。
                         if curl_open_flag {
                             RFModal {

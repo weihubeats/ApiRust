@@ -2,9 +2,10 @@
 //! 左：Logo（狐狸 SVG + 字标）+ 面包屑（项目名）；中：全局搜索（max-width 480px，⌘K 胶囊）；
 //! 右：反馈 / 设置（ghost 图标按钮 + tooltip）。
 
+use dioxus::events::eval;
 use dioxus::prelude::*;
 
-use crate::components::icons::{BugIcon, FoxFaceIcon, SearchIcon, SlidersIcon};
+use crate::components::icons::{BugIcon, CodeIcon, FoxFaceIcon, SearchIcon, SlidersIcon};
 use crate::feedback;
 use crate::state::{AppState, Page};
 
@@ -85,6 +86,27 @@ pub fn TopBar() -> Element {
                     },
                     BugIcon {}
                 }
+{ if cfg!(debug_assertions) {
+                    rsx! {
+                        button {
+                            class: "rf-btn rf-btn-ghost tb-btn",
+                            title: "调试视图（点击元素可复制信息）",
+                            onclick: move |_| {
+                                let mut dm = state.debug_mode;
+                                let cur = *dm.read();
+                                let new_state = !cur;
+                                dm.set(new_state);
+                                let script = if new_state {
+                                    "document.body.setAttribute('data-rf-debug','1'); if (window.__rfDebugApply) window.__rfDebugApply(true);"
+                                } else {
+                                    "document.body.removeAttribute('data-rf-debug'); if (window.__rfDebugApply) window.__rfDebugApply(false); if (window.__rfHidePanel) window.__rfHidePanel();"
+                                };
+                                eval(script);
+                            },
+                            CodeIcon {}
+                        }
+                    }
+                } else { None } }
                 button {
                     class: "rf-btn rf-btn-ghost tb-btn",
                     title: "设置",

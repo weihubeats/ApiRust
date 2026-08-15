@@ -267,15 +267,17 @@ console.log('fox-drag-js-done');
                 loop {
                     match handle.recv().await {
                         Ok(v) => {
-                            tracing::info!("fox-drag-recv: {}", serde_json::to_string(&v).unwrap_or_default());
+                            tracing::info!(
+                                "fox-drag-recv: {}",
+                                serde_json::to_string(&v).unwrap_or_default()
+                            );
                             let msg: DropMessage = match serde_json::from_value(v) {
                                 Ok(m) => m,
                                 Err(_) => continue,
                             };
                             if let Ok(ep_id) = Uuid::parse_str(&msg.ep_id) {
-                                let folder_id: Option<Uuid> = msg
-                                    .folder_id
-                                    .and_then(|s| Uuid::parse_str(&s).ok());
+                                let folder_id: Option<Uuid> =
+                                    msg.folder_id.and_then(|s| Uuid::parse_str(&s).ok());
                                 st_spawn.move_endpoint_to_folder(ep_id, folder_id);
                             }
                         }
@@ -561,20 +563,29 @@ pub fn FolderNode(
     let d2 = dispatcher.clone();
     let d3 = dispatcher.clone();
     let d4 = dispatcher.clone();
-    let mut expanded = use_signal(|| true);
+    let expanded = use_signal(|| true);
     let children: Vec<Folder> = folders
         .iter()
         .filter(|f| f.parent_id == Some(folder.id))
         .cloned()
         .collect();
-    let has_sub = !children.is_empty()
-        || endpoints.iter().any(|e| e.folder_id == Some(folder.id));
+    let has_sub = !children.is_empty() || endpoints.iter().any(|e| e.folder_id == Some(folder.id));
     let f_id = folder.id;
     let folder_name = folder.name.clone();
-    let expand_class = if has_sub { "tree-item folder expandable" } else { "tree-item folder" };
+    let expand_class = if has_sub {
+        "tree-item folder expandable"
+    } else {
+        "tree-item folder"
+    };
     let chevron = if has_sub {
-        if *expanded.read() { "▾" } else { "▸" }
-    } else { "  " };
+        if *expanded.read() {
+            "▾"
+        } else {
+            "▸"
+        }
+    } else {
+        "  "
+    };
 
     let is_expanded = *expanded.read();
     let fold_children = is_expanded;

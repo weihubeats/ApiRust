@@ -281,7 +281,7 @@ mod tests {
             PROJECT.with(|s| *s.borrow_mut() = Some(project_id));
             let mut dom = VirtualDom::new_with_props(root, ());
                 let m1 = dom.rebuild_to_vec();
-                let state = ST.with(|s| s.borrow().clone()).expect("状态已就绪");
+                let mut state = ST.with(|s| s.borrow().clone()).expect("状态已就绪");
                 let clicks1 = event_listeners(&m1, "click");
                 let inputs1 = event_listeners(&m1, "input");
 
@@ -347,10 +347,35 @@ mod tests {
                     .map(|t| t.message.clone())
                     .collect();
                 assert!(
-                    eps.iter().any(|e| e.path == "https://api.example.com/users"
-                        && e.method == HttpMethod::POST),
-                    "应在项目根创建 POST 接口，实际：{:?}；toasts：{toasts:?}",
+                    eps.iter().all(|e| e.path != "https://api.example.com/users"),
+                    "导入不应直接落库，实际：{:?}",
                     eps.iter().map(|e| (e.name.clone(), e.path.clone())).collect::<Vec<_>>()
+                );
+                let draft = state.unsaved_draft.read().clone();
+                assert!(
+                    draft.as_ref().is_some_and(|e| e.path == "https://api.example.com/users"
+                        && e.method == HttpMethod::POST),
+                    "导入应生成为未保存草稿，实际：{draft:?}；toasts：{toasts:?}"
+                );
+                assert!(
+                    toasts.iter().any(|t| t.contains("草稿")),
+                    "应提示已导入为草稿：{toasts:?}"
+                );
+
+                // Ctrl+S 保存未落库草稿 → 应进入命名确认（不直接落库）。
+                let draft_ep = draft.unwrap();
+                state.active_draft.set(Some(draft_ep.clone()));
+                state.save_active_endpoint();
+                let pending = state.pending_save.read().clone();
+                assert!(
+                    pending.as_ref().is_some_and(|e| e.id == draft_ep.id),
+                    "未落库接口保存应弹命名确认框，实际：{pending:?}"
+                );
+                // 命名确认：关闭弹窗并触发保存（异步落库由持久化任务完成，此处验证状态流转）。
+                state.confirm_save_name("导入接口 POST users".into());
+                assert!(
+                    state.pending_save.read().is_none(),
+                    "确认后应关闭命名弹窗"
                 );
             });
     }

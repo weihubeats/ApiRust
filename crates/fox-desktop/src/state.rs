@@ -84,6 +84,13 @@ pub struct AppState {
     pub toasts: Signal<Vec<Toast>>,
     pub search: Signal<String>,
     pub mock_rules: Signal<Vec<MockRule>>,
+    /// 未持久化的接口草稿（cURL 导入等）：由工作区拾取为当前草稿，
+    /// 不落库，用户手动保存时才写入数据库。
+    pub unsaved_draft: Signal<Option<Endpoint>>,
+    /// 工作区当前草稿同步（全局快捷键 / 保存入口取最新编辑内容）。
+    pub active_draft: Signal<Option<Endpoint>>,
+    /// 等待命名确认的未落库接口（保存时弹框输入接口名）。
+    pub pending_save: Signal<Option<Endpoint>>,
     /// 运行中的 Mock 服务句柄（None 表示未启动）。
     pub mock_handle: Signal<Option<Arc<tokio::sync::Mutex<Option<fox_mock::server::MockServer>>>>>,
     pub mock_port: Signal<Option<u16>>,
@@ -103,6 +110,7 @@ pub struct AppState {
     pub update_error: Signal<Option<String>>,
     /// 主题模式（auto / dark / light，持久化于 settings 表）。
     pub theme: Signal<String>,
+    pub debug_mode: Signal<bool>,
 }
 
 /// 操作步骤上限。
@@ -137,6 +145,9 @@ impl AppState {
             toasts: Signal::new(Vec::new()),
             search: Signal::new(String::new()),
             mock_rules: Signal::new(Vec::new()),
+            unsaved_draft: Signal::new(None),
+            active_draft: Signal::new(None),
+            pending_save: Signal::new(None),
             mock_handle: Signal::new(None),
             mock_port: Signal::new(None),
             steps: Signal::new(Vec::new()),
@@ -147,6 +158,7 @@ impl AppState {
             update_downloaded: Signal::new(None),
             update_error: Signal::new(None),
             theme: Signal::new(theme::AUTO.into()),
+            debug_mode: Signal::new(false),
         }
     }
 
@@ -288,6 +300,9 @@ impl AppState {
     pub fn select_project(&self, project_id: Uuid) {
         let mut page = self.current_page;
         self.set_current_project(Some(project_id));
+        // 未保存的导入草稿属于原项目，切换后丢弃。
+        let mut unsaved = self.unsaved_draft;
+        unsaved.set(None);
         page.set(Page::Workspace);
         self.refresh_project_data(project_id);
     }
@@ -423,6 +438,7 @@ impl AppState {
     }
 
     /// 从 cURL 解析结果创建接口（含方法、路径、请求头、Body、认证），并打开标签。
+    /// 不落库：仅作为未保存草稿打开，用户手动保存时才持久化。
     pub fn create_endpoint_from_curl(&self, folder_id: Option<Uuid>, parsed: &CurlParsed) {
         let Some(project_id) = self.current_project() else {
             self.toast_error("未选择项目");
@@ -455,28 +471,16 @@ impl AppState {
             created_at: now,
             updated_at: now,
         };
-        let db = self.services.db.clone();
-        let mut endpoints = self.endpoints;
-        let mut toasts = self.toasts;
-        let st = self.clone();
-        spawn_forever(async move {
-            match repo::save_endpoint(&db, &model).await {
-                Ok(()) => {
-                    endpoints.write().push(model.clone());
-                    st.open_endpoint_tab(model.id);
-                    toasts.write().push(Toast {
-                        id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                        kind: ToastKind::Success,
-                        message: "cURL 导入成功".into(),
-                    });
-                }
-                Err(e) => toasts.write().push(Toast {
-                    id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                    kind: ToastKind::Error,
-                    message: format!("导入失败：{}", e.user_message()),
-                }),
-            }
-        });
+        self.open_unsaved_endpoint(model);
+    }
+
+    /// 打开未持久化的接口草稿：写入 `unsaved_draft` 并打开标签，
+    /// 工作区拾取为当前草稿后不落库，需用户手动保存（保存时自动创建）。
+    pub fn open_unsaved_endpoint(&self, ep: Endpoint) {
+        let mut unsaved = self.unsaved_draft;
+        unsaved.set(Some(ep.clone()));
+        self.open_endpoint_tab(ep.id);
+        self.toast_info("已导入为草稿，保存后生效");
     }
 
     /// 重命名文件夹。
@@ -678,19 +682,21 @@ impl AppState {
         let db = self.services.db.clone();
         let mut endpoints = self.endpoints;
         let mut toasts = self.toasts;
+        let mut unsaved = self.unsaved_draft;
         spawn_forever(async move {
-            match repo::update_endpoint(&db, &ep).await {
-                Ok(updated) => {
-                    let mut list = endpoints.write();
-                    if let Some(e) = list.iter_mut().find(|e| e.id == updated.id) {
-                        *e = updated;
-                    }
-                    if notify {
-                        toasts.write().push(Toast {
-                            id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                            kind: ToastKind::Success,
-                            message: "保存成功".into(),
-                        });
+            let updated = match repo::update_endpoint(&db, &ep).await {
+                Ok(v) => v,
+                Err(e) if matches!(&e, fox_core::error::AppError::NotFound(_)) => {
+                    match repo::save_endpoint(&db, &ep).await {
+                        Ok(_) => ep.clone(),
+                        Err(e2) => {
+                            toasts.write().push(Toast {
+                                id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                                kind: ToastKind::Error,
+                                message: format!("保存失败：{}", e2.user_message()),
+                            });
+                            return;
+                        }
                     }
                 }
                 Err(e) => {
@@ -701,9 +707,82 @@ impl AppState {
                             message: format!("保存失败：{}", e.user_message()),
                         });
                     }
+                    return;
                 }
+            };
+            let mut list = endpoints.write();
+            if let Some(e) = list.iter_mut().find(|e| e.id == updated.id) {
+                *e = updated.clone();
+            } else {
+                list.push(updated.clone());
+            }
+            // 首次落库成功：清除未保存草稿标记。
+            if unsaved.peek().as_ref().is_some_and(|u| u.id == updated.id) {
+                unsaved.set(None);
+            }
+            if notify {
+                toasts.write().push(Toast {
+                    id: TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    kind: ToastKind::Success,
+                    message: "保存成功".into(),
+                });
             }
         });
+    }
+
+    /// 保存当前活动接口（快捷键 / 保存按钮统一入口）。
+    ///
+    /// - 未落库的接口（cURL 导入、新建空白标签等）→ 弹命名确认框，确认后落库；
+    /// - 已落库的接口 → 直接保存当前草稿（含未保存的编辑）。
+    pub fn save_active_endpoint(&self) {
+        let Some(id) = *self.active_endpoint_id.peek() else {
+            self.toast_info("没有可保存的接口");
+            return;
+        };
+        let draft = self
+            .active_draft
+            .peek()
+            .as_ref()
+            .filter(|e| e.id == id)
+            .cloned()
+            .or_else(|| {
+                self.unsaved_draft
+                    .peek()
+                    .as_ref()
+                    .filter(|e| e.id == id)
+                    .cloned()
+            });
+        let Some(ep) = draft else {
+            self.toast_info("没有可保存的接口");
+            return;
+        };
+        let persisted = self
+            .endpoints
+            .read()
+            .iter()
+            .any(|e| e.id == ep.id);
+        if persisted {
+            self.save_endpoint(ep);
+        } else {
+            let mut pending = self.pending_save;
+            pending.set(Some(ep));
+        }
+    }
+
+    /// 命名确认：为未落库接口设置名称并保存（落库）。
+    pub fn confirm_save_name(&self, name: String) {
+        let Some(mut ep) = self.pending_save.peek().clone() else {
+            return;
+        };
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            self.toast_error("接口名称不能为空");
+            return;
+        }
+        ep.name = name;
+        let mut pending = self.pending_save;
+        pending.set(None);
+        self.save_endpoint(ep);
     }
 
     /// 新建环境并设为当前环境。
@@ -986,6 +1065,7 @@ impl AppState {
     }
 
     /// 导出当前项目为 OpenAPI 3.0 JSON 文本（返回中文错误信息或 OK(json)）。
+    #[allow(dead_code)]
     pub fn export_openapi(&self, f: impl Fn(Result<String, String>) + 'static) {
         let Some(project_id) = self.current_project() else {
             self.toast_error("未选择项目");

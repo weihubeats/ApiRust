@@ -933,12 +933,7 @@ code, pre { font-family: var(--mono); }
 .ub-btn svg { width: 14px; height: 14px; }
 
 /* 名称 + 描述：grid 两列等高 32px，描述聚焦后展开为多行 */
-.editor-meta { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-2);
-  padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--border);
-  align-items: center; }
-.editor-meta .rf-input { width: 100%; min-width: 0; height: 32px;
-  box-sizing: border-box; }
-.editor-meta .rf-textarea { grid-column: 1 / -1; }
+
 .editor .tabs { display: flex; border-bottom: 1px solid var(--border);
   padding: 0 var(--s-2); gap: 2px; }
 /* 区域 Tab：激活下划线 2px，::after + transition 滑动动画 */
@@ -1082,6 +1077,15 @@ code, pre { font-family: var(--mono); }
   margin-bottom: var(--s-1); font-weight: 600; }
 .resp-hdr-row { display: flex; gap: var(--s-3); font-size: 12px; padding: 2px 0; }
 .resp-hdr-row code { color: var(--accent); min-width: 180px; }
+
+.resp-body-hl { margin: 0; padding: var(--s-3) var(--s-4); overflow: auto; flex: 1;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+  color: var(--text); background: var(--code-bg); white-space: pre-wrap; word-break: break-word; }
+.resp-body-hl .hl-k { color: var(--hl-k); }
+.resp-body-hl .hl-s { color: var(--hl-s); }
+.resp-body-hl .hl-n { color: var(--hl-n); }
+.resp-body-hl .hl-b { color: var(--hl-b); }
+.resp-body-hl .hl-p { color: var(--hl-p); }
 
 /* 测试 */
 .test-run { border: 1px solid var(--border-2); border-radius: var(--r-l);
@@ -1238,5 +1242,35 @@ code, pre { font-family: var(--mono); }
     transition-duration: .01ms !important;
     scroll-behavior: auto !important;
   }
+
+/* ========== Debug Overlay ========== */
+#rf-debug-tooltip {
+  position: fixed; z-index: 999999;
+  background: #1a1a2e; color: #e2e8f0;
+  font: 11px/1.5 'SF Mono', Menlo, Consolas, monospace;
+  padding: 6px 10px; border-radius: 6px;
+  border: 1px solid rgba(255, 87, 34, .5);
+  box-shadow: 0 4px 12px rgba(0,0,0,.4);
+  pointer-events: none; max-width: 380px;
+  white-space: pre-wrap; word-break: break-all;
+  display: none;
+}
+.rf-debug-badge {
+  position: fixed; top: 8px; right: 8px; z-index: 999998;
+  background: rgba(239, 68, 68, .9); color: #fff;
+  font: 11px/1 'SF Mono', Menlo, Consolas, monospace; font-weight: 700;
+  padding: 4px 10px; border-radius: 4px;
+  letter-spacing: .05em; cursor: pointer;
+  user-select: none;
+}
+#rf-debug-panel {
+  position: fixed; bottom: 16px; right: 16px; z-index: 999998;
+  background: #1a1a2e; color: #e2e8f0;
+  font: 11px/1.5 'SF Mono', Menlo, Consolas, monospace;
+  padding: 10px 12px; border-radius: 8px;
+  border: 1px solid rgba(255, 87, 34, .5);
+  box-shadow: 0 6px 18px rgba(0,0,0,.5);
+  max-width: 400px; white-space: pre-wrap; word-break: break-all;
+  display: none; pointer-events: auto;
 }
 "#;

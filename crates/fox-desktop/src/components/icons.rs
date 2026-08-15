@@ -2,6 +2,9 @@
 //! 内联 SVG 图标：统一 viewBox 0 0 24 24、fill none、stroke currentColor、stroke-width 2。
 
 use dioxus::prelude::*;
+use std::sync::LazyLock;
+
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 fn svg_base(children: Element) -> Element {
     rsx! {
@@ -64,6 +67,7 @@ pub fn SlidersIcon() -> Element {
 }
 
 /// 粘贴 / 导入（剪贴板）。
+#[allow(dead_code)]
 pub fn ImportIcon() -> Element {
     svg_base(rsx! {
         rect { x: "8", y: "2", width: "8", height: "4", rx: "1", ry: "1" }
@@ -112,15 +116,26 @@ pub fn BugIcon() -> Element {
     })
 }
 
-/// Logo：赛博朋克狐狸脸（圆脸 + 尖耳 + 耳机弧 + 发光节点）。
+static LOGO_DATA_URL: LazyLock<String> = LazyLock::new(|| {
+    let bytes = include_bytes!("../assets_logo.png");
+    format!("data:image/png;base64,{}", STANDARD.encode(bytes))
+});
+
+/// Logo：基于 rustfox-source.png 生成的头像。
 pub fn FoxFaceIcon() -> Element {
-    svg_base(rsx! {
-        path { d: "M7.5 3.5 9.8 7.2M16.5 3.5 14.2 7.2" }
-        path { d: "M9.8 7.2h4.4c1.6.3 2.9 1.7 2.9 3.3 0 .8-.3 1.6-.8 2.2.5.6.8 1.4.8 2.2 0 1.9-1.5 3.4-3.4 3.4h-5.4c-1.9 0-3.4-1.5-3.4-3.4 0-.8.3-1.6.8-2.2-.5-.6-.8-1.4-.8-2.2 0-1.6 1.3-3 2.9-3.3z" }
-        circle { cx: "10", cy: "11.2", r: "1" }
-        circle { cx: "14", cy: "11.2", r: "1" }
-        path { d: "M12 15.6c.6 0 1-.4 1-1h-2c0 .6.4 1 1 1z" }
-    })
+    let src = LOGO_DATA_URL.as_str();
+    rsx! {
+        svg {
+            width: "28",
+            height: "28",
+            overflow: "visible",
+            image {
+                href: "{src}",
+                width: "28",
+                height: "28",
+            }
+        }
+    }
 }
 
 /// 重命名（铅笔）。

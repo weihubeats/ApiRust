@@ -9,7 +9,6 @@ use crate::components::dropdown::Dropdown;
 use crate::components::icons::XIcon;
 use crate::state::{AppState, Page};
 use fox_core::model::Environment;
-use fox_openapi::import::ConflictStrategy;
 use uuid::Uuid;
 
 /// 删除目标类型（区分环境 / Mock 规则）。
@@ -240,8 +239,6 @@ pub fn SettingsPage() -> Element {
     let env_draft: Signal<Option<EnvDraft>> = use_signal(|| None);
     let proj_vars: Signal<Vec<(String, String)>> = use_signal(Vec::new);
     let proj_loaded: Signal<Option<Uuid>> = use_signal(|| None);
-    let mut openapi_text: Signal<String> = use_signal(String::new);
-    let mut strategy: Signal<String> = use_signal(String::new);
     let mut mock_name: Signal<String> = use_signal(String::new);
     let mut mock_method: Signal<String> = use_signal(String::new);
     let mut mock_path: Signal<String> = use_signal(String::new);
@@ -282,8 +279,6 @@ pub fn SettingsPage() -> Element {
     let theme_btn = state.clone();
     let create_btn = state.clone();
     let save_proj_btn = state.clone();
-    let import_btn = state.clone();
-    let export_btn = state.clone();
     let back_btn = state.clone();
     let start_btn = state.clone();
     let stop_btn = state.clone();
@@ -445,65 +440,6 @@ pub fn SettingsPage() -> Element {
                         }
                     }
                 }
-                    div { class: "rf-divider" }
-                    div { class: "settings-section",
-                        div { class: "section-title", "OpenAPI 导入导出" }
-                        div { class: "hint", "粘贴 OpenAPI 3.0 / Swagger 2.0 / Postman 集合 v2.1（JSON 或 YAML）内容，自动识别格式导入；或导出当前项目为 OpenAPI 3.0 JSON。" }
-                        textarea {
-                            class: "rf-textarea rf-oapi-input",
-                            placeholder: "在此粘贴 OpenAPI JSON / YAML 内容…",
-                            value: "{openapi_text}",
-                            oninput: move |e| openapi_text.set(e.data().value()),
-                        }
-                        div { class: "row",
-                            span { class: "label-hint", "冲突策略：" }
-                            Dropdown {
-                                options: vec![
-                                    ("skip".into(), "跳过重复".into()),
-                                    ("overwrite".into(), "覆盖重复".into()),
-                                    ("duplicate".into(), "复制为新接口".into()),
-                                ],
-                                selected: {
-                                    let s = strategy.peek().clone();
-                                    if s.is_empty() { "skip".into() } else { s }
-                                },
-                                on_select: move |v: String| strategy.set(v),
-                            }
-                            div { class: "spacer" }
-                            button {
-                                class: "rf-btn rf-btn-primary",
-                                onclick: move |_| {
-                                    let text = openapi_text.peek().clone();
-                                    if text.trim().is_empty() {
-                                        import_btn.toast_error("请先粘贴 OpenAPI 内容");
-                                        return;
-                                    }
-                                    let strategy =
-                                        ConflictStrategy::from_str_cn(strategy.peek().as_str())
-                                            .unwrap_or_default();
-                                    import_btn.import_openapi(text, strategy);
-                                },
-                                "导入"
-                            }
-                            button {
-                                class: "rf-btn",
-                                onclick: move |_| {
-                                    let exporter = export_btn.clone();
-                                    export_btn.export_openapi(move |result| {
-                                        let mut t = openapi_text;
-                                        match result {
-                                            Ok(json) => {
-                                                t.set(json);
-                                                exporter.toast_success("导出完成，内容已填入文本框（可复制保存）");
-                                            }
-                                            Err(e) => exporter.toast_error(e),
-                                        }
-                                    });
-                                },
-                                "导出当前项目"
-                            }
-                        }
-                    }
                     div { class: "rf-divider" }
                     div { class: "settings-section",
                         div { class: "section-title", "Mock Server" }

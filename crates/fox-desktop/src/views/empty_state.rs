@@ -367,11 +367,16 @@ mod tests {
                     let _ = dom.render_immediate_to_vec();
                 }
                 let eps = state.endpoints.read().clone();
+                let draft = state.unsaved_draft.read().clone();
                 assert!(
-                    eps.iter().any(|e| e.path == "https://api.example.com/users"
-                        && e.method == HttpMethod::POST),
-                    "应从 cURL 创建 POST 接口，实际：{:?}",
+                    eps.iter().all(|e| e.path != "https://api.example.com/users"),
+                    "导入不应直接落库，实际：{:?}",
                     eps.iter().map(|e| (e.name.clone(), e.path.clone())).collect::<Vec<_>>()
+                );
+                assert!(
+                    draft.as_ref().is_some_and(|e| e.path == "https://api.example.com/users"
+                        && e.method == HttpMethod::POST),
+                    "应从 cURL 生成未保存草稿，实际：{draft:?}"
                 );
             });
         });

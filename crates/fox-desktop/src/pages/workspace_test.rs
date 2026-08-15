@@ -190,6 +190,7 @@ mod tests {
         )))
     }
 
+    #[ignore = "导入 cURL 按钮已移除"]
     #[test]
     fn curl_import_updates_editor_and_closes_modal() {
         dioxus_html::set_event_converter(Box::new(dioxus_html::SerializedHtmlEventConverter));
@@ -302,7 +303,10 @@ mod tests {
             let state = ST.with(|s| s.borrow().clone()).expect("state 已就绪");
             let endpoints = state.endpoints.read();
             let ep = endpoints.iter().find(|e| e.method == HttpMethod::GET);
-            assert!(ep.is_some(), "应有 GET 方法的接口，实际 endpoints：{endpoints:?}");
+            assert!(
+                ep.is_some(),
+                "应有 GET 方法的接口，实际 endpoints：{endpoints:?}"
+            );
         });
     }
 }

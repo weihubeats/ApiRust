@@ -1025,7 +1025,7 @@ mod tests {
             status: 404,
             headers: vec![("Content-Type".to_string(), "application/json".to_string())],
             body: bytes::Bytes::from_static(br#"{"error":"nope"}"#),
-            duration_ms: 12,
+            duration_ms: 12.0,
             size_bytes: 15,
             cookies: Vec::new(),
             truncated: false,

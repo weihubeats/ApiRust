@@ -190,6 +190,8 @@ export interface ExecuteRequestArgs {
   environment_id: string | null
   project_id?: string | null
   endpoint_id?: string | null
+  /** 请求取消标识（前端生成；提供后可通过 cancelRequest 中止在途请求）。 */
+  request_id?: string | null
 }
 
 /** 请求历史（Rust `RequestHistory`，fox-tauri `list_request_histories` 返回）。 */

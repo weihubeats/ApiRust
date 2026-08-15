@@ -18,6 +18,8 @@ import { useRouter } from 'vue-router'
 import { useFoxApi } from '../composables/useFoxApi'
 import { useToast } from '../composables/useToast'
 import { useWorkspaceStore } from '../stores/workspace'
+import { escapeHtml, highlightGraphQL, highlightJSON } from '../utils/highlight'
+import Modal from '../components/ui/Modal.vue'
 import type { BodySpec, ExecuteRequestArgs, ExecuteResponse, GraphQLSpec } from '../types/foxApi'
 
 const router = useRouter()
@@ -85,62 +87,7 @@ const variablesValid = computed(() => {
   }
 })
 
-// ---------- 高亮 ----------
-const KEYWORDS =
-  'query|mutation|subscription|fragment|on|schema|scalar|type|interface|union|enum|input|implements|directive|extend|true|false|null'
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-/** 轻量 GraphQL 高亮（注释 / 字符串 / 变量 / 关键字 / 数字）。 */
-function highlightGraphQL(code: string): string {
-  const re =
-    /(#[^\n]*)|("(?:[^"\\]|\\.)*"|"""(?:.|\n)*?""")|(\$[A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*)|(-?\b\d+(?:\.\d+)?\b)|([{}\[\]():!=\|&,.])/g
-  let out = ''
-  let last = 0
-  for (const m of code.matchAll(re)) {
-    out += escapeHtml(code.slice(last, m.index))
-    const [full, comment, str, variable, ident, num, _punct] = m
-    if (comment) out += `<span class="hl-c">${escapeHtml(full)}</span>`
-    else if (str) out += `<span class="hl-s">${escapeHtml(full)}</span>`
-    else if (variable) out += `<span class="hl-v">${escapeHtml(full)}</span>`
-    else if (ident) {
-      if (KEYWORDS.split('|').includes(ident)) {
-        out += `<span class="hl-k">${escapeHtml(full)}</span>`
-      } else {
-        out += escapeHtml(full)
-      }
-    } else if (num) out += `<span class="hl-n">${escapeHtml(full)}</span>`
-    else out += `<span class="hl-p">${escapeHtml(full)}</span>`
-    last = m.index! + full.length
-  }
-  out += escapeHtml(code.slice(last))
-  return out
-}
-
-/** 轻量 JSON 高亮（键 / 字符串 / 数字 / 布尔 / null）。 */
-function highlightJSON(code: string): string {
-  const re =
-    /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|(true|false|null)/g
-  let out = ''
-  let last = 0
-  for (const m of code.matchAll(re)) {
-    out += escapeHtml(code.slice(last, m.index))
-    const [full, str, colon, num, bool] = m
-    if (str) out += `<span class="hl-s${colon ? ' hl-k' : ''}">${escapeHtml(full)}</span>`
-    else if (num) out += `<span class="hl-n">${escapeHtml(full)}</span>`
-    else if (bool) out += `<span class="hl-b">${escapeHtml(full)}</span>`
-    last = m.index! + full.length
-  }
-  out += escapeHtml(code.slice(last))
-  return out
-}
-
+// ---------- 高亮（实现见 utils/highlight.ts） ----------
 const queryHtml = computed(() => highlightGraphQL(gql.value.query))
 const variablesHtml = computed(() => {
   const t = gql.value.variables
@@ -492,46 +439,30 @@ async function copyCode() {
     </div>
 
     <!-- 历史 -->
-    <div v-if="historyOpen" class="modal-backdrop" @click.self="historyOpen = false">
-      <div class="modal">
-        <div class="modal-head">
-          <span class="modal-title">历史记录</span>
-          <button class="rf-btn rf-btn-sm rf-btn-ghost" @click="historyOpen = false">关闭</button>
-        </div>
-        <div class="modal-body">
-          <div v-if="!history.length" class="empty">暂无历史</div>
-          <ul v-else class="history-list">
-            <li v-for="(entry, i) in history" :key="i" class="history-item" @click="applyHistory(entry)">
-              <pre class="history-query">{{ entry.query }}</pre>
-              <span class="hint-inline">{{ new Date(entry.when).toLocaleString() }}</span>
-            </li>
-          </ul>
-        </div>
-        <div class="modal-foot">
-          <button class="rf-btn rf-btn-sm rf-btn-danger" @click="clearHistory">清空历史</button>
-        </div>
-      </div>
-    </div>
+    <Modal v-model:open="historyOpen" title="历史记录" width="560px">
+      <div v-if="!history.length" class="empty">暂无历史</div>
+      <ul v-else class="history-list">
+        <li v-for="(entry, i) in history" :key="i" class="history-item" @click="applyHistory(entry)">
+          <pre class="history-query">{{ entry.query }}</pre>
+          <span class="hint-inline">{{ new Date(entry.when).toLocaleString() }}</span>
+        </li>
+      </ul>
+      <template #footer>
+        <button class="rf-btn rf-btn-sm rf-btn-danger" @click="clearHistory">清空历史</button>
+      </template>
+    </Modal>
 
     <!-- 生成代码 -->
-    <div v-if="codegenOpen" class="modal-backdrop" @click.self="codegenOpen = false">
-      <div class="modal">
-        <div class="modal-head">
-          <span class="modal-title">生成代码</span>
-          <button class="rf-btn rf-btn-sm rf-btn-ghost" @click="codegenOpen = false">关闭</button>
-        </div>
-        <div class="modal-body">
-          <div class="rf-tabs">
-            <button class="rf-tab" :class="{ active: codegenTab === 'curl' }" @click="codegenTab = 'curl'">curl</button>
-            <button class="rf-tab" :class="{ active: codegenTab === 'apollo' }" @click="codegenTab = 'apollo'">JavaScript (Apollo Client)</button>
-          </div>
-          <pre class="codegen-out">{{ codegenTab === 'curl' ? curlCode : apolloCode }}</pre>
-        </div>
-        <div class="modal-foot">
-          <button class="rf-btn rf-btn-sm rf-btn-primary" @click="copyCode">{{ copied ? '已复制' : '复制' }}</button>
-        </div>
+    <Modal v-model:open="codegenOpen" title="生成代码" width="640px">
+      <div class="rf-tabs">
+        <button class="rf-tab" :class="{ active: codegenTab === 'curl' }" @click="codegenTab = 'curl'">curl</button>
+        <button class="rf-tab" :class="{ active: codegenTab === 'apollo' }" @click="codegenTab = 'apollo'">JavaScript (Apollo Client)</button>
       </div>
-    </div>
+      <pre class="codegen-out">{{ codegenTab === 'curl' ? curlCode : apolloCode }}</pre>
+      <template #footer>
+        <button class="rf-btn rf-btn-sm rf-btn-primary" @click="copyCode">{{ copied ? '已复制' : '复制' }}</button>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -554,7 +485,7 @@ async function copyCode() {
   --warning: var(--rf-warning);
   --danger: var(--rf-danger);
   --danger-weak: var(--rf-danger-tint);
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --mono: var(--font-mono);
   --r-s: var(--rf-radius-sm);
   --s-2: 8px;
   --s-3: 12px;
@@ -562,6 +493,7 @@ async function copyCode() {
   color: var(--text);
   background: var(--bg);
   font-size: 13.5px;
+  padding: 48px 12px 12px;
 }
 
 .row {
@@ -623,56 +555,6 @@ async function copyCode() {
 .rf-tab.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
-}
-
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(2, 6, 17, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-
-.modal {
-  width: min(720px, 90vw);
-  max-height: 82vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--panel);
-  border: 1px solid var(--border-2);
-  border-radius: 10px;
-  box-shadow: 0 16px 48px rgba(2, 6, 17, 0.5);
-}
-
-.modal-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--s-3) var(--s-4);
-  border-bottom: 1px solid var(--border);
-}
-
-.modal-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--accent);
-}
-
-.modal-body {
-  padding: var(--s-4);
-  overflow: auto;
-  flex: 1;
-  min-height: 0;
-}
-
-.modal-foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--s-2);
-  padding: var(--s-3) var(--s-4);
-  border-top: 1px solid var(--border);
 }
 
 /* ---------- 布局 ---------- */
@@ -765,34 +647,38 @@ async function copyCode() {
   background: var(--accent-soft);
 }
 
-.hl-c {
+:deep(.hl-c) {
   color: var(--muted);
   font-style: italic;
 }
 
-.hl-s {
+:deep(.hl-s) {
   color: var(--success);
 }
 
-.hl-k {
+:deep(.hl-k) {
   color: var(--accent);
   font-weight: 600;
 }
 
-.hl-v {
+:deep(.hl-v) {
   color: var(--warning);
 }
 
-.hl-n {
+:deep(.hl-n) {
   color: #c084fc;
 }
 
-.hl-p {
+:deep(.hl-p) {
   color: var(--text-2);
 }
 
-.hl-b {
+:deep(.hl-b) {
   color: var(--danger);
+}
+
+:deep(.hl-null) {
+  color: var(--text-3);
 }
 
 .op-name-label {

@@ -25,5 +25,7 @@ permissions = [
     "allow-save-environment",
     "allow-set-active-environment",
     "allow-get-active-environment",
+    "allow-delete-environment",
     "allow-execute-request",
+    "allow-cancel-request",
 ]

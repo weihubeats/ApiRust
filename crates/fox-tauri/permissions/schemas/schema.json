@@ -319,6 +319,18 @@
           "markdownDescription": "Denies the backup_restore command without any pre-configured scope."
         },
         {
+          "description": "Enables the cancel_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-request",
+          "markdownDescription": "Enables the cancel_request command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-request",
+          "markdownDescription": "Denies the cancel_request command without any pre-configured scope."
+        },
+        {
           "description": "Enables the codegen_render command without any pre-configured scope.",
           "type": "string",
           "const": "allow-codegen-render",
@@ -341,6 +353,18 @@
           "type": "string",
           "const": "deny-delete-endpoint",
           "markdownDescription": "Denies the delete_endpoint command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_environment command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-environment",
+          "markdownDescription": "Enables the delete_environment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_environment command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-environment",
+          "markdownDescription": "Denies the delete_environment command without any pre-configured scope."
         },
         {
           "description": "Enables the delete_example command without any pre-configured scope.",
@@ -751,10 +775,10 @@
           "markdownDescription": "Denies the test_endpoint command without any pre-configured scope."
         },
         {
-          "description": "RustFox 核心插件的默认权限：允许前端调用全部 fox 命令\n（项目 / 接口 / 文件夹 / 环境 / cURL 解析 / 请求执行）。\n命令的 allow-* 权限由 tauri-build 依据 invoke_handler 自动生成。\n\n#### This default permission set includes:\n\n- `allow-get-projects`\n- `allow-save-project`\n- `allow-delete-project`\n- `allow-set-active-project`\n- `allow-get-active-project`\n- `allow-list-endpoints`\n- `allow-get-endpoint`\n- `allow-save-endpoint`\n- `allow-delete-endpoint`\n- `allow-duplicate-endpoint`\n- `allow-list-folders`\n- `allow-save-folder`\n- `allow-delete-folder`\n- `allow-parse-curl-command`\n- `allow-list-environments`\n- `allow-save-environment`\n- `allow-set-active-environment`\n- `allow-get-active-environment`\n- `allow-execute-request`",
+          "description": "RustFox 核心插件的默认权限：允许前端调用全部 fox 命令\n（项目 / 接口 / 文件夹 / 环境 / cURL 解析 / 请求执行）。\n命令的 allow-* 权限由 tauri-build 依据 invoke_handler 自动生成。\n\n#### This default permission set includes:\n\n- `allow-get-projects`\n- `allow-save-project`\n- `allow-delete-project`\n- `allow-set-active-project`\n- `allow-get-active-project`\n- `allow-list-endpoints`\n- `allow-get-endpoint`\n- `allow-save-endpoint`\n- `allow-delete-endpoint`\n- `allow-duplicate-endpoint`\n- `allow-list-folders`\n- `allow-save-folder`\n- `allow-delete-folder`\n- `allow-parse-curl-command`\n- `allow-list-environments`\n- `allow-save-environment`\n- `allow-set-active-environment`\n- `allow-get-active-environment`\n- `allow-delete-environment`\n- `allow-execute-request`\n- `allow-cancel-request`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "RustFox 核心插件的默认权限：允许前端调用全部 fox 命令\n（项目 / 接口 / 文件夹 / 环境 / cURL 解析 / 请求执行）。\n命令的 allow-* 权限由 tauri-build 依据 invoke_handler 自动生成。\n\n#### This default permission set includes:\n\n- `allow-get-projects`\n- `allow-save-project`\n- `allow-delete-project`\n- `allow-set-active-project`\n- `allow-get-active-project`\n- `allow-list-endpoints`\n- `allow-get-endpoint`\n- `allow-save-endpoint`\n- `allow-delete-endpoint`\n- `allow-duplicate-endpoint`\n- `allow-list-folders`\n- `allow-save-folder`\n- `allow-delete-folder`\n- `allow-parse-curl-command`\n- `allow-list-environments`\n- `allow-save-environment`\n- `allow-set-active-environment`\n- `allow-get-active-environment`\n- `allow-execute-request`"
+          "markdownDescription": "RustFox 核心插件的默认权限：允许前端调用全部 fox 命令\n（项目 / 接口 / 文件夹 / 环境 / cURL 解析 / 请求执行）。\n命令的 allow-* 权限由 tauri-build 依据 invoke_handler 自动生成。\n\n#### This default permission set includes:\n\n- `allow-get-projects`\n- `allow-save-project`\n- `allow-delete-project`\n- `allow-set-active-project`\n- `allow-get-active-project`\n- `allow-list-endpoints`\n- `allow-get-endpoint`\n- `allow-save-endpoint`\n- `allow-delete-endpoint`\n- `allow-duplicate-endpoint`\n- `allow-list-folders`\n- `allow-save-folder`\n- `allow-delete-folder`\n- `allow-parse-curl-command`\n- `allow-list-environments`\n- `allow-save-environment`\n- `allow-set-active-environment`\n- `allow-get-active-environment`\n- `allow-delete-environment`\n- `allow-execute-request`\n- `allow-cancel-request`"
         }
       ]
     }

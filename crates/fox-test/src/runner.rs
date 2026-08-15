@@ -20,7 +20,7 @@ pub struct EndpointResult {
     pub path: String,
     pub ok: bool,
     pub status: Option<u16>,
-    pub duration_ms: Option<u64>,
+    pub duration_ms: Option<f64>,
     /// 请求级错误（发送失败 / 配置错误）。
     pub request_error: Option<String>,
     /// 断言明细。

@@ -35,7 +35,8 @@ pub struct HttpResponseData {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Bytes,
-    pub duration_ms: u64,
+    /// 毫秒（浮点，保留亚毫秒精度）。
+    pub duration_ms: f64,
     pub size_bytes: usize,
     pub cookies: Vec<CookieData>,
     pub truncated: bool,
@@ -334,6 +335,31 @@ pub async fn send_request(
     spec: &RequestSpec,
     timeout_ms: Option<u64>,
 ) -> Result<HttpResponseData, AppError> {
+    send_request_inner(method, url, spec, timeout_ms, None).await
+}
+
+/// 带取消能力的发送（用户点击「取消请求」时返回 [`AppError::Cancelled`]）。
+///
+/// 取消令牌由调用方持有（如 Tauri Command 层的请求注册表）；等待连接 /
+/// 响应 / 读取响应体期间任一时刻取消，都会中止底层 reqwest 请求并返回
+/// [`AppError::Cancelled`]。不可取消场景请使用 [`send_request`]。
+pub async fn send_request_cancel(
+    method: HttpMethod,
+    url: &str,
+    spec: &RequestSpec,
+    timeout_ms: Option<u64>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<HttpResponseData, AppError> {
+    send_request_inner(method, url, spec, timeout_ms, Some(cancel)).await
+}
+
+async fn send_request_inner(
+    method: HttpMethod,
+    url: &str,
+    spec: &RequestSpec,
+    timeout_ms: Option<u64>,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<HttpResponseData, AppError> {
     let timeout_ms = timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
     let client = shared_client()?;
 
@@ -372,8 +398,21 @@ pub async fn send_request(
     }
 
     let start = std::time::Instant::now();
-    let resp: Response = req.send().await.map_err(AppError::from_reqwest)?;
-    let duration_ms = start.elapsed().as_millis() as u64;
+    let resp: Response = match cancel {
+        Some(token) => {
+            let fut = req.send();
+            tokio::select! {
+                // 取消分支胜出即丢弃请求 future：底层 hyper 连接随之中止
+                //（hyper 官方文档：丢弃返回的 future 是取消在途请求的支持方式）。
+                _ = token.cancelled() => {
+                    return Err(AppError::Cancelled("request aborted by user".to_string()));
+                }
+                r = fut => r.map_err(AppError::from_reqwest)?,
+            }
+        }
+        None => req.send().await.map_err(AppError::from_reqwest)?,
+    };
+    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     let status = resp.status().as_u16();
     let headers: Vec<(String, String)> = resp
@@ -401,11 +440,14 @@ pub async fn send_request(
         })
         .collect();
 
-    // 读取响应体，超过 MAX_BODY_BYTES 截断并标记。
+    // 读取响应体，超过 MAX_BODY_BYTES 截断并标记；期间可被取消。
     let mut body: Vec<u8> = Vec::new();
     let mut truncated = false;
     let mut chunks = resp.bytes_stream();
     while let Some(chunk) = chunks.next().await {
+        if cancel.is_some_and(|t| t.is_cancelled()) {
+            return Err(AppError::Cancelled("request aborted by user".to_string()));
+        }
         let chunk = chunk.map_err(AppError::from_reqwest)?;
         if body.len() + chunk.len() > MAX_BODY_BYTES {
             let remaining = MAX_BODY_BYTES - body.len();

@@ -107,18 +107,23 @@ RustFox 是一个本地优先的 API 管理工具，提供：
 
 | 模块 | 技术 |
 |---|---|
-| 语言 | Rust |
-| UI | Dioxus Desktop |
+| 语言 | Rust + TypeScript |
+| 桌面壳 | Tauri 2（插件命名空间 `fox`，IPC `plugin:fox|*`） |
+| 前端 | Vue 3（组合式 API）+ Vite 6 + Tailwind CSS 4 + Pinia |
 | 异步运行时 | Tokio |
 | 本地数据库 | SQLite |
-| 数据库访问 | SQLx |
-| HTTP Client | reqwest |
-| Mock Server | axum |
-| OpenAPI | openapiv3 |
+| 数据库访问 | SQLx（runtime-tokio-rustls / sqlite / migrate） |
+| HTTP Client | reqwest 0.12（rustls-tls） |
+| Mock Server | axum 0.7 + tower / tower-http |
+| OpenAPI | openapiv3 2.0 |
 | JSONPath | jsonpath-rust |
+| 加密 | aes-gcm（环境变量 AES-256-GCM） |
 | 日志 | tracing + tracing-subscriber |
 | 文件对话框 | rfd |
 | 脚本能力 | 第一阶段不做，后续可用 Rhai |
+
+> Tauri 迁移详见 [TAURI_MIGRATION.md](TAURI_MIGRATION.md)；当前架构与目录结构见
+> [ARCHITECTURE.md](ARCHITECTURE.md)（含架构图与界面布局图）。
 
 ### 2.2 Rust 版本
 
@@ -138,20 +143,12 @@ Rust 1.79+
 
 ### 2.3 UI 技术约束
 
-UI 使用 Dioxus Desktop。
+UI 使用 **Tauri 2 + Vue 3（TypeScript）**：
 
-禁止使用：
-
-```text
-React
-Vue
-Svelte
-Angular
-TypeScript
-JavaScript 业务代码
-```
-
-允许 Dioxus 内部通过 webview 渲染 HTML/CSS，但所有业务逻辑必须由 Rust 控制。
+- 前端代码位于 `frontend/src/`，Vue SFC + `<script setup>`，禁止引入除已列依赖外的框架；
+- 所有后端能力必须经 `fox-tauri` 命令暴露（`useFoxApi` 统一封装，类型见 `types/foxApi.d.ts`）；
+- 组件样式只引用 `style.css` 的设计令牌（`--bg-* / --text-* / --accent`），禁止写死色值；
+- 业务数据不得绕过后端直接落到前端存储。
 
 ---
 
@@ -199,32 +196,33 @@ JavaScript 业务代码
 
 ## 4. 系统架构
 
+> 本章为 Tauri 2 迁移后的当前架构。完整架构文档（含图）见
+> [ARCHITECTURE.md](ARCHITECTURE.md)。
+
 ### 4.1 总体架构
 
 ```text
 ┌────────────────────────────────────────────┐
-│                 Dioxus UI                  │
-│                                            │
-│  ProjectTree / Editor / Response / Mock    │
+│                 Vue 3 Frontend             │
+│   ProjectList / WorkspaceView / GraphQL    │
+│   EndpointEditor / EndpointTree / Panels   │
 └──────────────────────┬─────────────────────┘
-                       │
+                       │ invoke('plugin:fox|…')  Tauri 2 IPC
 ┌──────────────────────▼─────────────────────┐
-│              Application Services          │
-│                                            │
-│ ProjectService / EndpointService           │
-│ EnvironmentService / HttpService           │
-│ MockService / TestService                  │
+│              fox-tauri 插件（命令层）        │
+│  40+ Command · AppState(SqlitePool+状态)    │
 └──────┬──────────┬──────────┬───────────────┘
-       │          │          │
-┌──────▼───┐ ┌────▼────┐ ┌───▼────────┐
-│ Storage  │ │ HTTP    │ │ OpenAPI    │
-│ SQLite   │ │ Client  │ │ Import/Exp │
-└──────────┘ └─────────┘ └────────────┘
+       │          │          │   （Rust 路径依赖）
+┌──────▼───┐ ┌────▼────┐ ┌───▼────────┐ ┌───▼──────┐
+│ Storage  │ │ HTTP    │ │ OpenAPI /  │ │ Mock /    │
+│ fox-     │ │ fox-    │ │ Backup /   │ │ Test /    │
+│ storage  │ │ http    │ │ Secret     │ │ OAuth     │
+└──────────┘ └─────────┘ └────────────┘ └──────────┘
 ```
 
 ### 4.2 Crate 划分
 
-项目使用 Cargo workspace。
+项目使用 Cargo workspace（根 workspace 不含 fox-tauri；fox-tauri 独立工作区）。
 
 ```text
 rustfox/
@@ -232,6 +230,7 @@ rustfox/
 ├── rust-toolchain.toml
 ├── README.md
 ├── docs/
+│   ├── ARCHITECTURE.md
 │   ├── SPEC.md
 │   └── PROGRESS.md
 ├── crates/
@@ -241,7 +240,15 @@ rustfox/
 │   ├── fox-openapi/
 │   ├── fox-mock/
 │   ├── fox-test/
-│   └── fox-desktop/
+│   ├── fox-backup/
+│   ├── fox-secret/
+│   ├── fox-codegen/
+│   ├── fox-oauth/
+│   ├── fox-smoke/
+│   └── fox-tauri/          # 独立工作区（Tauri 2 插件）
+└── frontend/
+    ├── src/                # Vue 3 前端
+    └── src-tauri/          # Tauri 应用壳
 ```
 
 ### 4.3 Crate 职责
@@ -249,18 +256,24 @@ rustfox/
 | Crate | 职责 |
 |---|---|
 | fox-core | 领域模型、错误、变量引擎、通用工具 |
-| fox-storage | SQLite 存储、迁移、Repository |
-| fox-http | HTTP 请求构建、发送、响应解析 |
+| fox-storage | SQLite 存储、迁移、Repository（upsert 语义） |
+| fox-http | HTTP 请求构建、发送、响应解析、cURL 解析、WS 客户端 |
 | fox-openapi | OpenAPI 导入导出 |
-| fox-mock | Mock Server |
-| fox-test | 测试运行器、断言、变量提取 |
-| fox-desktop | Dioxus 桌面 UI |
+| fox-mock | Mock Server（axum，4010 起自动探测） |
+| fox-test | 测试运行器、断言、变量提取、压测 |
+| fox-backup | JSON 备份 / 恢复（ID 重映射） |
+| fox-secret | 环境变量 AES-256-GCM 加密 |
+| fox-codegen | 多语言客户端代码生成 |
+| fox-oauth | OAuth2 四模式授权 |
+| fox-smoke | 冒烟测试 |
+| fox-tauri | Tauri 2 插件：IPC 命令层 + AppState 状态托管 |
+| frontend | Vue 3 + TypeScript 界面（types/foxApi.d.ts 为后端命令镜像） |
 
 ---
 
 ## 5. 目录结构
 
-最终必须形成如下结构：
+当前实际结构（Tauri 2 + Vue 3）：
 
 ```text
 rustfox/
@@ -268,6 +281,7 @@ rustfox/
 ├── rust-toolchain.toml
 ├── README.md
 ├── docs/
+│   ├── ARCHITECTURE.md
 │   ├── SPEC.md
 │   └── PROGRESS.md
 ├── crates/
@@ -282,42 +296,46 @@ rustfox/
 │   ├── fox-storage/
 │   │   ├── Cargo.toml
 │   │   ├── migrations/
-│   │   │   └── 0001_init.sql
+│   │   │   ├── 0001_init.sql
+│   │   │   └── 0002_ws_messages.sql
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── db.rs
 │   │       └── repository.rs
 │   ├── fox-http/
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       └── client.rs
 │   ├── fox-openapi/
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── import.rs
-│   │       └── export.rs
 │   ├── fox-mock/
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       └── server.rs
 │   ├── fox-test/
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       └── runner.rs
-│   └── fox-desktop/
-│       ├── Cargo.toml
+│   ├── fox-backup/
+│   ├── fox-secret/
+│   ├── fox-codegen/
+│   ├── fox-oauth/
+│   ├── fox-smoke/
+│   └── fox-tauri/
+│       ├── Cargo.toml          # links="fox"，独立工作区
+│       ├── permissions/        # tauri-plugin build 生成权限
 │       └── src/
-│           ├── main.rs
-│           ├── app.rs
-│           ├── state.rs
-│           ├── services.rs
-│           ├── components/
-│           ├── pages/
-│           └── styles.rs
+│           ├── lib.rs          # plugin::init()（setup + 全部命令注册）
+│           ├── state.rs        # AppState
+│           ├── error.rs        # CommandError
+│           └── commands/       # 14 个模块（project/folder/endpoint/…）
+└── frontend/
+    ├── package.json            # vue / vite / tailwind / pinia / @tauri-apps/api
+    ├── index.html
+    ├── src/
+    │   ├── main.ts
+    │   ├── App.vue
+    │   ├── router/index.ts     # /projects /workspace /graphql
+    │   ├── views/
+    │   ├── stores/workspace.ts
+    │   ├── composables/useFoxApi.ts
+    │   ├── components/
+    │   ├── types/foxApi.d.ts
+    │   └── style.css
+    └── src-tauri/
+        ├── tauri.conf.json
+        ├── capabilities/default.json
+        └── icons/
 ```
 
 ---
@@ -336,11 +354,15 @@ members = [
     "crates/fox-openapi",
     "crates/fox-mock",
     "crates/fox-test",
-    "crates/fox-desktop",
+    "crates/fox-backup",
+    "crates/fox-secret",
+    "crates/fox-codegen",
+    "crates/fox-oauth",
+    "crates/fox-smoke",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 rust-version = "1.79"
 
@@ -391,9 +413,12 @@ jsonpath-rust = "0.5"
 fake = "2.9"
 rand = "0.8"
 rfd = "0.14"
-
-dioxus = { version = "0.5", features = ["desktop"] }
+aes-gcm = "0.10"
+base64 = "0.22"
 ```
+
+`crates/fox-tauri` 不在根 workspace 中（`[workspace]` 置空、独立解析），依赖以路径引用
+`fox-*` crate，并设置 `links = "fox"` 与 `Builder::new("fox")` 保持一致。
 
 ---
 

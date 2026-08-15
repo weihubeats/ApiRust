@@ -59,6 +59,10 @@ pub enum AppError {
     /// OAuth2 授权 / 刷新失败。
     #[error("oauth2 error: {0}")]
     OAuth2(String),
+
+    /// 请求被用户主动取消（前端取消按钮）。
+    #[error("request cancelled: {0}")]
+    Cancelled(String),
 }
 
 impl AppError {
@@ -119,6 +123,7 @@ impl AppError {
             AppError::Json(_) => "JSON 解析失败".to_string(),
             AppError::Decryption(msg) => msg.clone(),
             AppError::OAuth2(msg) => msg.clone(),
+            AppError::Cancelled(_) => "请求已取消".to_string(),
         }
     }
 }

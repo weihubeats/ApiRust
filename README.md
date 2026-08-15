@@ -1,118 +1,119 @@
 # RustFox
 
-基于 Rust 的本地优先 API 管理工具。一个二进制，开箱即用。
+> 约 21 MB 的轻量跨平台 API 调试工具。一个安装包，开箱即用。
 
-## 优势
+<!--
+  示例图片占位：把真实截图放到 docs/imags/ 后替换下面两行路径即可。
+  推荐：浅色/深色主题各一张主界面截图 + 一张首页截图。
+-->
+[![RustFox 主页截图](docs/imags/YOUR-HOME-SCREENSHOT.png)](docs/imags/YOUR-HOME-SCREENSHOT.png)
+
+[![RustFox 工作区截图](docs/imags/YOUR-WORKSPACE-SCREENSHOT.png)](docs/imags/YOUR-WORKSPACE-SCREENSHOT.png)
+
+## 为什么选择 RustFox？
+
+### 🪶 21 MB，零运行时依赖
+
+同类工具把整个 Chromium/Node.js 运行时打包进安装包，RustFox 用 **Rust + Tauri 2 + 系统 WebView**——不内置浏览器内核、无 Node 沙箱、无 JRE，装完即用。
 
 | 维度 | RustFox | Postman | Bruno | Insomnia |
 | --- | --- | --- | --- | --- |
-| 安装包体积 | **~21 MB**（单二进制） | ~310 MB (Electron) | ~433 MB (Electron) | ~200 MB (Electron) |
-| 首屏启动 | **< 1 秒** | 2-4 秒 | 2-5 秒 | 2-4 秒 |
+| 安装包体积 | **~21 MB** | ~310 MB (Electron) | ~433 MB (Electron) | ~200 MB (Electron) |
+| 首屏启动 | **< 1 秒** | 2–4 秒 | 2–5 秒 | 2–4 秒 |
 | 运行时内存 | **~40 MB** | ~500 MB+ | ~300 MB+ | ~200 MB+ |
-| 构建语言 | Rust | Chromium + Node.js | Chromium + Node.js | Chromium + Node.js |
+| 应用壳 | 系统 WebView（无内置 Chromium） | Chromium + Node.js | Chromium + Node.js | Chromium + Node.js |
 
-**体积缩小 15-20 倍**：同类 Electron 工具把整个 Chromium 浏览器打包进去，RustFox 用 Dioxus Desktop 只编译一份 Rust 二进制，无运行时依赖，无 Node.js 沙箱。
+同等工作负载下，安装包体积缩小 **10–20 倍**、启动快 **2–5 倍**、占用内存减少一个数量级。
 
-**性能优势来源**：Rust LTO 链接优化 + 单一进程模型 + SQLite 零拷贝本地存储。49 个源文件、17,800+ 行代码、1,142 个传递依赖，最终产物仅 21 MB。
+### ⚡ 快，但功能不缺
+
+Rust LTO 优化 + 单一进程模型 + SQLite 零拷贝本地存储——秒开、秒搜、秒发；请求 / Mock / 测试 / 压测全部内置，不依赖云端服务。
+
+### 🔒 本地优先，数据在自己手里
+
+数据只存在本机 `rustfox.db`，环境变量值 **AES-256-GCM 加密**存储；一键备份为 JSON，随时可恢复。
 
 ## 功能
 
-| 类别 | 能力 |
+### 请求与编辑
+
+- 8 种 HTTP 方法、6 种请求体（JSON / Form / x-www-form-urlencoded / Multipart / GraphQL / Text）
+- Params / Headers / Body / Auth / Tests / Docs 分页编辑，未保存草稿自动标记
+- cURL 一键粘贴导入，自动识别方法 / URL / Header / Body / Basic Auth
+- 环境变量 `{{name}}` 任意位置自动解析（环境 > 项目 优先级）
+
+### 认证与安全
+
+- API Key / Basic / Bearer / OAuth2（Authorization Code / Client Credentials / Password / Implicit 四模式）
+- 令牌自动附加请求头，无需手写
+
+### 响应体验
+
+- 格式化 JSON 树 / Raw / 响应头 / 状态码 / 耗时 / 大小
+- 流式下载保存到本地，请求历史可重发、可删除
+
+### Mock Server
+
+- 本地 axum Mock（端口 4010 起自动探测），无需联网
+- **Mock 规则**（方法 + 路径 + Header + Body 匹配）优先，接口「响应示例」兜底
+- 模板变量：`{{params.id}}` `{{headers.X-Token}}` `{{mock.uuid|email|name|word|int}}`
+
+### 自动化测试与压测
+
+- JSON 测试脚本：`pre_request` 注入变量、`extract` 提取传递、`assertions` 断言
+- 单接口 / 文件夹 / 全项目一键运行，结果与历史留存
+- 压测：并发 × 总请求数，输出 QPS、平均耗时、P50/P90/P99、错误样例，chart.js 图表
+
+### 导入导出与协作
+
+- OpenAPI 3.x / Swagger 2.0 / Postman Collection v2.1 导入导出
+- 单接口 / 全项目导出 Markdown 文档
+- 客户端代码生成：curl / Python / JavaScript / Go（自动含变量替换与认证头）
+
+### 更多
+
+- GraphQL 调试视图
+- 备份（JSON）与恢复（ID 全量重映射，绝不覆盖现有数据）
+- 深色 / 浅色 / 跟随系统主题
+
+## 下载与安装
+
+在 [Releases](https://github.com/your-org/rustfox/releases) 下载对应平台安装包：
+
+| 平台 | 安装包 |
 | --- | --- |
-| 项目管理 | 项目 / 文件夹 / 接口 三级树结构 |
-| 请求编辑 | 8 种 HTTP 方法、6 种请求体（JSON / Form / x-www-form-urlencoded / Multipart / GraphQL / Text） |
-| 认证 | API Key / Basic / Bearer / OAuth2（Authorization Code / Client Credentials / Password / Implicit） |
-| 环境变量 | 全局 / 环境级变量 + `{{name}}` 自动解析 |
-| 响应查看 | 格式化 JSON / Raw / 响应头 / 耗时 / 状态码 / 下载保存 |
-| 请求历史 | 侧边栏抽屉，支持重发、删除 |
-| Mock Server | 本地轻量 Mock 服务，支持方法+路径+Header+Body 精确匹配 |
-| 自动化测试 | 自定义 Test Steps、运行测试、查看结果、历史记录 |
-| OpenAPI | 导入 / 导出 OpenAPI 3.x、Swagger 2.0 |
-| Postman | 导入 / 导出 Postman Collection v2 / v2.1 |
-| cURL | 一键粘贴导入，自动识别方法 / URL / Header / Body / Basic Auth |
-| Markdown | 单接口 / 全项目导出 Markdown 文档 |
-| 代码生成 | 自动生成客户端代码（多语言） |
-| WebSocket | 连接、发送、记录 |
-| 备份恢复 | 导出 / 导入数据文件 |
-| 主题 | 深色 / 浅色 / 跟随系统 |
+| Windows | `RustFox-*-setup.exe`（NSIS 安装包） |
+| macOS | `RustFox-*-macos-*.dmg`（Apple Silicon / Intel 双架构） |
+| Linux | `.deb` / `.AppImage` / `.tar.gz` |
 
-## 下载使用（无需安装 Rust）
-
-在项目的 GitHub **Releases** 页面下载对应平台的二进制包，解压/安装后双击即可使用：
-
-- **Windows**：`RustFox-*-setup.exe` 安装包（自动创建开始菜单与桌面快捷方式）或便携 zip
-- **macOS**：`RustFox-*-macos-*.dmg`（拖拽安装，推荐）或 zip（内含 `RustFox.app`，拖入「应用程序」即可）
-- **Linux**：`tar.gz`，解压后运行 `./install_linux.sh` 添加到应用菜单
-
-### 基本使用流程
-
-1. 启动应用，首页点击「创建项目」输入项目名称
-2. 在左侧目录树新建文件夹 / 接口，填写方法、路径、参数
-3. 顶部选择环境（若无则到设置页创建，支持变量 `{{name}}`）
-4. 点击「发送」调试请求，查看响应 / 耗时 / 历史
-5. 设置页可配置 Mock Server、运行自动化测试、导入导出 OpenAPI、备份恢复
-
-完整用户手册见 [docs/USER_GUIDE.md](docs/USER_GUIDE.md)。
+> macOS 首次打开如提示「未受信任开发者」，右键 →「打开」即可（开源应用未做签名公证属正常现象）。
 
 ## 从源码构建（开发者）
 
-前置要求：Rust 工具链（[rustup.rs](https://rustup.rs/) 安装）+ Node 22（npm）。
+前置：Rust 工具链 + Node 22。
 
 ```bash
 cargo build --workspace        # 构建全部后端 crate
 cargo test --workspace         # 运行全部测试
-cargo clippy --workspace --all-targets -- -D warnings   # 静态检查
-```
-
-启动桌面应用（Tauri 2 + Vue 3，开发模式带 HMR）：
-
-```bash
 npm --prefix frontend install
-npm --prefix frontend run tauri dev
+npm --prefix frontend run tauri dev     # 开发模式（Vite HMR）
+scripts/package-tauri.sh                # 一键打包分发包
 ```
 
-## 打包分发包
-
-Tauri 2 打包脚本（前端 + Rust + 平台 bundle 一步完成）：
-
-```bash
-scripts/package-tauri.sh
-```
-
-产物在 `frontend/src-tauri/target/release/bundle/`：
-
-| 平台 | 产物 |
-| --- | --- |
-| Linux | `.deb` + `.AppImage` |
-| macOS | `RustFox.app` / `.dmg` |
-| Windows | `.msi` + NSIS `-setup.exe` |
-
-CI 发布流程见 `.github/workflows/release.yml`（打 `v*` tag 触发）。
-
-注意事项：
-
-- 版本号默认取自 `Cargo.toml`，可用 `RUSTFOX_VERSION=1.2.3` 环境变量覆盖（仅 `package.sh`）
-- Windows 需要本地安装 [NSIS](https://nsis.sourceforge.io/)（`makensis`），未安装时仅生成便携 zip；CI 中会自动安装
-- 推 `v*` 标签自动触发 GitHub Actions 构建三平台分发包并发布 Release（见 `.github/workflows/release.yml`）
-
-## 技术栈
-
-- **UI**：Dioxus 0.5（Rust 驱动的虚拟 DOM，单进程渲染）
-- **运行时**：Tokio 异步运行时
-- **存储**：SQLite（sqlx，零拷贝查询）
-- **网络**：reqwest（HTTP 客户端）
-- **Mock**：axum（Mock Server）
-- **OpenAPI**：openapiv3（导入导出）
-- **构建**：Cargo + ziglinker（可选）进一步压缩产物
+> 架构原理、Crate 划分、IPC 与数据流等开发细节见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**（Tauri 2 + Vue 3 三层架构，含架构图）。
 
 ## 文档
 
 | 文档 | 说明 |
 | --- | --- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构总览（Tauri 2 + Vue 3，含架构图与界面布局图） |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | 用户手册 |
-| [docs/SPEC.md](docs/SPEC.md) | 详细规范 |
+| [docs/SPEC.md](docs/SPEC.md) | 详细规范（模型 / 数据库 / 命令） |
+| [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) | 手动验收清单 |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | 发布与部署 |
 | [docs/MILESTONES.md](docs/MILESTONES.md) | 里程碑总览 |
 | [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度记录 |
-| [docs/DEPLOY.md](docs/DEPLOY.md) | 部署指南 |
-| [docs/MIRROR_CN.md](docs/MIRROR_CN.md) | 国内网络镜像配置 |
-| [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) | 手动验收清单 |
+
+## License
+
+[Apache-2.0](LICENSE)

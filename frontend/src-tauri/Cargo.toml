@@ -1,6 +1,6 @@
 [package]
-name = "rustfox-app"
-version = "0.0.1"
+name = "rustfox"
+version = "0.0.2"
 edition = "2021"
 description = "RustFox Tauri 2 应用壳：装配 fox-tauri 插件与窗口生命周期"
 

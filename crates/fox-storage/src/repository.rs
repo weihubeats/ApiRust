@@ -814,7 +814,22 @@ pub async fn create_mock_rule(
          (id, project_id, endpoint_id, name, method, path, match_query_json, match_headers_json,
           response_status, response_headers_json, response_body_template, delay_ms, enabled, priority,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+            project_id = excluded.project_id,
+            endpoint_id = excluded.endpoint_id,
+            name = excluded.name,
+            method = excluded.method,
+            path = excluded.path,
+            match_query_json = excluded.match_query_json,
+            match_headers_json = excluded.match_headers_json,
+            response_status = excluded.response_status,
+            response_headers_json = excluded.response_headers_json,
+            response_body_template = excluded.response_body_template,
+            delay_ms = excluded.delay_ms,
+            enabled = excluded.enabled,
+            priority = excluded.priority,
+            updated_at = excluded.updated_at",
     )
     .bind(&row.id)
     .bind(&row.project_id)
@@ -1066,11 +1081,17 @@ pub async fn get_setting(db: &SqlitePool, key: &str) -> Result<Option<String>> {
 }
 
 /// 备份恢复：按给定 id 原样写入项目。
+/// 带 id：原样写入项目（upsert，同一 id 重复保存时更新而非报主键冲突）。
 pub async fn save_project(db: &SqlitePool, project: &Project) -> Result<()> {
     let row = ProjectRow::from_model(project);
     sqlx::query(
         "INSERT INTO projects (id, name, description, variables_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            description = excluded.description,
+            variables_json = excluded.variables_json,
+            updated_at = excluded.updated_at",
     )
     .bind(&row.id)
     .bind(&row.name)
@@ -1083,12 +1104,18 @@ pub async fn save_project(db: &SqlitePool, project: &Project) -> Result<()> {
     Ok(())
 }
 
-/// 带 id：原样写入文件夹。
+/// 带 id：原样写入文件夹（upsert，同一 id 重复保存时更新而非报主键冲突）。
 pub async fn save_folder(db: &SqlitePool, folder: &Folder) -> Result<()> {
     let row = FolderRow::from_model(folder);
     sqlx::query(
         "INSERT INTO folders (id, project_id, parent_id, name, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+            project_id = excluded.project_id,
+            parent_id = excluded.parent_id,
+            name = excluded.name,
+            sort_order = excluded.sort_order,
+            updated_at = excluded.updated_at",
     )
     .bind(&row.id)
     .bind(&row.project_id)
@@ -1102,12 +1129,23 @@ pub async fn save_folder(db: &SqlitePool, folder: &Folder) -> Result<()> {
     Ok(())
 }
 
-/// 带 id：原样写入接口。
+/// 带 id：原样写入接口（upsert，同一 id 重复保存时更新而非报主键冲突）。
 pub async fn save_endpoint(db: &SqlitePool, endpoint: &Endpoint) -> Result<()> {
     let row = EndpointRow::from_model(endpoint);
     sqlx::query(
         "INSERT INTO endpoints (id, project_id, folder_id, name, method, path, description, status, sort_order, request_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+            project_id = excluded.project_id,
+            folder_id = excluded.folder_id,
+            name = excluded.name,
+            method = excluded.method,
+            path = excluded.path,
+            description = excluded.description,
+            status = excluded.status,
+            sort_order = excluded.sort_order,
+            request_json = excluded.request_json,
+            updated_at = excluded.updated_at",
     )
     .bind(&row.id)
     .bind(&row.project_id)
@@ -1126,12 +1164,17 @@ pub async fn save_endpoint(db: &SqlitePool, endpoint: &Endpoint) -> Result<()> {
     Ok(())
 }
 
-/// 带 id：原样写入环境。
+/// 带 id：原样写入环境（upsert，同一 id 重复保存时更新而非报主键冲突）。
 pub async fn save_environment(db: &SqlitePool, row: &Environment) -> Result<()> {
     let row = EnvironmentRow::from_model(row);
     sqlx::query(
         "INSERT INTO environments (id, project_id, name, variables_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+            project_id = excluded.project_id,
+            name = excluded.name,
+            variables_json = excluded.variables_json,
+            updated_at = excluded.updated_at",
     )
     .bind(&row.id)
     .bind(&row.project_id)

@@ -7,6 +7,11 @@ import { computed, onMounted, ref } from 'vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useFoxApi } from '../composables/useFoxApi'
 import { useToast } from '../composables/useToast'
+import CustomSelect from './ui/CustomSelect.vue'
+import CustomNumberInput from './ui/CustomNumberInput.vue'
+import Icon from './ui/Icon.vue'
+import IconButton from './ui/IconButton.vue'
+import Popconfirm from './ui/Popconfirm.vue'
 import type { MockRule } from '../types/foxApi'
 
 const emit = defineEmits<{ close: [] }>()
@@ -20,6 +25,12 @@ const busy = ref(false)
 const editing = ref<MockRule | null>(null)
 
 const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
+const METHOD_OPTIONS = METHODS.map((m) => ({ value: m, label: m }))
+const PRIORITY_OPTIONS = [
+  { value: 0, label: '优先级 0（默认）' },
+  { value: 1, label: '优先级 1（较高）' },
+  { value: 2, label: '优先级 2（最高）' },
+]
 
 async function load(): Promise<void> {
   if (!store.project) return
@@ -87,7 +98,6 @@ async function save(): Promise<void> {
 }
 
 async function remove(rule: MockRule): Promise<void> {
-  if (!window.confirm(`删除规则「${rule.name}」？`)) return
   try {
     await api.deleteMockRule(rule.id)
     rules.value = rules.value.filter((r) => r.id !== rule.id)
@@ -101,140 +111,110 @@ const listTitle = computed(() => `Mock 规则 (${rules.value.length})`)
 </script>
 
 <template>
-  <div class="rule-mask" @click.self="emit('close')">
-    <div class="rule-dialog">
-      <div class="rule-head">
-        <h3 class="rule-title">{{ editing ? '编辑 Mock 规则' : listTitle }}</h3>
-        <button class="rf-btn rf-btn-sm" type="button" @click="emit('close')">关闭</button>
+  <Modal :open="true" :title="editing ? '编辑 Mock 规则' : listTitle" width="620px" @close="emit('close')">
+    <div v-if="editing" class="rule-form">
+      <div class="kv-row">
+        <input v-model="editing.name" class="rf-input rf-input-sm kv-key" placeholder="规则名称" />
+        <CustomSelect
+          :model-value="editing.method"
+          :options="METHOD_OPTIONS"
+          size="sm"
+          @update:model-value="editing.method = String($event) as MockRule['method']"
+        >
+          <template #display="{ label }">
+            <span :class="`rf-method rf-method-${editing.method.toLowerCase()}`">{{ label }}</span>
+          </template>
+        </CustomSelect>
+        <input v-model="editing.path" class="rf-input rf-input-sm kv-value" placeholder="/users/{id}" />
       </div>
-
-      <div v-if="editing" class="rule-form">
-        <div class="kv-row">
-          <input v-model="editing.name" class="rf-input rf-input-sm kv-key" placeholder="规则名称" />
-          <select v-model="editing.method" class="rf-input rf-input-sm kv-key">
-            <option v-for="m in METHODS" :key="m" :value="m">{{ m }}</option>
-          </select>
-          <input v-model="editing.path" class="rf-input rf-input-sm kv-value" placeholder="/users/{id}" />
-        </div>
-        <div class="kv-row">
-          <input
-            v-model.number="editing.response_status"
-            class="rf-input rf-input-sm kv-key"
-            type="number"
-            min="100"
-            max="599"
-            placeholder="状态码"
-          />
-          <input
-            v-model.number="editing.delay_ms"
-            class="rf-input rf-input-sm kv-key"
-            type="number"
-            min="0"
-            placeholder="延迟 ms"
-          />
-          <select v-model.number="editing.priority" class="rf-input rf-input-sm kv-key">
-            <option :value="0">优先级 0（默认）</option>
-            <option :value="1">优先级 1（较高）</option>
-            <option :value="2">优先级 2（最高）</option>
-          </select>
-          <label class="rule-enabled">
-            <input v-model="editing.enabled" type="checkbox" /> 启用
-          </label>
-        </div>
-        <div class="rule-sub">Query 匹配</div>
-        <div v-for="(m, i) in editing.match_query" :key="i" class="kv-row">
-          <input v-model="m.key" class="rf-input rf-input-sm kv-key" placeholder="key" />
-          <input v-model="m.value" class="rf-input rf-input-sm kv-value" placeholder="value" />
-          <button class="rf-btn rf-btn-sm" type="button" @click="removeMatch(editing, 'match_query', i)">✕</button>
-        </div>
-        <button class="rf-btn rf-btn-sm" type="button" @click="addMatch(editing, 'match_query')">
-          ＋ Query
-        </button>
-        <div class="rule-sub">Header 匹配</div>
-        <div v-for="(m, i) in editing.match_headers" :key="i" class="kv-row">
-          <input v-model="m.key" class="rf-input rf-input-sm kv-key" placeholder="key" />
-          <input v-model="m.value" class="rf-input rf-input-sm kv-value" placeholder="value" />
-          <button class="rf-btn rf-btn-sm" type="button" @click="removeMatch(editing, 'match_headers', i)">✕</button>
-        </div>
-        <button class="rf-btn rf-btn-sm" type="button" @click="addMatch(editing, 'match_headers')">
-          ＋ Header
-        </button>
-        <textarea
-          v-model="editing.response_body_template"
-          class="rf-input rule-body"
-          spellcheck="false"
-          placeholder='响应体模板（支持 {{path.id}} 占位，例如 { "id": "{{id}}" }）'
-        ></textarea>
-        <div class="kv-row">
-          <button class="rf-btn rf-btn-primary rf-btn-sm" type="button" :disabled="busy" @click="save">
-            保存
-          </button>
-          <button class="rf-btn rf-btn-sm" type="button" @click="editing = null">取消</button>
-        </div>
+      <div class="kv-row">
+        <CustomNumberInput
+          :model-value="editing.response_status"
+          size="sm"
+          :min="100"
+          :max="599"
+          placeholder="状态码"
+          @update:model-value="editing.response_status = $event === '' ? 100 : Number($event)"
+        />
+        <CustomNumberInput
+          :model-value="editing.delay_ms"
+          size="sm"
+          :min="0"
+          placeholder="延迟 ms"
+          @update:model-value="editing.delay_ms = $event === '' ? 0 : Number($event)"
+        />
+        <CustomSelect
+          :model-value="editing.priority"
+          :options="PRIORITY_OPTIONS"
+          size="sm"
+          @update:model-value="editing.priority = Number($event)"
+        />
+        <label class="rule-enabled">
+          <input v-model="editing.enabled" type="checkbox" /> 启用
+        </label>
       </div>
-
-      <ul v-else-if="rules.length" class="rule-list">
-        <li v-for="r in rules" :key="r.id" class="rule-row">
-          <span class="rule-method">{{ r.method }}</span>
-          <span class="rule-path">{{ r.path }}</span>
-          <span class="rule-status">{{ r.response_status }}</span>
-          <span class="rule-meta">{{ r.enabled ? '启用' : '停用' }} · 优先级 {{ r.priority }}</span>
-          <button class="rf-btn rf-btn-sm" type="button" @click="editing = { ...r }">编辑</button>
-          <button class="rf-btn rf-btn-sm" type="button" @click="remove(r)">✕</button>
-        </li>
-      </ul>
-      <p v-else class="rule-hint">暂无规则。Mock 服务默认按接口路径 + 首个响应示例生成行为。</p>
-
-      <button
-        v-if="!editing"
-        class="rf-btn rf-btn-sm rule-new"
-        type="button"
-        @click="editing = blankRule()"
-      >
-        ＋ 新建规则
+      <div class="rule-sub">Query 匹配</div>
+      <div v-for="(m, i) in editing.match_query" :key="i" class="kv-row">
+        <input v-model="m.key" class="rf-input rf-input-sm kv-key" placeholder="key" />
+        <input v-model="m.value" class="rf-input rf-input-sm kv-value" placeholder="value" />
+        <IconButton name="x" :size="13" title="删除" @click="removeMatch(editing, 'match_query', i)" />
+      </div>
+      <button class="rf-btn rf-btn-sm" type="button" @click="addMatch(editing, 'match_query')">
+        <Icon name="plus" :size="13" /> Query
       </button>
+      <div class="rule-sub">Header 匹配</div>
+      <div v-for="(m, i) in editing.match_headers" :key="i" class="kv-row">
+        <input v-model="m.key" class="rf-input rf-input-sm kv-key" placeholder="key" />
+        <input v-model="m.value" class="rf-input rf-input-sm kv-value" placeholder="value" />
+        <IconButton name="x" :size="13" title="删除" @click="removeMatch(editing, 'match_headers', i)" />
+      </div>
+      <button class="rf-btn rf-btn-sm" type="button" @click="addMatch(editing, 'match_headers')">
+        <Icon name="plus" :size="13" /> Header
+      </button>
+      <textarea
+        v-model="editing.response_body_template"
+        class="rf-input rule-body"
+        spellcheck="false"
+        placeholder='响应体模板（支持 {{path.id}} 占位，例如 { "id": "{{id}}" }）'
+      ></textarea>
     </div>
-  </div>
+
+    <ul v-else-if="rules.length" class="rule-list">
+      <li v-for="r in rules" :key="r.id" class="rule-row">
+        <span class="rule-method">{{ r.method }}</span>
+        <span class="rule-path">{{ r.path }}</span>
+        <span class="rule-status">{{ r.response_status }}</span>
+        <span class="rule-meta">{{ r.enabled ? '启用' : '停用' }} · 优先级 {{ r.priority }}</span>
+        <button class="rf-btn rf-btn-sm" type="button" @click="editing = { ...r }">编辑</button>
+        <Popconfirm :title="`删除规则「${r.name}」？`" @confirm="remove(r)">
+          <IconButton name="trash" :size="13" tone="danger" title="删除" />
+        </Popconfirm>
+      </li>
+    </ul>
+    <p v-else class="rule-hint">暂无规则。Mock 服务默认按接口路径 + 首个响应示例生成行为。</p>
+
+    <template #footer>
+      <template v-if="editing">
+        <button class="rf-btn rf-btn-sm" type="button" @click="editing = null">取消</button>
+        <button class="rf-btn rf-btn-primary rf-btn-sm" type="button" :disabled="busy" @click="save">
+          保存
+        </button>
+      </template>
+      <template v-else>
+        <button
+          class="rf-btn rf-btn-sm"
+          type="button"
+          @click="editing = blankRule()"
+        >
+          <Icon name="plus" :size="13" /> 新建规则
+        </button>
+        <button class="rf-btn rf-btn-sm" type="button" @click="emit('close')">关闭</button>
+      </template>
+    </template>
+  </Modal>
 </template>
 
 <style scoped>
-.rule-mask {
-  position: fixed;
-  inset: 0;
-  background: rgba(2, 6, 23, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 50;
-}
-
-.rule-dialog {
-  width: 640px;
-  max-width: 92vw;
-  max-height: 82vh;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 18px;
-  border-radius: 10px;
-  border: 1px solid var(--rf-border, #1f2937);
-  background: var(--rf-bg-panel-2, #111827);
-}
-
-.rule-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.rule-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--rf-text, #f9fafb);
-}
-
 .rule-form {
   display: flex;
   flex-direction: column;
@@ -244,13 +224,13 @@ const listTitle = computed(() => `Mock 规则 (${rules.value.length})`)
 .rule-sub {
   font-size: 12px;
   font-weight: 600;
-  color: var(--rf-text-secondary, #9ca3af);
+  color: var(--text-2);
   margin-top: 4px;
 }
 
 .rule-body {
   min-height: 90px;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   resize: vertical;
 }
@@ -275,13 +255,13 @@ const listTitle = computed(() => `Mock 规则 (${rules.value.length})`)
   width: 52px;
   flex-shrink: 0;
   font-weight: 700;
-  color: var(--rf-text-secondary, #9ca3af);
+  color: var(--text-2);
 }
 
 .rule-path {
   flex: 1;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  color: var(--rf-text, #f9fafb);
+  font-family: var(--font-mono);
+  color: var(--text-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -290,22 +270,18 @@ const listTitle = computed(() => `Mock 规则 (${rules.value.length})`)
 .rule-status {
   width: 40px;
   font-weight: 600;
-  color: var(--rf-success);
+  color: var(--success);
 }
 
 .rule-meta {
   font-size: 11.5px;
-  color: var(--rf-text-muted, #6b7280);
+  color: var(--text-3);
 }
 
 .rule-hint {
   margin: 0;
   font-size: 12px;
-  color: var(--rf-text-muted, #6b7280);
-}
-
-.rule-new {
-  align-self: flex-start;
+  color: var(--text-3);
 }
 
 .rule-enabled {
@@ -313,6 +289,6 @@ const listTitle = computed(() => `Mock 规则 (${rules.value.length})`)
   align-items: center;
   gap: 6px;
   font-size: 12.5px;
-  color: var(--rf-text, #f9fafb);
+  color: var(--text-1);
 }
 </style>

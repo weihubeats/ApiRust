@@ -25,17 +25,17 @@ pub struct LoadResult {
     pub failed: usize,
     pub total_ms: u64,
     pub avg_ms: f64,
-    pub p50_ms: u64,
-    pub p90_ms: u64,
-    pub p99_ms: u64,
+    pub p50_ms: f64,
+    pub p90_ms: f64,
+    pub p99_ms: f64,
     pub rps: f64,
     /// 最多保留 5 条请求错误。
     pub errors: Vec<String>,
 }
 
-fn percentile(sorted: &[u64], q: usize) -> u64 {
+fn percentile(sorted: &[f64], q: usize) -> f64 {
     if sorted.is_empty() {
-        return 0;
+        return 0.0;
     }
     let idx = (sorted.len() * q / 100).min(sorted.len() - 1);
     sorted[idx]
@@ -63,7 +63,7 @@ pub async fn run_load(
     let total = cfg.total.max(1);
     let sem = Arc::new(Semaphore::new(concurrency));
     let start = Instant::now();
-    let mut samples: Vec<u64> = Vec::with_capacity(total);
+    let mut samples: Vec<f64> = Vec::with_capacity(total);
     let mut ok = 0usize;
     let mut failed = 0usize;
     let mut errors: Vec<String> = Vec::new();
@@ -79,7 +79,7 @@ pub async fn run_load(
             let t = Instant::now();
             let r = send_request(m, &u, &s, Some(30_000)).await;
             drop(permit);
-            let d = t.elapsed().as_millis() as u64;
+            let d = t.elapsed().as_secs_f64() * 1000.0;
             match r {
                 Ok(resp) => (true, Some(resp.status), d, None),
                 Err(e) => (false, None, d, Some(e.user_message())),
@@ -118,7 +118,7 @@ pub async fn run_load(
 
     let total_ms = start.elapsed().as_millis() as u64;
     let mut sorted = samples.clone();
-    sorted.sort_unstable();
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let done = total_ms.max(1);
     LoadResult {
         total: ok + failed,
@@ -128,7 +128,7 @@ pub async fn run_load(
         avg_ms: if samples.is_empty() {
             0.0
         } else {
-            samples.iter().sum::<u64>() as f64 / samples.len() as f64
+            samples.iter().sum::<f64>() / samples.len() as f64
         },
         p50_ms: percentile(&sorted, 50),
         p90_ms: percentile(&sorted, 90),
@@ -146,10 +146,10 @@ mod tests {
 
     #[test]
     fn percentile_basic() {
-        assert_eq!(percentile(&[], 50), 0);
-        assert_eq!(percentile(&[10, 20, 30, 40], 50), 30);
-        assert_eq!(percentile(&[10, 20, 30, 40], 90), 40);
-        assert_eq!(percentile(&[5], 99), 5);
+        assert_eq!(percentile(&[], 50), 0.0);
+        assert_eq!(percentile(&[10.0, 20.0, 30.0, 40.0], 50), 30.0);
+        assert_eq!(percentile(&[10.0, 20.0, 30.0, 40.0], 90), 40.0);
+        assert_eq!(percentile(&[5.0], 99), 5.0);
     }
 
     #[tokio::test]

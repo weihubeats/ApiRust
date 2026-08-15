@@ -98,7 +98,7 @@ async fn full_user_flow() {
         method: ep.method.to_string(),
         url: url.clone(),
         status: Some(res.status),
-        duration_ms: Some(res.duration_ms),
+        duration_ms: Some(res.duration_ms.round() as u64),
         request_summary_json: json!({"method": ep.method.to_string(), "path": ep.path}).to_string(),
         response_summary_json: json!({
             "status": res.status,
@@ -234,4 +234,108 @@ async fn openapi_roundtrip_and_backup() {
 
     let projects = repo::list_projects(&db).await.unwrap();
     assert_eq!(projects.len(), 2, "恢复的项目应已入库");
+}
+
+// ---------- 链路 5：cURL 导入（复现 bug 报告：导入后 URL/路径/请求头丢失） ----------
+
+/// 镜像前端 `createFromCurl` 的 URL 拆分：query → params，pathname → path。
+fn split_imported_url(url: &str) -> (String, Vec<KeyValue>) {
+    let (path_part, query_part) = match url.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (url, None),
+    };
+    let params = query_part
+        .map(|q| {
+            q.split('&')
+                .filter_map(|kv| kv.split_once('='))
+                .map(|(k, v)| KeyValue::new(k.to_string(), v.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    // 去掉 `scheme://host`（镜像前端 `new URL(url).pathname`）。
+    let path = match path_part.split_once("://") {
+        Some((_, rest)) => rest.split_once('/').map(|(_, p)| p).unwrap_or(""),
+        None => path_part,
+    };
+    let path = path.split('/').collect::<Vec<_>>().join("/");
+    let path = if path.starts_with('/') { path } else { format!("/{path}") };
+    (path, params)
+}
+
+#[tokio::test]
+async fn curl_import_roundtrip_keeps_url_headers_body() {
+    use fox_core::curl_parser::parse_curl;
+    use fox_core::model::{BodySpec, Endpoint};
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    let db = setup_pool().await;
+    let project = repo::create_project(&db, "导入测试", "cURL 导入链路")
+        .await
+        .unwrap();
+
+    // 用户报告中的命令（含续行、中文 JSON body）。
+    let cmd = "curl -X POST https://jsonplaceholder.typicode.com/posts?userId=1 \
+        -H 'Content-Type: application/json' -d '{\"title\":\"测试标题\",\"userId\":1}'";
+    let parsed = parse_curl(cmd).expect("解析用户命令");
+    assert_eq!(parsed.method, HttpMethod::POST);
+    assert_eq!(parsed.url, "https://jsonplaceholder.typicode.com/posts?userId=1");
+    assert_eq!(parsed.headers.len(), 1);
+    assert_eq!(parsed.headers[0].key, "Content-Type");
+
+    // 镜像前端 createFromCurl：拆分 URL → path + params，组装 Endpoint。
+    let (path, params) = split_imported_url(&parsed.url);
+    let now = Utc::now();
+    let endpoint = Endpoint {
+        id: Uuid::new_v4(),
+        project_id: project.id,
+        folder_id: None,
+        name: "posts".into(),
+        method: parsed.method,
+        path,
+        description: String::new(),
+        status: Default::default(),
+        sort_order: 0,
+        request: fox_core::model::RequestSpec {
+            params,
+            headers: parsed.headers,
+            path_variables: vec![],
+            auth: parsed.auth,
+            body: parsed.body.unwrap_or(BodySpec::None),
+            timeout_ms: 30000,
+            follow_redirects: true,
+            tests: None,
+        },
+        created_at: now,
+        updated_at: now,
+    };
+
+    repo::save_endpoint(&db, &endpoint).await.expect("落库");
+    let listed = repo::list_endpoints(&db, project.id).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    let saved = &listed[0];
+
+    // 核心断言：路径、方法、查询参数、请求头、JSON body 全部保留。
+    assert_eq!(saved.path, "/posts");
+    assert_eq!(saved.method, HttpMethod::POST);
+    assert_eq!(saved.request.params.len(), 1, "查询参数应保留");
+    assert_eq!(saved.request.params[0].key, "userId");
+    assert_eq!(saved.request.params[0].value, "1");
+    assert_eq!(saved.request.headers.len(), 1);
+    assert_eq!(saved.request.headers[0].key, "Content-Type");
+    assert_eq!(saved.request.headers[0].value, "application/json");
+    match &saved.request.body {
+        BodySpec::Json { raw } => assert!(raw.contains("测试标题"), "JSON body 应保留，实际 {raw}"),
+        other => panic!("期望 JSON body，实际 {other:?}"),
+    }
+
+    // 复现 bug 报告：编辑后再次保存（同 id upsert）不应报主键冲突。
+    let mut updated = endpoint.clone();
+    updated.path = "/posts/1".into();
+    updated.request.headers.push(KeyValue::new("X-Custom".to_string(), "v2".to_string()));
+    repo::save_endpoint(&db, &updated).await.expect("同 id 重复保存应成功（upsert）");
+    let relisted = repo::list_endpoints(&db, project.id).await.unwrap();
+    assert_eq!(relisted.len(), 1, "upsert 不应产生新行");
+    assert_eq!(relisted[0].path, "/posts/1", "upsert 应更新路径");
+    assert_eq!(relisted[0].request.headers.len(), 2, "upsert 应更新请求头");
 }

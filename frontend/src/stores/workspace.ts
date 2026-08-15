@@ -20,6 +20,7 @@ import type {
   Environment,
   ExecuteResponse,
   Folder,
+  KeyValue,
   OAuth2Token,
   Project,
   ResponseExample,
@@ -59,6 +60,36 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   /** 环境：列表 + 当前选中（execute_request 的 environment_id 来源）。 */
   const environments = ref<Environment[]>([])
   const activeEnvId = ref<string | null>(null)
+
+  /** 会话级 Base URL（仅本次会话，不落库）；cURL 导入时自动预填为 URL 的 origin。 */
+  const sessionBaseUrl = ref('http://localhost')
+
+  /** 地址栏域名前缀（唯一真实数据源）：选中环境声明 `base_url` 变量时优先，否则回退会话 Base URL。 */
+  const urlDomain = computed(() => {
+    const env = environments.value.find((e) => e.id === activeEnvId.value)
+    const v = env?.variables?.base_url
+    if (v && v.trim()) return '{{base_url}}'
+    return sessionBaseUrl.value || ''
+  })
+
+  /** 把当前选中环境的 base_url 变量更新为 url（地址栏粘贴完整 URL 时同步环境）。 */
+  async function setEnvironmentBaseUrl(url: string): Promise<void> {
+    const env = environments.value.find((e) => e.id === activeEnvId.value)
+    if (!env) return
+    const updated: Environment = {
+      ...env,
+      variables: { ...env.variables, base_url: url },
+    }
+    try {
+      const saved = await api.saveEnvironment(updated)
+      const idx = environments.value.findIndex((e) => e.id === env.id)
+      if (idx !== -1) environments.value[idx] = saved
+    } catch (err) {
+      toast.error('更新环境变量失败', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
 
   /** 响应示例（按接口 id 缓存，openEndpoint 时懒加载）。 */
   const examples = ref<Map<string, ResponseExample[]>>(new Map())
@@ -126,6 +157,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     endpoints.value = e
   }
 
+  /** 切换到另一项目：设为激活 → 清空标签/草稿/示例 → 重载树与环境。 */
+  async function switchProject(projectId: string): Promise<void> {
+    await api.setActiveProject(projectId)
+    openTabs.value = []
+    drafts.value = new Map()
+    examples.value = new Map()
+    activeTabId.value = null
+    sessionBaseUrl.value = 'http://localhost'
+    const p = await api.getActiveProject()
+    if (!p) throw new Error('项目不存在')
+    project.value = p
+    await load(p.id)
+    await loadEnvironments()
+  }
+
   /** 打开接口为标签页；已打开则仅切换。草稿懒克隆自保存态。 */
   function openEndpoint(endpoint: Endpoint): void {
     if (!openTabs.value.includes(endpoint.id)) {
@@ -178,14 +224,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     examples.value.set(endpointId, list)
   }
 
-  /** 打开「新建接口」草稿标签页（未持久化，保存时生成 id）。 */
+  /** 打开「新建接口」草稿标签页（未持久化，保存时生成 id）；默认标题「未命名接口」，创建后自动聚焦全选便于输入。 */
   function openNewEndpoint(folderId: string | null): void {
     const now = new Date().toISOString()
     const blank: Endpoint = {
       id: crypto.randomUUID(),
       project_id: project.value?.id ?? '',
       folder_id: folderId,
-      name: '',
+      name: '未命名接口',
       method: 'GET',
       path: '/',
       description: '',
@@ -198,6 +244,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     drafts.value.set(blank.id, blank)
     if (!openTabs.value.includes(blank.id)) openTabs.value.push(blank.id)
     activeTabId.value = blank.id
+    focusTitle()
+  }
+
+  /** 标题聚焦信号：新建接口时自增，编辑器监听并聚焦全选标题（TabBar「+」/ ⌘T / 树内新建共用）。 */
+  const focusTitleSignal = ref(0)
+  function focusTitle(): void {
+    focusTitleSignal.value += 1
   }
 
   function setDraft(endpoint: Endpoint): void {
@@ -290,6 +343,27 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     toast.success(`环境已创建：${env.name}`)
   }
 
+  /** 保存（upsert）环境并同步本地列表。 */
+  async function updateEnvironment(
+    env: Environment,
+    opts?: { silent?: boolean },
+  ): Promise<Environment> {
+    const saved = await api.saveEnvironment({ ...env, updated_at: new Date().toISOString() })
+    const idx = environments.value.findIndex((e) => e.id === saved.id)
+    if (idx === -1) environments.value.push(saved)
+    else environments.value[idx] = saved
+    if (!opts?.silent) toast.success(`环境已保存：${saved.name}`)
+    return saved
+  }
+
+  /** 删除环境；若删除的是当前激活环境则清空选中。 */
+  async function deleteEnvironment(environmentId: string): Promise<void> {
+    await api.deleteEnvironment(environmentId)
+    environments.value = environments.value.filter((e) => e.id !== environmentId)
+    if (activeEnvId.value === environmentId) activeEnvId.value = null
+    toast.success('环境已删除')
+  }
+
   /** 导入接口落地：按 folder_hint 复用/新建文件夹，逐接口保存并附带示例。 */
   async function importEndpoints(
     items: Array<{ name: string; method: string; path: string; description?: string; request: Endpoint['request']; examples?: Array<{ name: string; status: number; content_type: string; headers: Record<string, string>; body: string }>; folder_hint?: string | null }>,
@@ -351,8 +425,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return { endpoints: items.length, examples: exampleCount }
   }
 
-  /** 发送草稿请求（url 为拼接后的完整地址；环境变量由后端按 environment_id 注入）。 */
-  async function send(endpoint: Endpoint, url: string): Promise<ExecuteResponse> {
+  /** 发送草稿请求（url 为拼接后的完整地址；环境变量由后端按 environment_id 注入）。
+   *  提供 requestId 后该请求可被「取消」（后端中止连接并返回 CANCELLED）。 */
+  async function send(endpoint: Endpoint, url: string, requestId?: string): Promise<ExecuteResponse> {
     let spec = endpoint.request
     const auth = spec.auth as AuthSpec | undefined
     if (auth?.type === 'oauth2' && (auth.auth_url?.trim() || auth.token_url?.trim())) {
@@ -367,6 +442,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       environment_id: activeEnvId.value,
       project_id: project.value?.id ?? null,
       endpoint_id: endpoint.id,
+      request_id: requestId ?? null,
     })
   }
 
@@ -385,6 +461,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   async function moveFolder(folderId: string, newParentId: string | null, targetIndex: number): Promise<void> {
     const moved = folders.value.find((f) => f.id === folderId)
     if (!moved) return
+    // 防环：不允许把文件夹移入自身或其子孙（避免 parent_id 成环）
+    if (newParentId !== null) {
+      let cursor: string | null = newParentId
+      while (cursor !== null) {
+        if (cursor === folderId) return
+        cursor = folders.value.find((f) => f.id === cursor)?.parent_id ?? null
+      }
+    }
     const changed = new Set<string>()
     const mark = (f: Folder): void => {
       changed.add(f.id)
@@ -473,33 +557,42 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     toast.info('文件夹已删除（含子项）')
   }
 
-  /** cURL 导入落地：解析结果 → 新接口（写入目标文件夹）→ 打开标签页。 */
-  async function createFromCurl(
-    parsed: CurlParsed,
-    folderId: string | null,
-    name: string,
-  ): Promise<void> {
-    let path = parsed.url
-    if (!path.startsWith('/')) {
-      try {
-        path = new URL(parsed.url).pathname
-      } catch {
-        path = `/${path}`
-      }
+  /** 把导入 URL 拆成路径 + 查询参数 + origin；无 scheme 时按 https 补全。 */
+  function splitCurlUrl(url: string): {
+    path: string
+    params: KeyValue[]
+    origin: string
+  } {
+    let target = url.trim()
+    if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(target)) {
+      target = `https://${target}`
     }
+    const parsed = new URL(target)
+    const params: KeyValue[] = []
+    parsed.searchParams.forEach((value, key) => {
+      params.push({ key, value, enabled: true, description: '' })
+    })
+    let path = parsed.pathname
+    if (!path.startsWith('/')) path = `/${path}`
+    return { path, params, origin: parsed.origin }
+  }
+
+  /** cURL 导入：打开为默认标题「未命名接口」的草稿（不落库），保存时生成 id；会话 Base URL 预填为 URL origin。 */
+  function openCurlDraft(parsed: CurlParsed, folderId: string | null): void {
+    const { path, params, origin } = splitCurlUrl(parsed.url)
     const now = new Date().toISOString()
-    const endpoint: Endpoint = {
+    const blank: Endpoint = {
       id: crypto.randomUUID(),
       project_id: project.value?.id ?? '',
       folder_id: folderId,
-      name,
+      name: '未命名接口',
       method: parsed.method,
       path,
       description: '',
       status: 'designing',
       sort_order: 0,
       request: {
-        params: [],
+        params,
         headers: parsed.headers,
         path_variables: [],
         auth: parsed.auth,
@@ -511,10 +604,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       created_at: now,
       updated_at: now,
     }
-    const saved = await api.saveEndpoint(endpoint)
-    endpoints.value.push(saved)
-    openEndpoint(saved)
-    toast.success(`已导入接口：${saved.name}`)
+    sessionBaseUrl.value = origin
+    drafts.value.set(blank.id, blank)
+    if (!openTabs.value.includes(blank.id)) openTabs.value.push(blank.id)
+    activeTabId.value = blank.id
   }
 
   return {
@@ -523,6 +616,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     endpoints,
     environments,
     activeEnvId,
+    sessionBaseUrl,
+    urlDomain,
+    setEnvironmentBaseUrl,
     loadError,
     openTabs,
     activeTabId,
@@ -533,8 +629,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     init,
     load,
     refresh,
+    switchProject,
     openEndpoint,
     openNewEndpoint,
+    focusTitleSignal,
     setDraft,
     closeTab,
     saveActiveDraft,
@@ -545,12 +643,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     moveEndpoint,
     saveFolder,
     deleteFolder,
-    createFromCurl,
+    openCurlDraft,
     importEndpoints,
     send,
     loadEnvironments,
     setEnvironment,
     createEnvironment,
+    updateEnvironment,
+    deleteEnvironment,
     examples,
     loadExamples,
     saveAsExample,

@@ -1282,6 +1282,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "tracing",
  "url",
  "uuid",
@@ -1370,7 +1371,7 @@ dependencies = [
 
 [[package]]
 name = "fox-tauri"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "chrono",
  "fox-backup",
@@ -1388,6 +1389,7 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "tokio",
+ "tokio-util",
  "url",
  "uuid",
 ]
@@ -3783,8 +3785,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustfox-app"
-version = "0.0.1"
+name = "rustfox"
+version = "0.0.2"
 dependencies = [
  "fox-tauri",
  "serde",
@@ -5203,6 +5205,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

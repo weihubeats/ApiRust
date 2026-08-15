@@ -65,6 +65,7 @@ impl From<AppError> for CommandError {
             AppError::Json(_) => "JSON",
             AppError::Decryption(_) => "DECRYPT",
             AppError::OAuth2(_) => "OAUTH2",
+            AppError::Cancelled(_) => "CANCELLED",
         };
         CommandError {
             code,

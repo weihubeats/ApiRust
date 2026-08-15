@@ -24,6 +24,9 @@ pub struct ExecuteRequestArgs {
     /// 历史归属项目 / 接口（可选；提供时成功后记入请求历史）。
     pub project_id: Option<Uuid>,
     pub endpoint_id: Option<Uuid>,
+    /// 本次请求的取消标识（由前端生成；提供后可通过 `cancel_request` 中止）。
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 /// 执行结果（`HttpResponseData` 含非序列化 `Bytes`，此处转成 JSON 安全结构）。
@@ -33,7 +36,8 @@ pub struct ExecuteResponse {
     pub headers: Vec<(String, String)>,
     pub body: String,
     pub content_type: String,
-    pub duration_ms: u64,
+    /// 毫秒（浮点，保留亚毫秒精度）。
+    pub duration_ms: f64,
     pub size_bytes: usize,
     pub truncated: bool,
 }
@@ -64,38 +68,95 @@ pub async fn execute_request(
         }
     }
 
-    // 3. 发送（超时取自 RequestSpec，默认 30s）。
-    let resp: HttpResponseData =
-        fox_http::client::send_request(args.method, &url, &spec, Some(spec.timeout_ms)).await?;
+    // 3. 注册取消令牌（前端「取消请求」→ `cancel_request` 触发中止）。
+    let token = args.request_id.as_ref().map(|id| {
+        let token = tokio_util::sync::CancellationToken::new();
+        state
+            .request_cancels
+            .lock()
+            .expect("request_cancels poisoned")
+            .insert(id.clone(), token.clone());
+        (id.clone(), token)
+    });
 
-    // 4. 映射为可序列化响应。
-    let body = resp.body_text();
-    let content_type = resp.content_type();
-    let response = ExecuteResponse {
-        status: resp.status,
-        headers: resp.headers,
-        body,
-        content_type,
-        duration_ms: resp.duration_ms,
-        size_bytes: resp.size_bytes,
-        truncated: resp.truncated,
-    };
+    // 4. 发送（超时取自 RequestSpec，默认 30s；取消时返回 CANCELLED）。
+    let result = async {
+        let resp: HttpResponseData = match token.as_ref() {
+            Some((_, t)) => {
+                fox_http::client::send_request_cancel(
+                    args.method,
+                    &url,
+                    &spec,
+                    Some(spec.timeout_ms),
+                    t,
+                )
+                .await?
+            }
+            None => {
+                fox_http::client::send_request(args.method, &url, &spec, Some(spec.timeout_ms))
+                    .await?
+            }
+        };
 
-    // 5. 写入请求历史（尽力而为：失败仅告警，不阻断发送）。
-    if let Some(project_id) = args.project_id {
-        let history = build_history(
-            project_id,
-            args.endpoint_id,
-            args.method,
-            &args.url,
-            &response,
-        );
-        if let Err(e) = repo::save_request_history(&state.db, &history).await {
-            eprintln!("[execute_request] 保存历史失败：{}", e.user_message());
+        // 5. 映射为可序列化响应。
+        let body = resp.body_text();
+        let content_type = resp.content_type();
+        let response = ExecuteResponse {
+            status: resp.status,
+            headers: resp.headers,
+            body,
+            content_type,
+            duration_ms: resp.duration_ms,
+            size_bytes: resp.size_bytes,
+            truncated: resp.truncated,
+        };
+
+        // 6. 写入请求历史（尽力而为：失败仅告警，不阻断发送）。
+        if let Some(project_id) = args.project_id {
+            let history = build_history(
+                project_id,
+                args.endpoint_id,
+                args.method,
+                &args.url,
+                &response,
+            );
+            if let Err(e) = repo::save_request_history(&state.db, &history).await {
+                eprintln!("[execute_request] 保存历史失败：{}", e.user_message());
+            }
         }
-    }
 
-    Ok(response)
+        Ok(response)
+    }
+    .await;
+
+    // 7. 无论成功 / 取消 / 失败，都从注册表移除，避免泄漏。
+    if let Some((id, _)) = &token {
+        state
+            .request_cancels
+            .lock()
+            .expect("request_cancels poisoned")
+            .remove(id);
+    }
+    result
+}
+
+/// 取消一个在途请求（`request_id` 不存在或已完成时返回 `false`）。
+///
+/// 通过 reqwest `AbortHandle` + 取消令牌双重机制中止底层连接，
+/// `execute_request` 随即以 `CANCELLED` 错误码返回。
+#[tauri::command(rename_all = "camelCase")]
+pub fn cancel_request(state: State<'_, AppState>, request_id: String) -> CommandResult<bool> {
+    let token = state
+        .request_cancels
+        .lock()
+        .expect("request_cancels poisoned")
+        .remove(&request_id);
+    if let Some(token) = token {
+        token.cancel();
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 /// 构建历史记录（字段与 Dioxus 版 `build_history` 对齐）。
@@ -114,7 +175,7 @@ fn build_history(
         method: method.to_string(),
         url: url.to_string(),
         status: Some(data.status),
-        duration_ms: Some(data.duration_ms),
+        duration_ms: Some(data.duration_ms.round() as u64),
         request_summary_json: serde_json::json!({
             "method": method.to_string(),
             "url": url,

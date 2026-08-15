@@ -60,7 +60,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             body: Bytes::from(body.to_string()),
-            duration_ms: 1,
+            duration_ms: 1.0,
             size_bytes: body.len(),
             cookies: Vec::new(),
             truncated: false,

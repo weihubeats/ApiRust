@@ -69,13 +69,15 @@ function onClose(item: ToastItem): void {
 <style scoped>
 .rf-toast-wrap {
   position: fixed;
-  top: 16px;
-  right: 16px;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 1000;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 8px;
-  width: 340px;
+  width: 420px;
   max-width: calc(100vw - 32px);
   pointer-events: none;
 }
@@ -85,12 +87,13 @@ function onClose(item: ToastItem): void {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 12px 12px 12px 14px;
-  border-radius: 8px;
-  background: var(--rf-bg-panel);
-  border: 1px solid var(--rf-border);
+  width: 100%;
+  padding: 10px 12px 10px 14px;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
   border-left-width: 3px;
-  box-shadow: var(--rf-shadow);
+  box-shadow: var(--shadow-lg);
 }
 
 .rf-toast-success {
@@ -153,16 +156,16 @@ function onClose(item: ToastItem): void {
 .rf-toast-leave-active {
   transition:
     opacity 0.2s ease,
-    transform 0.2s ease;
+    transform 0.2s var(--ease);
 }
 
 .rf-toast-enter-from {
   opacity: 0;
-  transform: translateX(24px);
+  transform: translateY(-12px) scale(0.98);
 }
 
 .rf-toast-leave-to {
   opacity: 0;
-  transform: translateX(24px);
+  transform: translateY(-8px) scale(0.98);
 }
 </style>

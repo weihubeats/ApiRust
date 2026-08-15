@@ -59,16 +59,18 @@ export function toFoxError(raw: unknown): Error {
   return raw instanceof Error ? raw : new Error(String(raw))
 }
 
-/** 主密钥问题弹窗文案（对应后端 DECRYPT 错误码）。 */
+/** 主密钥问题提示（对应后端 DECRYPT 错误码）。 */
 const DECRYPT_WARNING = '主密钥不匹配或已损坏，无法解密环境变量，请检查备份'
 
-/** 弹窗去重：同一会话只提示一次，避免批量环境列表解密失败时重复弹出。 */
+/** 提示去重：同一会话只提示一次，避免批量环境列表解密失败时重复弹出。 */
 let decryptionWarned = false
 
 function warnDecryptionFailed(): void {
   if (decryptionWarned) return
   decryptionWarned = true
-  window.alert(DECRYPT_WARNING)
+  import('./useToast').then(({ useToast }) => {
+    useToast().error('解密失败', { message: DECRYPT_WARNING, duration: 0 })
+  })
 }
 
 /** 统一的带错误映射的 invoke 封装（自动加插件命名空间前缀）。 */
@@ -177,9 +179,16 @@ export function useFoxApi() {
 
   const getActiveEnvironment = () => call<Environment | null>('get_active_environment')
 
+  const deleteEnvironment = (environmentId: string) =>
+    run(() => call<void>('delete_environment', { environmentId }))
+
   // ---------- 请求执行 ----------
   const executeRequest = (args: ExecuteRequestArgs) =>
     run(() => call<ExecuteResponse>('execute_request', { args }))
+
+  /** 取消一个在途请求（requestId 不存在或已完成时返回 false）。 */
+  const cancelRequest = (requestId: string) =>
+    call<boolean>('cancel_request', { requestId })
 
   // ---------- 响应示例 ----------
   const listExamples = (endpointId: string) =>
@@ -277,7 +286,9 @@ export function useFoxApi() {
     saveEnvironment,
     setActiveEnvironment,
     getActiveEnvironment,
+    deleteEnvironment,
     executeRequest,
+    cancelRequest,
     listExamples,
     saveExample,
     deleteExample,

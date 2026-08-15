@@ -8,8 +8,7 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'home',
-      component: () => import('../views/HomeView.vue'),
+      redirect: '/projects',
     },
     {
       path: '/projects',
@@ -25,11 +24,6 @@ const router = createRouter({
       path: '/workspace',
       name: 'workspace',
       component: () => import('../views/WorkspaceView.vue'),
-    },
-    {
-      path: '/settings',
-      name: 'settings',
-      component: () => import('../views/SettingsView.vue'),
     },
   ],
 })

@@ -335,6 +335,38 @@ mod tests {
         }
     }
 
+    /// 复现用户 bug 报告：多行 `-X POST URL -H -d` 的 jsonplaceholder 命令。
+    #[test]
+    fn parse_jsonplaceholder_multiline_post() {
+        let p = parse_curl(
+            "curl -X POST https://jsonplaceholder.typicode.com/posts \\\n \
+             -H 'Content-Type: application/json' \\\n \
+             -d '{\"title\":\"测试标题\",\"body\":\"测试内容\",\"userId\":1}'",
+        )
+        .unwrap();
+        assert_eq!(p.method, HttpMethod::POST);
+        assert_eq!(p.url, "https://jsonplaceholder.typicode.com/posts");
+        assert_eq!(p.headers.len(), 1);
+        assert_eq!(p.headers[0].key, "Content-Type");
+        match &p.body {
+            Some(BodySpec::Json { raw }) => {
+                assert!(raw.contains("测试标题"));
+                assert!(raw.contains("userId"));
+            }
+            other => panic!("期望 JSON body，实际 {other:?}"),
+        }
+    }
+
+    /// URL 携带查询参数时原样保留，供前端拆分为查询参数。
+    #[test]
+    fn parse_url_with_query_kept() {
+        let p = parse_curl(
+            "curl 'https://api.example.com/posts?userId=1&page=2'",
+        )
+        .unwrap();
+        assert_eq!(p.url, "https://api.example.com/posts?userId=1&page=2");
+    }
+
     /// Basic Auth：curl -u admin:123 https://api.example.com
     #[test]
     fn parse_basic_auth() {

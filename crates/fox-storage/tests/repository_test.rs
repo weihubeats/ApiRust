@@ -337,3 +337,48 @@ async fn ws_message_purges_expired() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].payload, "fresh");
 }
+
+#[tokio::test]
+async fn save_folder_repeated_id_updates_not_conflicts() {
+    let db = pool().await;
+    let project = repo::create_project(&db, "P", "").await.unwrap();
+
+    let created = repo::create_folder(&db, project.id, None, "原名字")
+        .await
+        .unwrap();
+    let mut renamed = created.clone();
+    renamed.name = "新名字".into();
+    renamed.updated_at = chrono::Utc::now();
+    // 重命名走 save_*（带 id 再次保存），此前因主键冲突失败，回归此问题。
+    repo::save_folder(&db, &renamed).await.unwrap();
+
+    let fetched = repo::get_folder(&db, created.id).await.unwrap();
+    assert_eq!(fetched.name, "新名字");
+}
+
+#[tokio::test]
+async fn save_project_repeated_id_updates_not_conflicts() {
+    let db = pool().await;
+    let created = repo::create_project(&db, "原名", "").await.unwrap();
+    let mut renamed = created.clone();
+    renamed.name = "改名".into();
+    renamed.updated_at = chrono::Utc::now();
+    repo::save_project(&db, &renamed).await.unwrap();
+
+    let fetched = repo::get_project(&db, created.id).await.unwrap();
+    assert_eq!(fetched.name, "改名");
+}
+
+#[tokio::test]
+async fn save_environment_repeated_id_updates_not_conflicts() {
+    let db = pool().await;
+    let project = repo::create_project(&db, "P", "").await.unwrap();
+    let created = repo::create_environment(&db, project.id, "开发", &HashMap::new()).await.unwrap();
+    let mut edited = created.clone();
+    edited.name = "生产".into();
+    edited.updated_at = chrono::Utc::now();
+    repo::save_environment(&db, &edited).await.unwrap();
+
+    let fetched = repo::get_environment(&db, created.id).await.unwrap();
+    assert_eq!(fetched.name, "生产");
+}

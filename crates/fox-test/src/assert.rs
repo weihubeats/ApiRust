@@ -86,7 +86,11 @@ fn actual(a: &AssertionSpec, resp: &HttpResponseData, body_value: Option<&Value>
                 .find(|(k, _)| k.eq_ignore_ascii_case(name))
                 .map(|(_, v)| Value::String(v.clone()))
         }
-        "response_time_ms" => Some(Value::Number(resp.duration_ms.into())),
+        "response_time_ms" => Some(
+            serde_json::Number::from_f64(resp.duration_ms)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+        ),
         "body" => Some(Value::String(resp.body_text())),
         "jsonpath" => {
             let path = a.path.as_deref()?;
@@ -187,7 +191,7 @@ mod tests {
         status: u16,
         headers: Vec<(&str, &str)>,
         body: &str,
-        duration_ms: u64,
+        duration_ms: f64,
     ) -> HttpResponseData {
         HttpResponseData {
             status,
@@ -215,7 +219,7 @@ mod tests {
 
     #[test]
     fn status_eq_and_neq() {
-        let r = make_resp(200, vec![], "x", 5);
+        let r = make_resp(200, vec![], "x", 5.0);
         assert!(evaluate(&spec("status", "eq", json!(200), None), &r, None).passed);
         assert!(!evaluate(&spec("status", "eq", json!(404), None), &r, None).passed);
         assert!(evaluate(&spec("status", "neq", json!(500), None), &r, None).passed);
@@ -229,7 +233,7 @@ mod tests {
             201,
             vec![("X-Token", "abc123"), ("Set-Cookie", "sid=1")],
             "x",
-            5,
+            5.0,
         );
         let a = spec("header", "contains", json!("bc"), Some("x-token")); // 大小写不敏感
         assert!(evaluate(&a, &r, None).passed);
@@ -254,7 +258,7 @@ mod tests {
     #[test]
     fn jsonpath_eq_and_contains() {
         let body = json!({"data": {"id": 7, "name": "rustfox", "tags": ["a", "b"]}});
-        let r = make_resp(200, vec![], &body.to_string(), 3);
+        let r = make_resp(200, vec![], &body.to_string(), 3.0);
         let a = spec("jsonpath", "eq", json!(7), Some("$.data.id"));
         assert!(evaluate(&a, &r, Some(&body)).passed);
         let a2 = spec("jsonpath", "contains", json!("fox"), Some("$.data.name"));
@@ -268,7 +272,7 @@ mod tests {
 
     #[test]
     fn numeric_ops() {
-        let r = make_resp(200, vec![], "x", 1500);
+        let r = make_resp(200, vec![], "x", 1500.0);
         let a = spec("response_time_ms", "lt", json!(2000), None);
         assert!(evaluate(&a, &r, None).passed);
         let a2 = spec("response_time_ms", "gt", json!(2000), None);
@@ -279,7 +283,7 @@ mod tests {
 
     #[test]
     fn body_text_contains() {
-        let r = make_resp(200, vec![], "hello world from fox", 1);
+        let r = make_resp(200, vec![], "hello world from fox", 1.0);
         let a = spec("body", "contains", json!("world"), None);
         assert!(evaluate(&a, &r, None).passed);
         let a2 = spec("body", "contains", json!("banana"), None);

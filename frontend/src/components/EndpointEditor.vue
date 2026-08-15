@@ -4,21 +4,38 @@
  *
  * - 直接编辑 store 草稿对象（Map 值经 Vue 集合响应式代理，嵌套修改即跟踪）；
  * - Base URL 为本地临时值（不落库），发送时与 path 拼接；
+ * - 配置区为横向 Tab 系统：Params / Auth / Headers / Body / Scripts / Tests / Code，
+ *   各渲染独立面板组件（Tests 断言、Code 生成代码已从底部工具区迁入）；
  * - Ctrl+S 保存 / Ctrl+Enter 发送；响应区展示状态码、耗时与正文（JSON 自动美化）。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useToast } from '../composables/useToast'
 import { useFoxApi } from '../composables/useFoxApi'
+import { formatDuration } from '../utils/format'
+import { envColorClass, resolveVariables } from '../utils/environment'
+import AuthPanel from './AuthPanel.vue'
+import BodyPanel from './BodyPanel.vue'
+import CodePanel from './CodePanel.vue'
+import EnvironmentManager from './EnvironmentManager.vue'
+import HeadersPanel from './HeadersPanel.vue'
+import CustomSelect from './ui/CustomSelect.vue'
+import EmptyState from './ui/EmptyState.vue'
+import Icon from './ui/Icon.vue'
+import IconButton from './ui/IconButton.vue'
+import Modal from './ui/Modal.vue'
+import ParamsPanel from './ParamsPanel.vue'
+import Popconfirm from './ui/Popconfirm.vue'
+import ResponsePanel from './ResponsePanel.vue'
+import ScriptsPanel from './ScriptsPanel.vue'
+import Tabs from './ui/Tabs.vue'
+import TestsPanel from './TestsPanel.vue'
+import Tooltip from './ui/Tooltip.vue'
+import ToolsDrawer from './ToolsDrawer.vue'
+import type { TabItem } from './ui/Tabs.vue'
 import type {
-  CodeLang,
-  EndpointResult,
   ExecuteResponse,
   HttpMethod,
-  KeyValue,
-  LoadResult,
-  MultipartField,
   RequestHistory,
   ResponseExample,
 } from '../types/foxApi'
@@ -27,162 +44,36 @@ const store = useWorkspaceStore()
 const toast = useToast()
 const api = useFoxApi()
 
-const baseUrl = ref('http://localhost')
 const sending = ref(false)
+/** 在途请求的取消标识（非空表示有请求可取消）。 */
+const activeRequestId = ref<string | null>(null)
 const response = ref<ExecuteResponse | null>(null)
 const sendError = ref<string | null>(null)
 
 const draft = computed(() => store.activeEndpoint)
 
-/** Body 编辑区只支持 none/json/text/graphql；urlencoded/multipart 后续阶段接入。
- *  bodyAny 用 any 放宽联合类型访问（模板 v-model 直写 raw / spec.*）。 */
-const bodyAny = computed(() => draft.value?.request.body as any)
-const graphql = computed(() => bodyAny.value?.spec as any)
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
-const BODY_MODES: Array<{ value: string; label: string }> = [
-  { value: 'none', label: '无 Body' },
-  { value: 'json', label: 'JSON' },
-  { value: 'text', label: 'Text' },
-  { value: 'graphql', label: 'GraphQL' },
-  { value: 'urlencoded', label: '表单 (x-www-form-urlencoded)' },
-  { value: 'multipart', label: '多部件 (multipart/form-data)' },
-]
+const METHOD_OPTIONS = METHODS.map((m) => ({ value: m, label: m }))
 
-/** Body 模式切换：整体替换为对应形状的默认对象（避免残留多余字段）。 */
-function setBodyMode(mode: string): void {
-  if (!draft.value) return
-  const prev = bodyAny.value
-  switch (mode) {
-    case 'none':
-      draft.value.request.body = { mode: 'none' }
-      break
-    case 'json':
-    case 'text':
-      draft.value.request.body = { mode, raw: prev?.raw ?? '' }
-      break
-    case 'graphql':
-      draft.value.request.body = {
-        mode: 'graphql',
-        spec: { query: prev?.spec?.query ?? '', variables: prev?.spec?.variables ?? '{}', operation_name: prev?.spec?.operation_name ?? '' },
-      }
-      break
-    case 'urlencoded':
-      draft.value.request.body = { mode: 'urlencoded', fields: prev?.fields ?? [] }
-      break
-    case 'multipart':
-      draft.value.request.body = { mode: 'multipart', fields: prev?.fields ?? [] }
-      break
-    default:
-      draft.value.request.body = { mode: 'none' }
-  }
-}
+// ---------- 配置 Tab 系统 ----------
+type ConfigTabKey = 'params' | 'auth' | 'headers' | 'body' | 'scripts' | 'tests' | 'code'
 
-const AUTH_TYPES: Array<{ value: string; label: string }> = [
-  { value: 'none', label: '无认证' },
-  { value: 'bearer', label: 'Bearer Token' },
-  { value: 'basic', label: 'Basic' },
-  { value: 'apikey', label: 'API Key' },
-  { value: 'oauth2', label: 'OAuth2' },
-]
+const activeTab = ref<ConfigTabKey>('params')
 
-/** Auth 编辑区；type 切换时替换为对应默认对象。 */
-const authAny = computed(() => draft.value?.request.auth as any)
-const authorizing = ref(false)
-
-/** OAuth2 授权状态文案。 */
-const oauthStatus = computed(() => {
-  const token = authAny.value?.token as
-    | { access_token?: string; expires_at?: string }
-    | undefined
-  if (!token?.access_token) return '未授权'
-  const expires = token.expires_at ? new Date(token.expires_at) : null
-  const expiring = expires ? expires.getTime() - Date.now() < 5 * 60_000 : false
-  return expires && !expiring
-    ? `已授权，有效期至 ${expires.toLocaleString('zh-CN')}`
-    : expiring
-      ? '令牌即将过期，发送时将自动刷新'
-      : '已授权（发送时自动刷新）'
+const configTabs = computed<TabItem[]>(() => {
+  const d = draft.value
+  if (!d) return []
+  const bodyMode = d.request.body.mode
+  return [
+    { key: 'params', label: 'Params', count: d.request.params.length },
+    { key: 'auth', label: 'Auth' },
+    { key: 'headers', label: 'Headers', count: d.request.headers.length },
+    { key: 'body', label: 'Body', count: bodyMode !== 'none' ? 1 : undefined },
+    { key: 'scripts', label: 'Scripts' },
+    { key: 'tests', label: 'Tests', count: d.request.tests ? 1 : undefined },
+    { key: 'code', label: 'Code' },
+  ]
 })
-
-/** 发起完整授权流：后端起本地回调 + 打开系统浏览器；完成后令牌写入草稿。 */
-async function oauthAuthorize(): Promise<void> {
-  if (!draft.value) return
-  authorizing.value = true
-  try {
-    const token = await api.oauthAuthorize(authAny.value)
-    draft.value.request.auth = { ...authAny.value, token }
-    toast.success('OAuth2 授权成功，请保存 (⌘S) 持久化')
-  } catch (err) {
-    toast.error('OAuth2 授权失败', { message: err instanceof Error ? err.message : String(err) })
-  } finally {
-    authorizing.value = false
-  }
-}
-
-function setAuthType(type: string): void {
-  if (!draft.value) return
-  switch (type) {
-    case 'none':
-      draft.value.request.auth = { type: 'none' }
-      break
-    case 'bearer':
-      draft.value.request.auth = { type: 'bearer', token: '' }
-      break
-    case 'basic':
-      draft.value.request.auth = { type: 'basic', username: '', password: '' }
-      break
-    case 'apikey':
-      draft.value.request.auth = { type: 'apikey', key: '', value: '', in: 'header' }
-      break
-    case 'oauth2':
-      draft.value.request.auth = {
-        type: 'oauth2',
-        client_id: '',
-        client_secret: '',
-        auth_url: '',
-        token_url: '',
-        scope: '',
-        redirect_uri: '',
-      }
-      break
-  }
-}
-
-function addUrlencodedField(): void {
-  const fields = draft.value?.request.body as { fields: KeyValue[] } | undefined
-  fields?.fields.push({ key: '', value: '', enabled: true, description: '' })
-}
-
-function removeUrlencodedField(index: number): void {
-  const fields = draft.value?.request.body as { fields: unknown[] } | undefined
-  fields?.fields.splice(index, 1)
-}
-
-function addMultipartField(): void {
-  const fields = draft.value?.request.body as { fields: MultipartField[] } | undefined
-  fields?.fields.push({ key: '', value_type: 'text', value: '', enabled: true })
-}
-
-function removeMultipartField(index: number): void {
-  const fields = draft.value?.request.body as { fields: unknown[] } | undefined
-  fields?.fields.splice(index, 1)
-}
-
-function addParam(): void {
-  draft.value?.request.params.push({ key: '', value: '', enabled: true, description: '' })
-}
-
-function removeParam(index: number): void {
-  draft.value?.request.params.splice(index, 1)
-}
-
-function addHeader(): void {
-  draft.value?.request.headers.push({ key: '', value: '', enabled: true, description: '' })
-}
-
-function removeHeader(index: number): void {
-  draft.value?.request.headers.splice(index, 1)
-}
 
 function prettyBody(raw: string): string {
   try {
@@ -192,54 +83,201 @@ function prettyBody(raw: string): string {
   }
 }
 
-/** 拼接请求地址（与 send / 代码生成共用）。 */
+function isAbsolutePath(p: string): boolean {
+  return p.startsWith('http://') || p.startsWith('https://')
+}
+
+/** 地址栏展示前缀（唯一真实数据源）：环境 base_url 变量 > 会话 Base URL。 */
+const urlDomain = computed(() => (draft.value ? store.urlDomain : ''))
+
+/** 面包屑：接口所属文件夹名。 */
+const folderName = computed(() => {
+  if (!draft.value?.folder_id) return ''
+  return store.folders.find((f) => f.id === draft.value!.folder_id)?.name ?? ''
+})
+
+/** 路径是否为完整绝对 URL（此时不显示前缀 chip，地址栏直接展示全文）。 */
+const isAbsPath = computed(() => (draft.value ? isAbsolutePath(draft.value.path) : false))
+
+/** 激活环境名（chip 色点）。 */
+const activeEnvName = computed(
+  () => store.environments.find((e) => e.id === store.activeEnvId)?.name ?? '',
+)
+
+/** 地址栏前缀 chip 文案：环境 base_url 变量的「解析后」实际值或会话 Base URL。 */
+const resolvedDomain = computed(() => {
+  const src = urlDomain.value
+  if (!src) return ''
+  const env = store.environments.find((e) => e.id === store.activeEnvId)
+  const vars = { ...(store.project?.variables ?? {}), ...(env?.variables ?? {}) }
+  return resolveVariables(src, vars)
+})
+
+/** chip 变量引用未解析（环境未定义该变量）。 */
+const urlUnresolved = computed(
+  () => urlDomain.value.startsWith('{{') && resolvedDomain.value === urlDomain.value,
+)
+
+/** 基础 URL 标签样式：环境变量已解析 → 主题色标签；未解析 → 警告；会话回退 → 中性。 */
+const chipClass = computed(() => {
+  if (urlUnresolved.value) return 'warn'
+  if (urlDomain.value.startsWith('{{')) return 'env'
+  return 'session'
+})
+
+/** 点击基础 URL 标签 → 打开环境管理。 */
+const showEnvManager = ref(false)
+
+/** chip 悬浮提示：完整 URL 如何拼接。 */
+const urlTooltip = computed(() => {
+  if (!draft.value || isAbsPath.value) return ''
+  const src = urlDomain.value
+  if (src.startsWith('{{')) {
+    if (urlUnresolved.value) return `${src} 未定义，请求将按字面量发送`
+    const env = store.environments.find((e) => e.id === store.activeEnvId)
+    return `${src} → ${resolvedDomain.value}${env ? `（来自环境「${env.name}」）` : ''}`
+  }
+  return `会话 Base URL：${resolvedDomain.value}（未使用环境变量）`
+})
+
+/** 路径输入框（与 chip 组成完整请求地址）；粘贴完整 URL 时自动拆分。 */
+const urlPath = computed({
+  get: () => {
+    const d = draft.value
+    if (!d) return ''
+    return d.path
+  },
+  set: (value: string) => {
+    const d = draft.value
+    if (!d) return
+    const v = value.trim()
+    if (!v) return
+
+    // 1) 粘贴/改写完整 URL：origin 写入域名源（环境变量优先），query 并入参数。
+    const abs = v.match(/^https?:\/\/[^/]+/)
+    if (abs) {
+      let rest = v.slice(abs[0].length) || '/'
+      const qIdx = rest.indexOf('?')
+      if (qIdx !== -1) {
+        const qs = rest.slice(qIdx + 1)
+        rest = rest.slice(0, qIdx) || '/'
+        for (const [key, val] of new URLSearchParams(qs).entries()) {
+          d.request.params.push({ key, value: val, enabled: true, description: '' })
+        }
+      }
+      if (store.urlDomain.startsWith('{{')) {
+        void store.setEnvironmentBaseUrl(abs[0])
+      } else {
+        store.sessionBaseUrl = abs[0]
+      }
+      d.path = rest.startsWith('/') ? rest : `/${rest}`
+      return
+    }
+
+    // 2) 以 `{{变量}}` 开头：变量引用成为域名源。
+    const varRef = v.match(/^\{\{[^{}]+\}\}/)
+    if (varRef) {
+      store.sessionBaseUrl = varRef[0]
+      d.path = v.slice(varRef[0].length) || '/'
+      return
+    }
+
+    // 3) 其余视为路径本身。
+    d.path = v.startsWith('/') ? v : `/${v}`
+  },
+})
+
+/** 请求地址（与 send / 代码生成 / 压测共用）；变量由后端按环境注入。 */
 function buildUrl(): string {
-  if (!draft.value) return ''
-  return draft.value.path.startsWith('http://') || draft.value.path.startsWith('https://')
-    ? draft.value.path
-    : `${baseUrl.value.replace(/\/+$/, '')}${draft.value.path}`
+  const d = draft.value
+  if (!d) return ''
+  if (isAbsolutePath(d.path)) return d.path
+  const path = d.path.startsWith('/') ? d.path : `/${d.path}`
+  return `${store.urlDomain}${path}`
 }
 
 async function send(): Promise<void> {
-  if (!draft.value) return
+  if (!draft.value || sending.value) return
   sending.value = true
   sendError.value = null
   const url = buildUrl()
+  const rid = crypto.randomUUID()
+  activeRequestId.value = rid
   try {
-    response.value = await store.send(draft.value, url)
+    response.value = await store.send(draft.value, url, rid)
     loadHistory()
   } catch (err) {
-    sendError.value = err instanceof Error ? err.message : String(err)
-    response.value = null
+    const e = err as Error & { code?: string }
+    if (e?.code === 'CANCELLED') {
+      // 用户主动取消：不视为错误，保留上一次结果。
+      toast.info('请求已取消')
+      sendError.value = null
+    } else {
+      sendError.value = err instanceof Error ? err.message : String(err)
+      response.value = null
+    }
   } finally {
+    if (activeRequestId.value === rid) activeRequestId.value = null
     sending.value = false
   }
 }
 
+/** 取消在途请求（后端中止连接，命令随即以 CANCELLED 返回）。 */
+function cancelSend(): void {
+  if (!activeRequestId.value) return
+  void api.cancelRequest(activeRequestId.value)
+  toast.info('正在取消请求…')
+}
+
+/** 保存：名称为空时先弹名称输入框，确认后再落库。 */
+const showNameDialog = ref(false)
+const pendingName = ref('')
+
 async function save(): Promise<void> {
+  if (!draft.value) return
+  if (!draft.value.name.trim()) {
+    pendingName.value = ''
+    showNameDialog.value = true
+    return
+  }
   await store.saveActiveDraft()
 }
 
-async function newEnvironment(): Promise<void> {
-  const name = window.prompt('环境名称')
-  if (!name?.trim()) return
-  try {
-    await store.createEnvironment(name.trim())
-  } catch (err) {
-    toast.error('创建环境失败', { message: err instanceof Error ? err.message : String(err) })
+async function confirmName(): Promise<void> {
+  if (!draft.value) return
+  const name = pendingName.value.trim()
+  if (!name) {
+    toast.warning('接口名称不能为空')
+    return
   }
+  draft.value.name = name
+  showNameDialog.value = false
+  await store.saveActiveDraft()
 }
 
 // ---------- 响应示例 ----------
 const viewingExample = ref<ResponseExample | null>(null)
 const activeExamples = computed(() => store.examples.get(draft.value?.id ?? '') ?? [])
 
-async function saveExample(): Promise<void> {
+const showExampleDialog = ref(false)
+const exampleName = ref('')
+
+function saveExample(): void {
   if (!draft.value || !response.value) return
-  const name = window.prompt('示例名称', `${draft.value.method} ${new Date().toLocaleTimeString('zh-CN')}`)
-  if (!name?.trim()) return
+  exampleName.value = `${draft.value.method} ${new Date().toLocaleTimeString('zh-CN')}`
+  showExampleDialog.value = true
+}
+
+async function confirmSaveExample(): Promise<void> {
+  if (!draft.value || !response.value) return
+  const name = exampleName.value.trim()
+  if (!name) {
+    toast.warning('示例名称不能为空')
+    return
+  }
   try {
-    await store.saveAsExample(draft.value.id, name.trim(), response.value)
+    await store.saveAsExample(draft.value.id, name, response.value)
+    showExampleDialog.value = false
   } catch (err) {
     toast.error('保存示例失败', { message: err instanceof Error ? err.message : String(err) })
   }
@@ -251,54 +289,11 @@ function viewExample(ex: ResponseExample): void {
 
 async function removeExample(ex: ResponseExample): Promise<void> {
   if (!draft.value) return
-  if (!window.confirm(`删除示例「${ex.name}」？`)) return
   try {
     await store.removeExample(draft.value.id, ex.id)
     if (viewingExample.value?.id === ex.id) viewingExample.value = null
   } catch (err) {
     toast.error('删除示例失败', { message: err instanceof Error ? err.message : String(err) })
-  }
-}
-
-// ---------- 代码生成 ----------
-const CODE_LANGS: Array<{ value: CodeLang; label: string }> = [
-  { value: 'curl', label: 'cURL' },
-  { value: 'python', label: 'Python (requests)' },
-  { value: 'js', label: 'JavaScript (fetch)' },
-  { value: 'go', label: 'Go (net/http)' },
-  { value: 'java', label: 'Java (OkHttp)' },
-  { value: 'php', label: 'PHP (cURL)' },
-]
-const codeLang = ref<CodeLang>('curl')
-const generatedCode = ref<string | null>(null)
-const generating = ref(false)
-
-async function generateCode(): Promise<void> {
-  if (!draft.value) return
-  generating.value = true
-  try {
-    generatedCode.value = await api.codegenRender({
-      lang: codeLang.value,
-      method: draft.value.method,
-      url: buildUrl(),
-      headers: draft.value.request.headers,
-      body: draft.value.request.body,
-      auth: draft.value.request.auth,
-    })
-  } catch (err) {
-    toast.error('生成代码失败', { message: err instanceof Error ? err.message : String(err) })
-  } finally {
-    generating.value = false
-  }
-}
-
-async function copyCode(): Promise<void> {
-  if (!generatedCode.value) return
-  try {
-    await navigator.clipboard.writeText(generatedCode.value)
-    toast.success('已复制到剪贴板')
-  } catch {
-    toast.error('复制失败，请手动选择文本')
   }
 }
 
@@ -323,76 +318,10 @@ function historySummary(h: RequestHistory): { status: number; size: number } | n
   }
 }
 
-// ---------- 测试 / 压测 ----------
-const testsJson = ref('')
-const testResult = ref<EndpointResult | null>(null)
-const testing = ref(false)
+// ---------- 工具抽屉（生成代码 / 测试 / 压测） ----------
+const showTools = ref(false)
 
-watch(
-  draft,
-  () => {
-    const tests = (draft.value?.request as any)?.tests
-    testsJson.value = tests ? JSON.stringify(tests, null, 2) : ''
-  },
-  { deep: true, immediate: true },
-)
-
-async function runTests(): Promise<void> {
-  if (!draft.value) return
-  try {
-    ;(draft.value.request as any).tests = testsJson.value.trim()
-      ? JSON.parse(testsJson.value)
-      : null
-  } catch {
-    toast.error('测试配置不是合法 JSON')
-    return
-  }
-  testing.value = true
-  try {
-    testResult.value = await api.testEndpoint({
-      endpoint: draft.value,
-      url: buildUrl(),
-      environment_id: store.activeEnvId,
-    })
-  } catch (err) {
-    toast.error('测试运行失败', { message: err instanceof Error ? err.message : String(err) })
-  } finally {
-    testing.value = false
-  }
-}
-
-const loadConcurrency = ref('20')
-const loadTotal = ref('200')
-const loadResult = ref<LoadResult | null>(null)
-const loading = ref(false)
-
-async function runLoadTest(): Promise<void> {
-  if (!draft.value) return
-  const concurrency = Number(loadConcurrency.value)
-  const total = Number(loadTotal.value)
-  if (!Number.isFinite(concurrency) || !Number.isFinite(total) || total < 1) {
-    toast.error('请输入合法的并发数与总数')
-    return
-  }
-  loading.value = true
-  loadProgress.value = null
-  loadResult.value = null
-  try {
-    loadResult.value = await api.loadTest({
-      url: buildUrl(),
-      method: draft.value.method,
-      spec: draft.value.request,
-      environment_id: store.activeEnvId,
-      concurrency,
-      total,
-    })
-  } catch (err) {
-    toast.error('压测失败', { message: err instanceof Error ? err.message : String(err) })
-  } finally {
-    loading.value = false
-    loadProgress.value = null
-  }
-}
+const requestUrl = computed(() => (draft.value ? buildUrl() : ''))
 
 function onKeydown(event: KeyboardEvent): void {
   if (!(event.metaKey || event.ctrlKey)) return
@@ -402,235 +331,136 @@ function onKeydown(event: KeyboardEvent): void {
   } else if (event.key === 'Enter') {
     event.preventDefault()
     send()
+  } else if (event.key === 't') {
+    event.preventDefault()
+    store.openNewEndpoint(null)
   }
 }
 
-const loadProgress = ref<{ done: number; total: number; ok: number; failed: number } | null>(null)
-let unlistenLoad: UnlistenFn | null = null
+/** 新建接口后自动聚焦标题并全选，便于直接输入名称（TabBar「+」/ ⌘T / 树内新建共用）。 */
+const crumbNameInput = ref<HTMLInputElement | null>(null)
+watch(
+  () => store.focusTitleSignal,
+  () => {
+    void nextTick(() => {
+      crumbNameInput.value?.focus()
+      crumbNameInput.value?.select()
+    })
+  },
+)
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeydown)
   loadHistory()
-  unlistenLoad = await listen<{ done: number; total: number; ok: number; failed: number }>(
-    'fox:load-progress',
-    (event) => {
-      loadProgress.value = event.payload
-    },
-  )
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
-  unlistenLoad?.()
 })
 </script>
 
 <template>
   <div v-if="draft" class="editor">
-    <div class="editor-row">
-      <select v-model="draft.method" class="rf-input method-select" :class="`m-select-${draft.method.toLowerCase()}`">
-        <option v-for="m in METHODS" :key="m" :value="m">{{ m }}</option>
-      </select>
-      <input v-model="draft.path" class="rf-input path-input" spellcheck="false" placeholder="/api/users" />
-      <div class="editor-actions">
-        <button class="rf-btn rf-btn-primary" type="button" :disabled="sending" @click="send">
-          {{ sending ? '发送中…' : '发送 (⌘⏎)' }}
-        </button>
-        <button class="rf-btn" type="button" @click="save">保存 (⌘S)</button>
-      </div>
-    </div>
-    <div class="editor-row">
-      <input v-model="draft.name" class="rf-input name-input" placeholder="接口名称（必填）" />
-      <select
-        :value="store.activeEnvId ?? ''"
-        class="rf-input rf-input-sm env-select"
-        @change="store.setEnvironment(($event.target as HTMLSelectElement).value || null)"
-      >
-        <option value="">环境：无</option>
-        <option v-for="env in store.environments" :key="env.id" :value="env.id">
-          {{ env.name }}
-        </option>
-      </select>
-      <button class="rf-btn rf-btn-sm env-new" type="button" title="新建环境" @click="newEnvironment">
-        ＋
-      </button>
-      <input
-        v-model="baseUrl"
-        class="rf-input base-input"
-        spellcheck="false"
-        placeholder="Base URL（仅本次会话，不落库）"
-      />
-    </div>
-
-    <div class="editor-section">
-      <h3 class="section-title">查询参数 (Params)</h3>
-      <div v-for="(p, i) in draft.request.params" :key="i" class="kv-row">
-        <input v-model="p.enabled" type="checkbox" class="kv-check" />
-        <input v-model="p.key" class="rf-input rf-input-sm kv-key" placeholder="Key" />
-        <input v-model="p.value" class="rf-input rf-input-sm kv-value" placeholder="Value" />
-        <button class="rf-btn rf-btn-sm kv-remove" type="button" @click="removeParam(i)">✕</button>
-      </div>
-      <button class="rf-btn rf-btn-sm" type="button" @click="addParam">＋ 添加参数</button>
-    </div>
-
-    <div class="editor-section">
-      <h3 class="section-title">认证 (Auth)</h3>
-      <select
-        :value="authAny?.type ?? 'none'"
-        class="rf-input rf-input-sm auth-type-select"
-        @change="setAuthType(($event.target as HTMLSelectElement).value)"
-      >
-        <option v-for="t in AUTH_TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
-      </select>
-      <div v-if="authAny?.type === 'bearer'" class="kv-row">
+    <div class="editor-row breadcrumb-row">
+      <span class="crumb">
+        <span class="crumb-part">{{ store.project?.name ?? '未命名项目' }}</span>
+        <template v-if="folderName">
+          <span class="crumb-sep">/</span>
+          <span class="crumb-part">{{ folderName }}</span>
+        </template>
+        <span class="crumb-sep">/</span>
         <input
-          v-model="authAny.token"
-          class="rf-input rf-input-sm kv-value"
-          placeholder="Token"
+          ref="crumbNameInput"
+          v-model="draft.name"
+          class="crumb-name"
+          placeholder="接口名称"
           spellcheck="false"
+          title="点击可直接修改接口名称"
         />
-      </div>
-      <div v-else-if="authAny?.type === 'basic'" class="kv-row">
-        <input
-          v-model="authAny.username"
-          class="rf-input rf-input-sm kv-key"
-          placeholder="用户名"
-        />
-        <input
-          v-model="authAny.password"
-          class="rf-input rf-input-sm kv-value"
-          placeholder="密码"
-          type="password"
-        />
-      </div>
-      <div v-else-if="authAny?.type === 'oauth2'" class="oauth-form">
-        <p class="oauth-hint">
-          <span class="oauth-status" :class="{ ok: oauthStatus !== '未授权' }">{{ oauthStatus }}</span>
+      </span>
+      <span class="breadcrumb-spacer"></span>
+    </div>
+    <div class="editor-row">
+      <div class="request-bar">
+        <CustomSelect
+          class="method-select"
+          :model-value="draft.method"
+          :options="METHOD_OPTIONS"
+          @update:model-value="draft.method = String($event) as HttpMethod"
+        >
+          <template #display="{ label }">
+            <span :class="`m-select-${draft.method.toLowerCase()}`">{{ label }}</span>
+          </template>
+        </CustomSelect>
+        <span class="req-bar-divider"></span>
+        <Tooltip v-if="urlDomain && !isAbsPath" :content="urlTooltip" placement="bottom">
           <button
-            class="rf-btn rf-btn-sm"
             type="button"
-            :disabled="authorizing"
-            @click="oauthAuthorize"
+            class="url-chip"
+            :class="chipClass"
+            title="点击管理环境"
+            @click="showEnvManager = true"
           >
-            {{ authorizing ? '授权中…' : '立即授权' }}
+            <span v-if="activeEnvName" class="edot" :class="`ed-${envColorClass(activeEnvName)}`"></span>
+            <Icon name="globe" :size="12" class="url-chip-icon" />
+            <span class="url-chip-text">{{ resolvedDomain }}</span>
+            <Icon name="settings" :size="11" class="url-chip-gear" />
           </button>
-        </p>
-        <div class="kv-row">
-          <input v-model="authAny.client_id" class="rf-input rf-input-sm kv-key" placeholder="Client ID" />
-          <input v-model="authAny.client_secret" class="rf-input rf-input-sm kv-value" placeholder="Client Secret" type="password" />
-        </div>
-        <div class="kv-row">
-          <input v-model="authAny.auth_url" class="rf-input rf-input-sm kv-key" placeholder="Authorize URL" />
-          <input v-model="authAny.token_url" class="rf-input rf-input-sm kv-value" placeholder="Token URL" />
-        </div>
-        <div class="kv-row">
-          <input v-model="authAny.scope" class="rf-input rf-input-sm kv-key" placeholder="Scope（空格分隔）" />
-          <input v-model="authAny.redirect_uri" class="rf-input rf-input-sm kv-value" placeholder="Redirect URI" />
-        </div>
-      </div>
-      <div v-else-if="authAny?.type === 'apikey'" class="kv-row">
-        <input v-model="authAny.key" class="rf-input rf-input-sm kv-key" placeholder="Key" />
+        </Tooltip>
+        <span v-if="urlDomain && !isAbsPath" class="req-bar-divider"></span>
         <input
-          v-model="authAny.value"
-          class="rf-input rf-input-sm kv-value"
-          placeholder="Value"
+          v-model="urlPath"
+          class="url-input"
           spellcheck="false"
-        />
-        <select v-model="authAny.in" class="rf-input rf-input-sm auth-in-select">
-          <option value="header">Header</option>
-          <option value="query">Query</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="editor-section">
-      <h3 class="section-title">请求头 (Headers)</h3>
-      <div v-for="(h, i) in draft.request.headers" :key="i" class="kv-row">
-        <input v-model="h.enabled" type="checkbox" class="kv-check" />
-        <input v-model="h.key" class="rf-input rf-input-sm kv-key" placeholder="Key" />
-        <input v-model="h.value" class="rf-input rf-input-sm kv-value" placeholder="Value" />
-        <button class="rf-btn rf-btn-sm kv-remove" type="button" @click="removeHeader(i)">✕</button>
-      </div>
-      <button class="rf-btn rf-btn-sm" type="button" @click="addHeader">＋ 添加请求头</button>
-    </div>
-
-    <div class="editor-section">
-      <h3 class="section-title">请求体 (Body)</h3>
-      <select
-        :value="bodyAny?.mode ?? 'none'"
-        class="rf-input rf-input-sm body-mode-select"
-        @change="setBodyMode(($event.target as HTMLSelectElement).value)"
-      >
-        <option v-for="m in BODY_MODES" :key="m.value" :value="m.value">{{ m.label }}</option>
-      </select>
-      <textarea
-        v-if="bodyAny?.mode === 'json' || bodyAny?.mode === 'text'"
-        v-model="bodyAny.raw"
-        class="rf-input body-input"
-        spellcheck="false"
-        placeholder='{ "key": "value" }'
-      ></textarea>
-      <div v-else-if="bodyAny?.mode === 'graphql'" class="gql-editor">
-        <textarea
-          v-model="graphql.query"
-          class="rf-input body-input"
-          spellcheck="false"
-          placeholder="query Hero($id: ID!) { hero(id: $id) { name } }"
-        ></textarea>
-        <textarea
-          v-model="graphql.variables"
-          class="rf-input body-input gql-vars"
-          spellcheck="false"
-          placeholder='{ "id": "42" }'
-        ></textarea>
-        <input
-          v-model="graphql.operation_name"
-          class="rf-input rf-input-sm"
-          placeholder="operationName（可选）"
+          placeholder="路径，如 /api/users；可粘贴完整 URL 自动拆分"
         />
       </div>
-      <div v-else-if="bodyAny?.mode === 'urlencoded'" class="editor-fields">
-        <div v-for="(f, i) in bodyAny.fields" :key="i" class="kv-row">
-          <input v-model="f.enabled" type="checkbox" class="kv-check" />
-          <input v-model="f.key" class="rf-input rf-input-sm kv-key" placeholder="Key" />
-          <input v-model="f.value" class="rf-input rf-input-sm kv-value" placeholder="Value" />
-          <button class="rf-btn rf-btn-sm kv-remove" type="button" @click="removeUrlencodedField(i)">✕</button>
-        </div>
-        <button class="rf-btn rf-btn-sm" type="button" @click="addUrlencodedField">＋ 添加字段</button>
-      </div>
-      <div v-else-if="bodyAny?.mode === 'multipart'" class="editor-fields">
-        <div v-for="(f, i) in bodyAny.fields" :key="i" class="kv-row">
-          <input v-model="f.enabled" type="checkbox" class="kv-check" />
-          <input v-model="f.key" class="rf-input rf-input-sm kv-key" placeholder="Key" />
-          <select v-model="f.value_type" class="rf-input rf-input-sm mp-type">
-            <option value="text">文本</option>
-            <option value="file_path">文件路径</option>
-          </select>
-          <input
-            v-model="f.value"
-            class="rf-input rf-input-sm kv-value"
-            :placeholder="f.value_type === 'file_path' ? '/path/to/file' : 'Value'"
-          />
-          <button class="rf-btn rf-btn-sm kv-remove" type="button" @click="removeMultipartField(i)">✕</button>
-        </div>
-        <button class="rf-btn rf-btn-sm" type="button" @click="addMultipartField">＋ 添加字段</button>
-      </div>
-      <p v-else-if="bodyAny?.mode !== 'none'" class="body-hint">暂不支持该 Body 模式。</p>
-    </div>
-
-    <div v-if="sendError" class="send-error" role="alert">
-      <span>发送失败：{{ sendError }}</span>
-    </div>
-    <div v-if="response" class="response" :class="{ error: response.status >= 400 }">
-      <div class="response-head">
-        <span class="response-status">{{ response.status }}</span>
-        <span class="response-meta">{{ response.duration_ms }} ms · {{ response.size_bytes }} B</span>
-        <span class="response-type">{{ response.content_type }}</span>
-        <button class="rf-btn rf-btn-sm response-save" type="button" @click="saveExample">
-          保存为示例
+      <div class="editor-actions">
+        <button class="rf-btn rf-btn-sm" type="button" title="压测（并发基准）" @click="showTools = true">
+          <Icon name="gauge" :size="13" /> 工具
+        </button>
+        <button v-if="!sending" class="rf-btn rf-btn-send" type="button" @click="send">
+          <Icon name="send" :size="14" />
+          发送 (⌘⏎)
+        </button>
+        <button
+          v-else
+          class="rf-btn rf-btn-danger"
+          type="button"
+          title="取消在途请求"
+          @click="cancelSend"
+        >
+          <Icon name="stop" :size="14" /> 取消请求
+        </button>
+        <button class="rf-btn" type="button" @click="save">
+          <Icon name="save" :size="14" /> 保存 (⌘S)
         </button>
       </div>
-      <pre class="response-body">{{ prettyBody(response.body) }}</pre>
+    </div>
+
+    <div class="config-box">
+      <Tabs v-model="activeTab" :tabs="configTabs" size="sm" />
+      <ParamsPanel v-if="activeTab === 'params'" :draft="draft" />
+      <AuthPanel v-else-if="activeTab === 'auth'" :draft="draft" />
+      <HeadersPanel v-else-if="activeTab === 'headers'" :draft="draft" />
+      <BodyPanel v-else-if="activeTab === 'body'" :draft="draft" />
+      <ScriptsPanel v-else-if="activeTab === 'scripts'" :draft="draft" />
+      <TestsPanel v-else-if="activeTab === 'tests'" :draft="draft" :url="requestUrl" />
+      <CodePanel v-else :draft="draft" :url="requestUrl" />
+    </div>
+
+    <div class="response-zone">
+      <ResponsePanel v-if="response" :response="response" @save-example="saveExample" />
+      <div v-else-if="sendError" class="send-error" role="alert">
+        <span>发送失败：{{ sendError }}</span>
+      </div>
+      <EmptyState
+        v-else
+        class="response-empty"
+        icon="send"
+        title="尚未发送请求"
+        description="点击发送按钮或按 Cmd + Enter (Ctrl + Enter) 获取响应结果"
+      />
     </div>
     <div v-if="activeExamples.length" class="examples">
       <h3 class="section-title">响应示例 ({{ activeExamples.length }})</h3>
@@ -645,7 +475,9 @@ onUnmounted(() => {
           <span class="example-name">{{ ex.name }}</span>
           <span class="example-meta">{{ ex.created_at.slice(0, 16).replace('T', ' ') }}</span>
         </button>
-        <button class="tree-btn danger" type="button" title="删除" @click="removeExample(ex)">✕</button>
+        <Popconfirm :title="`删除示例「${ex.name}」？`" @confirm="removeExample(ex)">
+            <IconButton name="trash" :size="13" tone="danger" title="删除示例" />
+          </Popconfirm>
       </div>
       <pre v-if="viewingExample" class="example-body">{{ prettyBody(viewingExample.body) }}</pre>
     </div>
@@ -658,94 +490,50 @@ onUnmounted(() => {
         <span v-if="historySummary(h)" class="history-status" :class="{ err: historySummary(h)!.status >= 400 }">
           {{ historySummary(h)!.status }}
         </span>
-        <span class="history-meta">{{ h.duration_ms ?? '-' }} ms</span>
+        <span class="history-meta">{{ formatDuration(h.duration_ms) }}</span>
         <span class="history-meta">{{ h.created_at.slice(5, 16).replace('T', ' ') }}</span>
       </div>
     </div>
-
-    <div class="editor-section">
-      <h3 class="section-title">生成代码</h3>
-      <div class="kv-row">
-        <select v-model="codeLang" class="rf-input rf-input-sm code-lang-select">
-          <option v-for="l in CODE_LANGS" :key="l.value" :value="l.value">{{ l.label }}</option>
-        </select>
-        <button class="rf-btn rf-btn-sm" type="button" :disabled="generating" @click="generateCode">
-          {{ generating ? '生成中…' : '生成' }}
-        </button>
-        <button class="rf-btn rf-btn-sm" type="button" :disabled="!generatedCode" @click="copyCode">
-          复制
-        </button>
-      </div>
-      <pre v-if="generatedCode" class="code-preview">{{ generatedCode }}</pre>
-    </div>
-
-    <div class="editor-section">
-      <h3 class="section-title">测试 (断言)</h3>
-      <textarea
-        v-model="testsJson"
-        class="rf-input body-input"
-        spellcheck="false"
-        placeholder='{ "assertions": [{ "type": "status", "op": "eq", "expected": 200 }] }'
-      ></textarea>
-      <div class="kv-row">
-        <button class="rf-btn rf-btn-sm" type="button" :disabled="testing" @click="runTests">
-          {{ testing ? '测试中…' : '运行测试' }}
-        </button>
-        <span v-if="testResult" class="test-badge" :class="testResult.ok ? 'ok' : 'fail'">
-          {{ testResult.ok ? '通过' : '失败' }} · {{ testResult.status ?? '-' }} · {{ testResult.duration_ms ?? '-' }} ms
-        </span>
-      </div>
-      <ul v-if="testResult?.outcomes.length" class="outcome-list">
-        <li
-          v-for="(o, i) in testResult.outcomes"
-          :key="i"
-          class="outcome-row"
-          :class="o.passed ? 'ok' : 'fail'"
-        >
-          <span>{{ o.passed ? '✓' : '✗' }}</span>
-          <span class="outcome-text">{{ o.description }}</span>
-          <span v-if="o.reason" class="outcome-reason">{{ o.reason }}</span>
-        </li>
-      </ul>
-      <p v-else-if="testResult && !testResult.ok" class="test-hint">
-        {{ testResult.request_error ?? '未配置断言' }}
-      </p>
-    </div>
-
-    <div class="editor-section">
-      <h3 class="section-title">压测 (并发基准)</h3>
-      <div class="kv-row">
-        <input v-model="loadConcurrency" class="rf-input rf-input-sm load-num" type="number" min="1" placeholder="并发" />
-        <input v-model="loadTotal" class="rf-input rf-input-sm load-num" type="number" min="1" placeholder="总请求数" />
-        <button class="rf-btn rf-btn-sm" type="button" :disabled="loading" @click="runLoadTest">
-          {{ loading ? `压测中… ${loadProgress ? `${loadProgress.done}/${loadProgress.total}` : ''}` : '开始压测' }}
-        </button>
-      </div>
-      <div v-if="loadProgress" class="load-progress">
-        <div class="load-bar">
-          <div
-            class="load-bar-fill"
-            :style="{ width: `${Math.round((loadProgress.done / loadProgress.total) * 100)}%` }"
-          ></div>
-        </div>
-        <span class="load-progress-text">
-          {{ loadProgress.done }}/{{ loadProgress.total }} · 成功 {{ loadProgress.ok }} · 失败 {{ loadProgress.failed }}
-        </span>
-      </div>
-      <p v-if="loadResult" class="load-summary">
-        {{ loadResult.total }} 次 · 成功 {{ loadResult.ok }} · 失败 {{ loadResult.failed }} ·
-        耗时 {{ loadResult.total_ms }} ms · {{ loadResult.rps.toFixed(1) }} req/s ·
-        p50 {{ loadResult.p50_ms }}ms · p90 {{ loadResult.p90_ms }}ms · p99 {{ loadResult.p99_ms }}ms
-      </p>
-    </div>
-
-    <p v-if="!sendError && !generatedCode" class="editor-hint">
-      填写请求后按 ⌘⏎（Ctrl+Enter）发送。响应正文过长时后端自动截断。
-    </p>
   </div>
   <div v-else class="editor-empty">
     <p>从左侧选择接口开始编辑</p>
   </div>
+
+  <Modal v-model:open="showNameDialog" title="保存接口" width="360px">
+    <p class="name-hint">请为接口填写一个名称（必填）：</p>
+    <input
+      v-model="pendingName"
+      class="rf-input name-dialog-input"
+      placeholder="例如：获取用户列表"
+      spellcheck="false"
+      @keyup.enter="confirmName"
+    />
+    <template #footer>
+      <button class="rf-btn" type="button" @click="showNameDialog = false">取消</button>
+      <button class="rf-btn rf-btn-primary" type="button" @click="confirmName">
+        <Icon name="save" :size="14" /> 保存
+      </button>
+    </template>
+  </Modal>
+
+  <Modal v-model:open="showExampleDialog" title="保存响应示例" width="360px">
+    <p class="name-hint">请输入示例名称：</p>
+    <input
+      v-model="exampleName"
+      class="rf-input name-dialog-input"
+      placeholder="例如：成功响应"
+      spellcheck="false"
+      @keyup.enter="confirmSaveExample"
+    />
+    <template #footer>
+      <button class="rf-btn" type="button" @click="showExampleDialog = false">取消</button>
+      <button class="rf-btn rf-btn-primary" type="button" @click="confirmSaveExample">保存</button>
+    </template>
+  </Modal>
+
+  <ToolsDrawer :open="showTools" :draft="draft" :url="requestUrl" @close="showTools = false" />
+
+  <EnvironmentManager v-model:open="showEnvManager" />
 </template>
 
 <style scoped>
@@ -774,21 +562,215 @@ onUnmounted(() => {
 .m-select-post { color: var(--rf-warning); }
 .m-select-put { color: var(--rf-info); }
 .m-select-delete { color: var(--rf-danger); }
-.m-select-patch { color: #a78bfa; }
+.m-select-patch { color: var(--patch); }
 .m-select-head, .m-select-options { color: var(--rf-text-muted); }
 
-.path-input {
+/* 统一请求栏：方法下拉 + 基础URL标签 + 路径输入合并为一个控件 */
+.request-bar {
   flex: 1;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  height: var(--h-md);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  overflow: hidden;
+  transition:
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+.request-bar:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-tint);
+}
+.request-bar:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-tint);
 }
 
-.name-input {
-  flex: 1;
+.request-bar .method-select {
+  width: 116px;
+  border: none;
+  background: var(--bg-panel);
+}
+.request-bar .method-select :deep(.cs-trigger) {
+  height: 100%;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
 }
 
-.base-input {
-  flex: 1.4;
-  color: var(--rf-text-secondary, #9ca3af);
+.req-bar-divider {
+  width: 1px;
+  flex-shrink: 0;
+  background: var(--border);
+}
+
+/* Tooltip 触发包裹层需允许收缩，避免挤压路径输入 */
+.request-bar :deep(.tt-trigger) {
+  min-width: 0;
+}
+
+/* 基础 URL 标签：圆角胶囊，可点击打开环境管理 */
+.url-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  margin: 3px 4px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  max-width: 320px;
+  cursor: pointer;
+  transition:
+    background var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    filter var(--dur) var(--ease);
+}
+.url-chip:hover {
+  box-shadow: 0 0 0 2px var(--accent-tint);
+}
+
+/* 环境 base_url 变量已解析：主题色（蓝/紫）标签 */
+.url-chip.env {
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+.url-chip.env:hover {
+  filter: brightness(0.96);
+}
+
+/* 变量未定义（将按字面量发送）：警告色标签 */
+.url-chip.warn {
+  background: var(--warning-tint);
+  color: var(--warning);
+}
+.url-chip.warn:hover {
+  filter: brightness(0.96);
+}
+
+/* 会话级 Base URL（未使用环境变量）：中性标签 */
+.url-chip.session {
+  background: var(--bg-hover);
+  color: var(--text-2);
+  border-color: var(--border);
+}
+
+.url-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.url-chip-icon {
+  flex-shrink: 0;
+}
+
+.url-chip-gear {
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: opacity var(--dur) var(--ease);
+}
+.url-chip:hover .url-chip-gear {
+  opacity: 1;
+}
+
+/* 环境色点 */
+.edot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-3);
+}
+.ed-dev {
+  background: var(--success);
+}
+.ed-test {
+  background: var(--info);
+}
+.ed-staging {
+  background: var(--warning);
+}
+.ed-prod {
+  background: #f97316;
+}
+.ed-global {
+  background: var(--accent);
+}
+
+.request-bar .url-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+}
+
+/* ---- 面包屑行（接口名称移至此处） ---- */
+.breadcrumb-row {
+  gap: 8px;
+}
+
+.crumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  font-size: var(--fs-sm);
+}
+
+.crumb-part {
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.crumb-sep {
+  color: var(--text-3);
+}
+
+/* 接口标题：内联编辑样式——常态为面包屑文本，hover 显示虚线提示可编辑，聚焦高亮 */
+.crumb-name {
+  min-width: 60px;
+  max-width: 280px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-1);
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed transparent;
+  border-radius: 0;
+  padding: 1px 2px;
+  cursor: text;
+  transition: border-bottom-color var(--dur) var(--ease);
+}
+
+.crumb-name:hover {
+  border-bottom-color: var(--text-3);
+  background: transparent;
+}
+
+.crumb-name:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+  background: transparent;
+}
+
+.breadcrumb-spacer {
+  flex: 1;
 }
 
 .editor-actions {
@@ -797,39 +779,14 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.editor-section {
+.config-box {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-}
-
-.section-title {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--rf-text-secondary, #9ca3af);
-}
-
-.kv-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.kv-check {
-  accent-color: var(--rf-info);
-}
-
-.kv-key {
-  width: 220px;
-}
-
-.kv-value {
-  flex: 1;
+  gap: 8px;
 }
 
 .kv-remove {
-  color: var(--rf-text-muted, #6b7280);
+  color: var(--rf-text-muted);
 }
 
 .body-mode-select {
@@ -853,15 +810,11 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   font-size: 12px;
-  color: var(--rf-text-muted, #6b7280);
+  color: var(--rf-text-muted);
 }
 
 .oauth-status.ok {
   color: var(--rf-success);
-}
-
-.code-lang-select {
-  width: 180px;
 }
 
 .history-row {
@@ -870,7 +823,7 @@ onUnmounted(() => {
   gap: 8px;
   font-size: 12px;
   padding: 3px 0;
-  border-bottom: 1px dashed var(--rf-border, #1f2937);
+  border-bottom: 1px dashed var(--rf-border);
 }
 
 .history-method {
@@ -884,8 +837,8 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--rf-text-secondary, #9ca3af);
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  color: var(--rf-text-secondary);
+  font-family: var(--font-mono);
 }
 
 .history-status {
@@ -898,112 +851,8 @@ onUnmounted(() => {
 }
 
 .history-meta {
-  color: var(--rf-text-muted, #6b7280);
+  color: var(--rf-text-muted);
   flex-shrink: 0;
-}
-
-.test-badge {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.test-badge.ok {
-  color: var(--rf-success);
-}
-
-.test-badge.fail {
-  color: var(--rf-danger);
-}
-
-.test-hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--rf-text-muted, #6b7280);
-}
-
-.outcome-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 12px;
-}
-
-.outcome-row {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-}
-
-.outcome-row.ok {
-  color: var(--rf-success);
-}
-
-.outcome-row.fail {
-  color: var(--rf-danger);
-}
-
-.outcome-text {
-  flex: 1;
-  word-break: break-all;
-}
-
-.outcome-reason {
-  color: var(--rf-text-muted, #6b7280);
-  word-break: break-all;
-}
-
-.load-num {
-  width: 110px;
-}
-
-.load-summary {
-  margin: 0;
-  font-size: 12px;
-  color: var(--rf-text-secondary, #9ca3af);
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-}
-
-.load-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.load-bar {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--rf-input-bg, #0f172a);
-  overflow: hidden;
-}
-
-.load-bar-fill {
-  height: 100%;
-  background: var(--rf-info);
-  transition: width 0.15s ease;
-}
-
-.load-progress-text {
-  font-size: 11.5px;
-  color: var(--rf-text-muted, #6b7280);
-}
-
-.code-preview {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--rf-border, #1f2937);
-  border-radius: 6px;
-  background: var(--rf-input-bg, #0f172a);
-  color: var(--rf-text, #f9fafb);
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.55;
-  overflow: auto;
-  max-height: 320px;
-  white-space: pre-wrap;
-  word-break: break-all;
 }
 
 .response-save {
@@ -1027,8 +876,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--rf-border, #1f2937);
-  background: var(--rf-input-bg, #0f172a);
+  border: 1px solid var(--rf-border);
+  background: var(--rf-input-bg);
   border-radius: 6px;
   padding: 5px 10px;
   cursor: pointer;
@@ -1060,16 +909,16 @@ onUnmounted(() => {
 
 .example-meta {
   font-size: 11px;
-  color: var(--rf-text-muted, #6b7280);
+  color: var(--rf-text-muted);
 }
 
 .example-body {
   margin: 0;
   padding: 10px 12px;
-  background: var(--rf-input-bg, #0f172a);
-  border: 1px solid var(--rf-border, #1f2937);
+  background: var(--rf-input-bg);
+  border: 1px solid var(--rf-border);
   border-radius: 6px;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
@@ -1077,98 +926,25 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
-.env-select {
-  width: 180px;
-  flex-shrink: 0;
-}
-
-.gql-vars {
-  min-height: 80px;
-}
-
-.body-hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--rf-text-muted, #6b7280);
-}
-
-.auth-type-select {
-  width: 160px;
-}
-
-.auth-in-select {
-  width: 100px;
-}
-
-.body-input {
-  width: 100%;
-  min-height: 120px;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  font-size: 12.5px;
-  resize: vertical;
-}
-
 .send-error {
   padding: 10px 12px;
-  border-radius: 6px;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  color: var(--rf-danger);
+  border-radius: var(--radius);
+  background: var(--danger-tint);
+  border: 1px solid var(--danger-border);
+  color: var(--danger);
   font-size: 12.5px;
 }
 
-.response {
-  border: 1px solid var(--rf-border, #1f2937);
-  border-radius: 8px;
-  background: var(--rf-input-bg, #0f172a);
-  overflow: hidden;
-}
-
-.response.error {
-  border-color: rgba(239, 68, 68, 0.45);
-}
-
-.response-head {
+/* ---- 响应容器：有响应时由 ResponsePanel 填充，未发送时显示空态 ---- */
+.response-zone {
   display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--rf-border, #1f2937);
+  flex-direction: column;
 }
 
-.response-status {
-  font-weight: 700;
-  font-size: 13px;
-  color: var(--rf-success);
-}
-
-.response.error .response-status {
-  color: var(--rf-danger);
-}
-
-.response-meta,
-.response-type {
-  font-size: 11.5px;
-  color: var(--rf-text-muted, #6b7280);
-}
-
-.response-body {
-  margin: 0;
-  padding: 12px;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--rf-text, #f9fafb);
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
-.editor-hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--rf-text-muted, #6b7280);
+.response-empty {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-card);
 }
 
 .editor-empty {
@@ -1176,6 +952,19 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--rf-text-muted, #6b7280);
+  color: var(--text-3);
+}
+
+/* ---- 名称输入对话框 ---- */
+
+.name-hint {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.name-dialog-input {
+  width: 100%;
+  height: var(--h-md);
 }
 </style>

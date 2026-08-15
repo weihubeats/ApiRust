@@ -5,11 +5,13 @@
 //! - `variables_for` 提供「环境 > 项目」合并变量表，供请求渲染使用。
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use fox_core::model::{Environment, Project};
 use fox_core::VariableMap;
 use sqlx::SqlitePool;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use fox_storage::repository as repo;
@@ -34,6 +36,9 @@ pub struct AppState {
     pub active: RwLock<ActiveContext>,
     /// 正在运行的 Mock 服务（未启动为 `None`）。
     pub mock: RwLock<Option<fox_mock::server::MockServer>>,
+    /// 在途请求的取消令牌注册表（request_id → token；「取消请求」时触发中止）。
+    /// 持有期间不 await，普通 `Mutex` 即可。
+    pub request_cancels: Mutex<HashMap<String, CancellationToken>>,
 }
 
 impl AppState {
@@ -42,6 +47,7 @@ impl AppState {
             db,
             active: RwLock::new(ActiveContext::default()),
             mock: RwLock::new(None),
+            request_cancels: Mutex::new(HashMap::new()),
         }
     }
 

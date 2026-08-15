@@ -1,6 +1,6 @@
 [package]
 name = "fox-tauri"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 description = "fox-core / fox-storage 的 Tauri 2 插件封装：Vue 3 前端通过 IPC 调用的 Command 层"
 # links 决定权限命名空间前缀（与 lib.rs 中 Builder::new("fox") 一致），
@@ -30,6 +30,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
 sqlx = { version = "0.7", features = [
     "runtime-tokio-rustls",
     "sqlite",

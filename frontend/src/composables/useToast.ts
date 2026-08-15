@@ -34,17 +34,17 @@ const MAX_VISIBLE = 5
 const toasts = ref<ToastItem[]>([])
 let nextId = 1
 
-/** 类型 → 面板主题色（与 DESIGN_SYSTEM_CSS 的语义色对齐）。 */
+/** 类型 → 面板主题色（CSS 变量，双主题自动跟随）。 */
 export const TOAST_TYPE_META: Record<ToastType, { label: string; color: string }> = {
-  success: { label: '成功', color: '#22c55e' },
-  info: { label: '提示', color: '#3b82f6' },
-  warning: { label: '警告', color: '#f59e0b' },
-  error: { label: '错误', color: '#ef4444' },
+  success: { label: '成功', color: 'var(--success)' },
+  info: { label: '提示', color: 'var(--info)' },
+  warning: { label: '警告', color: 'var(--warning)' },
+  error: { label: '错误', color: 'var(--danger)' },
 }
 
 function push(item: Omit<ToastItem, 'id'>): number {
   const id = nextId++
-  const entry: ToastItem = { ...item, id, duration: item.duration ?? 3500 }
+  const entry: ToastItem = { ...item, id, duration: item.duration ?? 3000 }
   toasts.value = [...toasts.value.slice(-(MAX_VISIBLE - 1)), entry]
   if (entry.duration > 0) {
     window.setTimeout(() => dismiss(id), entry.duration)

@@ -50,3 +50,18 @@ pub async fn get_active_environment(
 ) -> CommandResult<Option<Environment>> {
     state.active_environment().await
 }
+
+/// 删除环境；若删除的是当前激活环境，则同时清空激活状态。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn delete_environment(
+    state: State<'_, AppState>,
+    environment_id: Uuid,
+) -> CommandResult<()> {
+    repo::delete_environment(&state.db, environment_id).await?;
+    let mut active = state.active.write().await;
+    if active.environment_id == Some(environment_id) {
+        active.environment_id = None;
+        active.environment = None;
+    }
+    Ok(())
+}

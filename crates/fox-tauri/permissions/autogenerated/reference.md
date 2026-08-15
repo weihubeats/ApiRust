@@ -24,7 +24,9 @@ RustFox 核心插件的默认权限：允许前端调用全部 fox 命令
 - `allow-save-environment`
 - `allow-set-active-environment`
 - `allow-get-active-environment`
+- `allow-delete-environment`
 - `allow-execute-request`
+- `allow-cancel-request`
 
 ## Permission Table
 
@@ -90,6 +92,32 @@ Denies the backup_restore command without any pre-configured scope.
 <tr>
 <td>
 
+`fox-tauri:allow-cancel-request`
+
+</td>
+<td>
+
+Enables the cancel_request command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-cancel-request`
+
+</td>
+<td>
+
+Denies the cancel_request command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `fox-tauri:allow-codegen-render`
 
 </td>
@@ -135,6 +163,32 @@ Enables the delete_endpoint command without any pre-configured scope.
 <td>
 
 Denies the delete_endpoint command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-delete-environment`
+
+</td>
+<td>
+
+Enables the delete_environment command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-delete-environment`
+
+</td>
+<td>
+
+Denies the delete_environment command without any pre-configured scope.
 
 </td>
 </tr>

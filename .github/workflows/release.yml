@@ -64,7 +64,12 @@ jobs:
             patchelf \
             zip
 
+      - name: Install NSIS (Windows)
+        if: runner.os == 'Windows'
+        run: choco install nsis -y
+
       - name: Build Tauri bundle
+        shell: bash
         run: scripts/package-tauri.sh
 
       - name: Upload artifacts (job)

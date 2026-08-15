@@ -12,7 +12,7 @@ use fox_core::model::{AuthSpec, OAuth2Token};
 use tokio::sync::{mpsc, watch, Mutex as AsyncMutex};
 use url::Url;
 
-use crate::{cache, CALLBACK_PORT, REFRESH_AHEAD};
+use crate::{cache, REFRESH_AHEAD};
 
 /// OAuth2 流程错误（全部为面向用户的中文消息）。
 #[derive(Debug, thiserror::Error)]

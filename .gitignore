@@ -6,3 +6,6 @@
 
 __pycache__/
 *.pyc
+
+# Node 依赖（图标生成脚本）
+node_modules/

@@ -41,6 +41,16 @@ jobs:
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "crates/fox-tauri -> frontend/src-tauri/target"
+          key: shell
+
+      - name: Cache npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install Linux dependencies (WebKit/GTK)
         if: runner.os == 'Linux'
@@ -51,42 +61,17 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            libxdo-dev \
+            patchelf \
             zip
 
-      - name: Install NSIS (Windows installer)
-        if: runner.os == 'Windows'
-        uses: negrutiu/nsis-install@v2
-
-      - name: Build release binary
-        run: cargo build --release -p fox-desktop
-
-      - name: Run package script (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: scripts/package.sh
-
-      - name: Run package script (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: scripts\package.bat
-
-      - name: Smoke test (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          test -x target/release/fox-desktop
-          ls -la dist/
-
-      - name: Smoke test (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Get-ChildItem dist | Select-Object Name, Length
+      - name: Build Tauri bundle
+        run: scripts/package-tauri.sh
 
       - name: Upload artifacts (job)
         uses: actions/upload-artifact@v4
         with:
           name: rustfox-${{ matrix.name }}
-          path: dist/*
+          path: frontend/src-tauri/target/release/bundle/**
           if-no-files-found: error
 
   release:
@@ -114,13 +99,11 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: RustFox ${{ github.ref_name }}
           body: |
-            ## RustFox 分发包
+            ## RustFox 分发包（Tauri 2）
 
-            无需安装 Rust，下载对应平台压缩包解压即用。
-
-            - **Windows**: `RustFox-*-setup.exe`（安装包，自动创建开始菜单与桌面快捷方式）或 `RustFox-*-windows-x86_64.zip`（便携版）
-            - **macOS**: `RustFox-*-macos-*.dmg`（拖拽安装，推荐）或 `RustFox-*-macos-*.zip`（内含 RustFox.app，拖入「应用程序」即可）
-            - **Linux**: `RustFox-*-linux-*.tar.gz`（解压后运行 `./install_linux.sh` 添加到应用菜单）
+            - **Windows**: `RustFox_x.x.x_x64-setup.exe`（NSIS 安装包）或 `RustFox_x.x.x_x64_en-US.msi`
+            - **macOS**: `RustFox_x.x.x_aarch64.dmg`（Apple Silicon）或 `RustFox_x.x.x_x64.dmg`（Intel）
+            - **Linux**: `rustfox_x.x.x_amd64.deb` 与 `.AppImage`
 
             使用手册：[docs/USER_GUIDE.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/USER_GUIDE.md)
           files: artifacts/**

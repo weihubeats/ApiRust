@@ -16,20 +16,20 @@ RustFox 是一个本地运行的 API 调试与接口测试工具（桌面应用 
 ## 构建
 
 ```bash
-# 调试构建（开发用）
-cargo build
+# 开发模式（HMR + 调试）
+npm --prefix frontend install
+npm --prefix frontend run tauri dev
 
-# 发布构建（推荐）
-cargo build --release
+# 发布构建（bundle 产物）
+scripts/package-tauri.sh
 ```
 
-产物位置：`target/release/fox-desktop`。
+产物在 `frontend/src-tauri/target/release/bundle/`（`.app`/`.dmg`/`.deb`/`.AppImage`/`.msi`/NSIS `.exe` 按平台产出）。
 
 ## 运行
 
-```bash
-./target/release/fox-desktop
-```
+- **开发**:`npm --prefix frontend run tauri dev` 自动启动应用窗口
+- **发布**:安装对应平台分发包即可;macOS 拖 `RustFox.app` 进「应用程序」
 
 启动后会自动初始化 SQLite 数据库与数据目录。
 

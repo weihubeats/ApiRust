@@ -56,35 +56,38 @@
 
 ## 从源码构建（开发者）
 
-前置要求：Rust 工具链（[rustup.rs](https://rustup.rs/) 安装），版本要求见 `rust-toolchain.toml`。
-
-```
-cargo run --release -p fox-desktop
-```
+前置要求：Rust 工具链（[rustup.rs](https://rustup.rs/) 安装）+ Node 22（npm）。
 
 ```bash
-cargo build --workspace        # 构建全部 crate
-cargo run -p fox-desktop       # 启动桌面应用（调试模式）
+cargo build --workspace        # 构建全部后端 crate
 cargo test --workspace         # 运行全部测试
 cargo clippy --workspace --all-targets -- -D warnings   # 静态检查
 ```
 
-## 打包分发包
-
-打包脚本自动构建 release 二进制并产出分发包到 `dist/` 目录：
+启动桌面应用（Tauri 2 + Vue 3，开发模式带 HMR）：
 
 ```bash
-scripts/package.sh    # Linux / macOS：tar.gz 或 RustFox.app
-scripts/package.bat   # Windows：便携 zip + NSIS 安装包
+npm --prefix frontend install
+npm --prefix frontend run tauri dev
 ```
 
-产物说明：
+## 打包分发包
 
-| 平台 | 脚本 | 产物 |
-| --- | --- | --- |
-| Linux | `scripts/package.sh` | `dist/RustFox-<version>-linux-<arch>.tar.gz`（含安装脚本） |
-| macOS | `scripts/package.sh` | `dist/RustFox-<version>-macos-<arch>.zip` + `dist/RustFox-<version>-macos-<arch>.dmg`（内含 `RustFox.app`） |
-| Windows | `scripts/package.bat` | `dist/RustFox-<version>-windows-x86_64.zip`（便携版） + `dist/RustFox-<version>-setup.exe`（NSIS 安装包） |
+Tauri 2 打包脚本（前端 + Rust + 平台 bundle 一步完成）：
+
+```bash
+scripts/package-tauri.sh
+```
+
+产物在 `frontend/src-tauri/target/release/bundle/`：
+
+| 平台 | 产物 |
+| --- | --- |
+| Linux | `.deb` + `.AppImage` |
+| macOS | `RustFox.app` / `.dmg` |
+| Windows | `.msi` + NSIS `-setup.exe` |
+
+CI 发布流程见 `.github/workflows/release.yml`（打 `v*` tag 触发）。
 
 注意事项：
 

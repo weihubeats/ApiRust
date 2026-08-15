@@ -13,32 +13,24 @@
 
 | 方式 | 步骤 |
 | --- | --- |
-| 安装包（推荐） | 下载 `RustFox-<版本>-setup.exe` → 双击运行 → 按提示完成安装 → 桌面出现 **RustFox** 快捷方式，开始菜单出现「RustFox」程序组（含用户手册、卸载入口） |
-| 便携版 | 下载 `RustFox-<版本>-windows-x86_64.zip` → 解压到任意目录（如 `D:\RustFox`）→ 双击 `fox-desktop.exe`；运行 `create_shortcuts.vbs` 即可创建桌面快捷方式和开始菜单项 |
+| 安装包（推荐） | 下载 `RustFox-<版本>-setup.exe` → 双击运行 → 按提示完成安装 → 桌面出现 **RustFox** 快捷方式，开始菜单出现「RustFox」程序组 |
 
 > 首次运行如弹出「Windows 已保护你的电脑」（SmartScreen），点击「更多信息」→「仍要运行」即可。这是因为安装包尚未购买代码签名证书，属正常现象。
 
 ### 1.2 macOS
 
-1. 下载 `RustFox-<版本>-macos-<架构>.zip`（Apple Silicon 选 `aarch64`，Intel 选 `x86_64`）
-2. 解压后把 **RustFox.app** 拖入「应用程序」文件夹
+1. 下载 `RustFox-<版本>-<架构>.dmg`（Apple Silicon 选 `aarch64`，Intel 选 `x64`）
+2. 挂载后把 **RustFox.app** 拖入「应用程序」文件夹
 3. 首次打开：右键 RustFox.app →「打开」，或「系统设置 → 隐私与安全性 → 仍要打开」——因未做 Apple 签名公证，属正常提示
 
 之后可从「启动台」或「应用程序」双击启动，也可固定到 Dock。
 
 ### 1.3 Linux
 
-1. 下载 `RustFox-<版本>-linux-<架构>.tar.gz` 并解压
-2. 运行安装脚本（生成桌面入口/应用菜单项）：
+1. 下载 `rustfox-<版本>-amd64.deb`（Debian/Ubuntu）或 `.AppImage` 直接运行
+2. Debian 系安装：`sudo apt install ./rustfox-<版本>-amd64.deb`
 
-   ```
-   ./install_linux.sh          # 用户级，仅当前用户可见
-   sudo ./install_linux.sh --system   # 系统级，所有用户可见
-   ```
-
-3. 在应用菜单中搜索 **RustFox** 启动；也可直接运行 `fox-desktop`
-
-> Linux 运行依赖系统的 WebKit/GTK 库（webkit2gtk-4.1、gtk-3）。主流发行版应用商店中安装任一浏览器相关库即可满足；启动报 `libwebkit2gtk` 缺失时，按发行版安装对应软件包。
+> Linux 运行依赖系统的 WebKit/GTK 库（webkit2gtk-4.1、gtk-3）。启动报 `libwebkit2gtk` 缺失时，按发行版安装对应软件包。
 
 ### 1.4 首次启动
 

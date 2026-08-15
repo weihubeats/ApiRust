@@ -12,7 +12,7 @@ use fox_core::model::{AuthSpec, OAuth2Token};
 use tokio::sync::{mpsc, watch, Mutex as AsyncMutex};
 use url::Url;
 
-use crate::{cache, CALLBACK_HOST, CALLBACK_PORT, REFRESH_AHEAD};
+use crate::{cache, CALLBACK_PORT, REFRESH_AHEAD};
 
 /// OAuth2 流程错误（全部为面向用户的中文消息）。
 #[derive(Debug, thiserror::Error)]
@@ -182,12 +182,46 @@ async fn exchange_refresh(
     parse_token_payload(&text).map_err(OAuth2Error::Refresh)
 }
 
+/// 从 redirect_uri 推导回调监听地址与路径（host 必须是本机回环地址，
+/// 端口/路径可自定义以避开占用——如代理软件常占 9090）。
+fn redirect_binding(redirect_uri: &str) -> Result<(String, u16, String), OAuth2Error> {
+    let u = Url::parse(redirect_uri)
+        .map_err(|e| OAuth2Error::Config(format!("redirect_uri 无效：{e}")))?;
+    match u.host_str() {
+        Some("127.0.0.1" | "localhost") => {}
+        _ => {
+            return Err(OAuth2Error::Config(
+                "redirect_uri 必须指向本机回环地址（127.0.0.1 或 localhost）".to_string(),
+            ))
+        }
+    }
+    let port = u.port().unwrap_or(crate::CALLBACK_PORT);
+    let path = if u.path().is_empty() {
+        "/callback".to_string()
+    } else {
+        u.path().to_string()
+    };
+    Ok(("127.0.0.1".to_string(), port, path))
+}
+
 /// 授权码流完整流程：
-/// 1. 本地回调服务器监听 127.0.0.1:9090；
+/// 1. 本地回调服务器监听 redirect_uri 端口（默认 127.0.0.1:9090）；
 /// 2. 打开系统浏览器跳转授权页（response_type=code + state）；
 /// 3. 收到回调 code（校验 state）后向 token_url 换取令牌；
 /// 4. 令牌写入缓存并返回（由调用方写回 AuthSpec 持久化）。
 pub async fn authorize(auth: &AuthSpec) -> Result<OAuth2Token, OAuth2Error> {
+    authorize_inner(auth, |url| {
+        webbrowser::open(url).map_err(|e| format!("打开系统浏览器失败：{e}"))
+    })
+    .await
+}
+
+/// authorize 的可测试实现：浏览器打开动作由 `open` 回调注入
+/// （生产走 webbrowser；测试可改为将授权 URL 交给外部模拟浏览器）。
+async fn authorize_inner(
+    auth: &AuthSpec,
+    open: impl Fn(&str) -> Result<(), String>,
+) -> Result<OAuth2Token, OAuth2Error> {
     let fields = oauth2_fields(auth)?;
     if fields.auth_url.trim().is_empty() {
         return Err(OAuth2Error::Config("auth_url 未配置".to_string()));
@@ -213,13 +247,14 @@ pub async fn authorize(auth: &AuthSpec) -> Result<OAuth2Token, OAuth2Error> {
         }
     }
 
-    // 2. 回调服务器。上一次授权会话可能尚未完全退出，短暂重试绑定。
-    let listener = bind_callback_listener().await?;
+    // 2. 回调服务器（端口/路径来自 redirect_uri）。上一次授权会话可能尚未完全退出，短暂重试绑定。
+    let (cb_host, cb_port, cb_path) = redirect_binding(&fields.redirect_uri)?;
+    let listener = bind_callback_listener(&cb_host, cb_port).await?;
     let (code_tx, mut code_rx) = mpsc::unbounded_channel::<Result<String, String>>();
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let shutdown_tx_handler = shutdown_tx.clone();
     let app = Router::new().route(
-        "/callback",
+        &cb_path,
         get(move |Query(params): Query<HashMap<String, String>>| {
             let code_tx = code_tx.clone();
             let shutdown_tx = shutdown_tx_handler.clone();
@@ -265,10 +300,10 @@ pub async fn authorize(auth: &AuthSpec) -> Result<OAuth2Token, OAuth2Error> {
             .await
     });
 
-    // 3. 打开浏览器。
-    if let Err(e) = webbrowser::open(auth_url.as_str()) {
+    // 3. 打开浏览器（测试注入：把 auth_url 交给模拟浏览器）。
+    if let Err(e) = open(auth_url.as_str()) {
         server.abort();
-        return Err(OAuth2Error::Callback(format!("打开系统浏览器失败：{e}")));
+        return Err(OAuth2Error::Callback(e));
     }
 
     // 4. 等待回调（限时）。
@@ -310,8 +345,11 @@ pub async fn authorize(auth: &AuthSpec) -> Result<OAuth2Token, OAuth2Error> {
 }
 
 /// 绑定回调监听端口；会话切换可能残留占用，重试至多 ~2 秒。
-async fn bind_callback_listener() -> Result<tokio::net::TcpListener, OAuth2Error> {
-    let addr = format!("{CALLBACK_HOST}:{CALLBACK_PORT}");
+async fn bind_callback_listener(
+    host: &str,
+    port: u16,
+) -> Result<tokio::net::TcpListener, OAuth2Error> {
+    let addr = format!("{host}:{port}");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         match tokio::net::TcpListener::bind(&addr).await {
@@ -320,13 +358,15 @@ async fn bind_callback_listener() -> Result<tokio::net::TcpListener, OAuth2Error
                 tokio::time::sleep(Duration::from_millis(120)).await;
                 if e.kind() != std::io::ErrorKind::AddrInUse {
                     return Err(OAuth2Error::Callback(format!(
-                        "回调端口 {CALLBACK_PORT} 绑定失败：{e}"
+                        "回调端口 {port} 绑定失败：{e}"
                     )));
                 }
             }
             Err(e) => {
                 return Err(OAuth2Error::Callback(format!(
-                    "回调端口 {CALLBACK_PORT} 被占用：{e}（请关闭占用 {CALLBACK_PORT} 端口的程序）"
+                    "回调端口 {port} 被占用：{e}。请关闭占用该端口的程序（代理软件如 \
+                     ClashX/小火箭常占用 9090），或在认证配置中把「回调地址」改为 \
+                     其他端口，如 http://127.0.0.1:9091/callback"
                 )));
             }
         }
@@ -554,5 +594,235 @@ mod tests {
         let err = block_on(access_token_for(&auth)).unwrap_err();
         assert!(err.to_string().contains("refresh_token"), "{err}");
         crate::cache::reset_cache();
+    }
+
+    // ---- 端到端：本地模拟 IdP + 真实回调端口 9090 ----
+
+    /// e2e 测试串行锁：共享 9090 回调端口与全局缓存，不能并行。
+    static E2E_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn e2e_lock() -> &'static Mutex<()> {
+        E2E_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    /// 本地模拟授权服务器：/authorize 302 到回调、/token 按 grant_type 发令牌，
+    /// 并把收到的请求记录到共享日志供断言。
+    async fn mock_idp(
+        log: Arc<Mutex<Vec<(String, String)>>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use axum::extract::Form;
+        use axum::http::{header, StatusCode, Uri};
+        use axum::response::IntoResponse;
+        use axum::routing::post;
+        use axum::Json;
+
+        let log_auth = log.clone();
+        let log_token = log.clone();
+        let app = Router::new()
+            .route(
+                "/authorize",
+                get(move |Query(q): Query<HashMap<String, String>>| {
+                    let log = log_auth.clone();
+                    async move {
+                        log.lock()
+                            .unwrap()
+                            .push(("authorize".into(), format!("{q:?}")));
+                        let mut loc = q
+                            .get("redirect_uri")
+                            .cloned()
+                            .unwrap_or_else(|| crate::DEFAULT_REDIRECT_URI.to_string());
+                        loc.push_str("?code=mock-code-1");
+                        if let Some(s) = q.get("state") {
+                            loc.push_str(&format!("&state={s}"));
+                        }
+                        (
+                            StatusCode::FOUND,
+                            [(header::LOCATION, Uri::try_from(loc).unwrap().to_string())],
+                            (),
+                        )
+                            .into_response()
+                    }
+                }),
+            )
+            .route(
+                "/token",
+                post(move |Form(f): Form<HashMap<String, String>>| {
+                    let log = log_token.clone();
+                    async move {
+                        let grant = f.get("grant_type").cloned().unwrap_or_default();
+                        log.lock().unwrap().push((
+                            "token".into(),
+                            format!(
+                                "grant_type={grant} code={:?} client_id={:?}",
+                                f.get("code"),
+                                f.get("client_id")
+                            ),
+                        ));
+                        let access = if grant == "refresh_token" {
+                            "at-refresh-1"
+                        } else {
+                            "at-code-1"
+                        };
+                        Json(serde_json::json!({
+                            "access_token": access,
+                            "token_type": "Bearer",
+                            "refresh_token": "rt-1",
+                            "expires_in": 3600,
+                        }))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), handle)
+    }
+
+    /// 挑选可用回调地址：9090 被占用（如代理软件）时退回自定义端口 9091，
+    /// 同时覆盖「自定义 redirect_uri」功能路径。
+    async fn pick_redirect_uri() -> String {
+        if tokio::net::TcpListener::bind("127.0.0.1:9090")
+            .await
+            .is_ok()
+        {
+            crate::DEFAULT_REDIRECT_URI.to_string()
+        } else {
+            eprintln!("注意：127.0.0.1:9090 被占用，e2e 改用 127.0.0.1:9091 验证自定义回调地址");
+            "http://127.0.0.1:9091/custom-cb".to_string()
+        }
+    }
+
+    /// 授权码流端到端：模拟浏览器访问 auth_url → 302 → 本地回调 → 换 token。
+    #[test]
+    fn e2e_authorization_code_flow() {
+        let _e2e = e2e_lock().lock().unwrap();
+        let _cache = crate::cache::test_lock().lock().unwrap();
+        crate::cache::reset_cache();
+        block_on(async {
+            let redirect_uri = pick_redirect_uri().await;
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let (idp_url, _idp) = mock_idp(log.clone()).await;
+
+            let mut auth = spec_auth("c-e2e", &format!("{idp_url}/token"));
+            if let AuthSpec::OAuth2 {
+                auth_url,
+                redirect_uri: ru,
+                ..
+            } = &mut auth
+            {
+                *auth_url = format!("{idp_url}/authorize");
+                *ru = redirect_uri.clone();
+            }
+
+            let (url_tx, url_rx) = std::sync::mpsc::channel();
+            let auth2 = auth.clone();
+            let task = tokio::spawn(async move {
+                let tx = url_tx;
+                authorize_inner(&auth2, move |url| {
+                    let _ = tx.send(url.to_string());
+                    Ok(())
+                })
+                .await
+            });
+
+            // 模拟浏览器：跟随 mock IdP 的 302 直到本地回调服务器。
+            let auth_url = url_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("授权流程应把 auth_url 交给浏览器");
+            let resp = reqwest::get(&auth_url).await.unwrap();
+            assert!(resp.status().is_success(), "回调应返回成功页");
+
+            let token = task.await.unwrap().expect("授权流程应成功");
+            assert_eq!(token.access_token, "at-code-1");
+            assert_eq!(token.refresh_token.as_deref(), Some("rt-1"));
+            assert!(!token.is_expired());
+
+            // IdP 收到：authorize(带 response_type/client_id/redirect_uri/state) 与
+            // authorization_code 换 token。
+            let log = log.lock().unwrap();
+            let auth_line = log
+                .iter()
+                .find(|(k, _)| k == "authorize")
+                .map(|(_, v)| v.clone())
+                .unwrap();
+            for expected in [
+                "response_type\": \"code\"",
+                "client_id\": \"c-e2e\"",
+                &format!("redirect_uri\": \"{redirect_uri}\""),
+                "state\": \"",
+                "scope\": \"read\"",
+            ] {
+                assert!(
+                    auth_line.contains(expected),
+                    "authorize 参数缺失 {expected}: {auth_line}"
+                );
+            }
+            let token_line = log
+                .iter()
+                .find(|(k, _)| k == "token")
+                .map(|(_, v)| v.clone())
+                .unwrap();
+            assert!(
+                token_line.contains("grant_type=authorization_code"),
+                "{token_line}"
+            );
+            assert!(
+                token_line.contains("code=Some(\"mock-code-1\")"),
+                "{token_line}"
+            );
+            assert!(
+                token_line.contains("client_id=Some(\"c-e2e\")"),
+                "{token_line}"
+            );
+            // 令牌应已入缓存，后续 access_token_for 直接命中。
+            assert_eq!(access_token_for(&auth).await.unwrap(), "at-code-1");
+        });
+    }
+
+    /// 刷新流端到端：token 临近过期 → access_token_for 静默刷新。
+    #[test]
+    fn e2e_refresh_token_flow() {
+        let _e2e = e2e_lock().lock().unwrap();
+        let _cache = crate::cache::test_lock().lock().unwrap();
+        crate::cache::reset_cache();
+        block_on(async {
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let (idp_url, _idp) = mock_idp(log.clone()).await;
+
+            let mut auth = spec_auth("c-e2e-r", &format!("{idp_url}/token"));
+            if let AuthSpec::OAuth2 { auth_url, .. } = &mut auth {
+                *auth_url = format!("{idp_url}/authorize");
+            }
+
+            // 种入临近过期的令牌（expires_in=30 < 60s 提前刷新阈值）。
+            crate::cache::store_token(
+                "c-e2e-r",
+                &format!("{idp_url}/token"),
+                OAuth2Token {
+                    access_token: "at-old".into(),
+                    token_type: "Bearer".into(),
+                    refresh_token: Some("rt-1".into()),
+                    expires_at: Utc::now() + Duration::seconds(30),
+                },
+            );
+
+            // 触发静默刷新 → 拿新令牌。
+            let fresh = access_token_for(&auth).await.unwrap();
+            assert_eq!(fresh, "at-refresh-1");
+            let cached =
+                crate::cache::cached_token("c-e2e-r", &format!("{idp_url}/token")).unwrap();
+            assert_eq!(cached.access_token, "at-refresh-1");
+            assert!(
+                cached.expires_at > Utc::now() + Duration::minutes(50),
+                "新令牌应获得 mock 的 1 小时寿命"
+            );
+
+            let log = log.lock().unwrap();
+            assert!(
+                log.iter()
+                    .any(|(k, v)| k == "token" && v.contains("grant_type=refresh_token")),
+                "应发 refresh_token 请求: {log:?}"
+            );
+        });
     }
 }

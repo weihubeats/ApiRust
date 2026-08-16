@@ -26,18 +26,26 @@ const checking = ref(false)
 const downloading = ref(false)
 /** 下载进度（0-1）；null = 未在下载或总量未知。 */
 const progress = ref<number | null>(null)
-/** 检查到的新版本（展示安装按钮）。 */
-const pending = ref<Update | null>(null)
+/** 待安装新版本的展示信息（Update 对象含 JS 私有字段，不能进响应式 ref——
+ *  Vue 的 Proxy 会让私有字段访问抛 "Cannot read private member"，故只存字符串）。 */
+const pendingVersion = ref<string | null>(null)
+const pendingNotes = ref('')
+let pending: Update | null = null
 
 async function checkUpdates(): Promise<void> {
   if (checking.value) return
   checking.value = true
-  pending.value = null
+  pendingVersion.value = null
+  pending?.close()
+  pending = null
   try {
     const update = await check()
     if (update?.available) {
-      pending.value = update
+      pending = update
+      pendingVersion.value = update.version
+      pendingNotes.value = update.body ?? ''
     } else {
+      update?.close()
       toast.info(`当前已是最新版本 v${version}`)
     }
   } catch (err) {
@@ -50,7 +58,7 @@ async function checkUpdates(): Promise<void> {
 }
 
 async function installUpdate(): Promise<void> {
-  const update = pending.value
+  const update = pending
   if (!update || downloading.value) return
   downloading.value = true
   progress.value = null
@@ -70,6 +78,9 @@ async function installUpdate(): Promise<void> {
           break
       }
     })
+    update.close()
+    pending = null
+    pendingVersion.value = null
     toast.success('更新已安装，即将重启')
     setTimeout(() => relaunch(), 800)
   } catch (err) {
@@ -110,11 +121,11 @@ async function installUpdate(): Promise<void> {
         </button>
       </div>
 
-      <div v-if="pending" class="a-update">
+      <div v-if="pendingVersion" class="a-update">
         <div class="a-update-title">
-          发现新版本 <span class="a-update-version">v{{ pending.version }}</span>
+          发现新版本 <span class="a-update-version">v{{ pendingVersion }}</span>
         </div>
-        <p v-if="pending.body" class="a-update-notes">{{ pending.body }}</p>
+        <p v-if="pendingNotes" class="a-update-notes">{{ pendingNotes }}</p>
         <div v-if="downloading" class="a-update-progress">
           <div
             class="a-update-progress-bar"

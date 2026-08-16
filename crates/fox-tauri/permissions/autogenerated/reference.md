@@ -27,6 +27,25 @@ RustFox 核心插件的默认权限：允许前端调用全部 fox 命令
 - `allow-delete-environment`
 - `allow-execute-request`
 - `allow-cancel-request`
+- `allow-list-examples`
+- `allow-save-example`
+- `allow-delete-example`
+- `allow-oauth-authorize`
+- `allow-oauth-access-token`
+- `allow-codegen-render`
+- `allow-list-request-histories`
+- `allow-mock-start`
+- `allow-mock-stop`
+- `allow-mock-status`
+- `allow-backup-export`
+- `allow-backup-restore`
+- `allow-import-document`
+- `allow-export-openapi`
+- `allow-test-endpoint`
+- `allow-load-test`
+- `allow-list-mock-rules`
+- `allow-save-mock-rule`
+- `allow-delete-mock-rule`
 - `allow-get-http-proxy`
 - `allow-set-http-proxy`
 
@@ -451,6 +470,32 @@ Enables the get_endpoint command without any pre-configured scope.
 <td>
 
 Denies the get_endpoint command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-get-http-proxy`
+
+</td>
+<td>
+
+Enables the get_http_proxy command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-get-http-proxy`
+
+</td>
+<td>
+
+Denies the get_http_proxy command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1049,6 +1094,32 @@ Enables the set_active_project command without any pre-configured scope.
 <td>
 
 Denies the set_active_project command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-set-http-proxy`
+
+</td>
+<td>
+
+Enables the set_http_proxy command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-set-http-proxy`
+
+</td>
+<td>
+
+Denies the set_http_proxy command without any pre-configured scope.
 
 </td>
 </tr>

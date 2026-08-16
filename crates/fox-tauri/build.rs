@@ -42,6 +42,8 @@ const COMMANDS: &[&str] = &[
     "list_mock_rules",
     "save_mock_rule",
     "delete_mock_rule",
+    "get_http_proxy",
+    "set_http_proxy",
 ];
 
 fn main() {

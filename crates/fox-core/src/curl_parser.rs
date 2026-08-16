@@ -360,10 +360,7 @@ mod tests {
     /// URL 携带查询参数时原样保留，供前端拆分为查询参数。
     #[test]
     fn parse_url_with_query_kept() {
-        let p = parse_curl(
-            "curl 'https://api.example.com/posts?userId=1&page=2'",
-        )
-        .unwrap();
+        let p = parse_curl("curl 'https://api.example.com/posts?userId=1&page=2'").unwrap();
         assert_eq!(p.url, "https://api.example.com/posts?userId=1&page=2");
     }
 

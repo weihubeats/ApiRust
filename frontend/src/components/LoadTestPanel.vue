@@ -4,18 +4,8 @@
  * - 实时面积图（Chart.js）：x=已耗时(s)，y=累计成功/失败请求数，压测中逐事件刷新；
  * - 3 列 KPI 指标网格：成功率 / 平均耗时 / RPS / P50 / P90 / P99。
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import {
-  Chart as ChartJS,
-  Filler,
-  Legend,
-  LinearScale,
-  LineElement,
-  PointElement,
-  Tooltip,
-} from 'chart.js'
-import { Line } from 'vue-chartjs'
 import type { ChartOptions } from 'chart.js'
 import { useFoxApi } from '../composables/useFoxApi'
 import { useToast } from '../composables/useToast'
@@ -25,7 +15,15 @@ import Icon from './ui/Icon.vue'
 import { formatDuration } from '../utils/format'
 import type { Endpoint, LoadResult } from '../types/foxApi'
 
-ChartJS.register(LinearScale, PointElement, LineElement, Filler, Tooltip, Legend)
+// chart.js 体积较大（约 200KB gz）且仅压测面板使用，懒加载以缩减首屏 bundle
+const Line = defineAsyncComponent(async () => {
+  const [
+    { Chart: ChartJS, Filler, Legend, LinearScale, LineElement, PointElement, Tooltip },
+    { Line },
+  ] = await Promise.all([import('chart.js'), import('vue-chartjs')])
+  ChartJS.register(LinearScale, PointElement, LineElement, Filler, Tooltip, Legend)
+  return Line
+})
 
 const props = defineProps<{
   draft: Endpoint | null

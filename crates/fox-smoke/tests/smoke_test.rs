@@ -258,15 +258,19 @@ fn split_imported_url(url: &str) -> (String, Vec<KeyValue>) {
         None => path_part,
     };
     let path = path.split('/').collect::<Vec<_>>().join("/");
-    let path = if path.starts_with('/') { path } else { format!("/{path}") };
+    let path = if path.starts_with('/') {
+        path
+    } else {
+        format!("/{path}")
+    };
     (path, params)
 }
 
 #[tokio::test]
 async fn curl_import_roundtrip_keeps_url_headers_body() {
+    use chrono::Utc;
     use fox_core::curl_parser::parse_curl;
     use fox_core::model::{BodySpec, Endpoint};
-    use chrono::Utc;
     use uuid::Uuid;
 
     let db = setup_pool().await;
@@ -279,7 +283,10 @@ async fn curl_import_roundtrip_keeps_url_headers_body() {
         -H 'Content-Type: application/json' -d '{\"title\":\"测试标题\",\"userId\":1}'";
     let parsed = parse_curl(cmd).expect("解析用户命令");
     assert_eq!(parsed.method, HttpMethod::POST);
-    assert_eq!(parsed.url, "https://jsonplaceholder.typicode.com/posts?userId=1");
+    assert_eq!(
+        parsed.url,
+        "https://jsonplaceholder.typicode.com/posts?userId=1"
+    );
     assert_eq!(parsed.headers.len(), 1);
     assert_eq!(parsed.headers[0].key, "Content-Type");
 
@@ -332,8 +339,13 @@ async fn curl_import_roundtrip_keeps_url_headers_body() {
     // 复现 bug 报告：编辑后再次保存（同 id upsert）不应报主键冲突。
     let mut updated = endpoint.clone();
     updated.path = "/posts/1".into();
-    updated.request.headers.push(KeyValue::new("X-Custom".to_string(), "v2".to_string()));
-    repo::save_endpoint(&db, &updated).await.expect("同 id 重复保存应成功（upsert）");
+    updated
+        .request
+        .headers
+        .push(KeyValue::new("X-Custom".to_string(), "v2".to_string()));
+    repo::save_endpoint(&db, &updated)
+        .await
+        .expect("同 id 重复保存应成功（upsert）");
     let relisted = repo::list_endpoints(&db, project.id).await.unwrap();
     assert_eq!(relisted.len(), 1, "upsert 不应产生新行");
     assert_eq!(relisted[0].path, "/posts/1", "upsert 应更新路径");

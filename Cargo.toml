@@ -26,7 +26,6 @@ serde_yaml = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
-anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["full"] }
@@ -35,7 +34,6 @@ futures = "0.3"
 async-trait = "0.1"
 regex = "1"
 url = "2"
-mime = "0.3"
 bytes = "1"
 indexmap = { version = "2", features = ["serde"] }
 dirs = "5"
@@ -69,4 +67,19 @@ openapiv3 = "2.0"
 jsonpath-rust = "0.5"
 fake = "2.9"
 rand = "0.8"
-rfd = "0.14"
+
+serde_urlencoded = "0.7"
+rquickjs = "0.12"
+tokio-tungstenite = { version = "0.30", default-features = false, features = [
+    "connect",
+    "handshake",
+    "url",
+    "rustls-tls-webpki-roots",
+] }
+shell-words = "1.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+opt-level = "s"

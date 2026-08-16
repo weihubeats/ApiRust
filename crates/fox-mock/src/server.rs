@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
@@ -100,24 +100,26 @@ impl MockDefinition {
 }
 
 /// Mock 定义存储（可随时整体替换）。
+///
+/// 读多写少：请求路径走读锁借用匹配，避免每次请求克隆整个定义列表。
 #[derive(Clone, Default)]
 pub struct MockStore {
-    defs: Arc<Mutex<Vec<MockDefinition>>>,
+    defs: Arc<RwLock<Vec<MockDefinition>>>,
 }
 
 impl MockStore {
     pub fn new() -> Self {
         MockStore {
-            defs: Arc::new(Mutex::new(Vec::new())),
+            defs: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
     pub fn set_definitions(&self, defs: Vec<MockDefinition>) {
-        *self.defs.lock().unwrap() = defs;
+        *self.defs.write().unwrap() = defs;
     }
 
-    fn all(&self) -> Vec<MockDefinition> {
-        self.defs.lock().unwrap().clone()
+    fn with_defs<R>(&self, f: impl FnOnce(&[MockDefinition]) -> R) -> R {
+        f(&self.defs.read().unwrap())
     }
 }
 
@@ -296,8 +298,7 @@ async fn mock_handler(
     let headers = req.headers().clone();
     let started = Instant::now();
 
-    let defs = store.all();
-    let hit = resolve(&defs, method.as_str(), &path, &query, &headers);
+    let hit = store.with_defs(|defs| resolve(defs, method.as_str(), &path, &query, &headers));
 
     let Some((def, params)) = hit else {
         tracing::info!("[mock] {} {} → 404 未匹配", method, path);

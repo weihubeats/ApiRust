@@ -18,15 +18,10 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
-base64 = "0.22"
-serde_urlencoded = "0.7"
+base64 = { workspace = true }
+serde_urlencoded = { workspace = true }
 bytes = { workspace = true }
 url = { workspace = true }
 sqlx = { workspace = true }
-rquickjs = "0.12"
-tokio-tungstenite = { version = "0.30", default-features = false, features = [
-    "connect",
-    "handshake",
-    "url",
-    "rustls-tls-webpki-roots",
-] }
+rquickjs = { workspace = true }
+tokio-tungstenite = { workspace = true }

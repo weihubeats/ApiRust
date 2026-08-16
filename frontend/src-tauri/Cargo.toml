@@ -16,3 +16,10 @@ tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 fox-tauri = { path = "../../crates/fox-tauri" }
+
+# 最终产物尺寸优先：LTO + 符号剥离（与仓库根 workspace 的 release 配置保持一致）
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+opt-level = "s"

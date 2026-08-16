@@ -373,7 +373,9 @@ async fn save_project_repeated_id_updates_not_conflicts() {
 async fn save_environment_repeated_id_updates_not_conflicts() {
     let db = pool().await;
     let project = repo::create_project(&db, "P", "").await.unwrap();
-    let created = repo::create_environment(&db, project.id, "开发", &HashMap::new()).await.unwrap();
+    let created = repo::create_environment(&db, project.id, "开发", &HashMap::new())
+        .await
+        .unwrap();
     let mut edited = created.clone();
     edited.name = "生产".into();
     edited.updated_at = chrono::Utc::now();

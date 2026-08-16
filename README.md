@@ -78,15 +78,24 @@ Rust LTO 优化 + 单一进程模型 + SQLite 零拷贝本地存储——秒开�
 
 ## 下载与安装
 
-在 [Releases](https://github.com/your-org/rustfox/releases) 下载对应平台安装包：
+在 [Releases](https://github.com/weihubeats/RustFox/releases) 下载对应平台安装包：
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows | `RustFox-*-setup.exe`（NSIS 安装包） |
-| macOS | `RustFox-*-macos-*.dmg`（Apple Silicon / Intel 双架构） |
-| Linux | `.deb` / `.AppImage` / `.tar.gz` |
+| Windows | `RustFox_*-x64-setup.exe`（NSIS 安装包，SmartScreen 提示时选「更多信息 → 仍要运行」） |
+| macOS | `RustFox_*-aarch64.dmg`（Apple Silicon）/ `RustFox_*-x64.dmg`（Intel） |
+| Linux | `.deb` / `.rpm` / `.AppImage` |
 
-> macOS 首次打开如提示「未受信任开发者」，右键 →「打开」即可（开源应用未做签名公证属正常现象）。
+> **macOS 首次打开提示「已损坏，无法打开」？** 应用本身没有损坏——这是 Gatekeeper
+> 对未做 Apple 签名公证应用的拦截。把应用拖入「应用程序」后，在终端执行一次：
+>
+> ```bash
+> xattr -cr /Applications/RustFox.app
+> ```
+>
+> 然后右键 →「打开」即可。详见[使用手册](docs/USER_GUIDE.md#12-macos)。
+
+安装后可在应用内「关于 → Check for Updates」检查并一键升级新版本（v0.0.3 起支持自动更新）。
 
 ## 从源码构建（开发者）
 

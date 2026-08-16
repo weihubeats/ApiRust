@@ -23,6 +23,8 @@ fox-openapi = { path = "../fox-openapi" }
 fox-test = { path = "../fox-test" }
 
 tauri = "2"
+# 仅用于启动失败的阻塞式原生错误弹窗（无窗口阶段也能显示）
+rfd = "0.15"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

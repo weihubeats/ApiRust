@@ -70,10 +70,25 @@ pub mod plugin {
             .setup(
                 |app: &tauri::AppHandle, _api: tauri::plugin::PluginApi<tauri::Wry, ()>| {
                     // 初始化数据库（建目录 + 迁移）。阻塞主线程代价低（本地 SQLite）。
-                    let db = tauri::async_runtime::block_on(fox_storage::db::init_db(
+                    let db = match tauri::async_runtime::block_on(fox_storage::db::init_db(
                         &fox_storage::db::database_path(),
-                    ))
-                    .map_err(CommandError::from)?;
+                    )) {
+                        Ok(db) => db,
+                        Err(e) => {
+                            // 无提示退出对用户表现为「闪退」：先弹原生错误框给出原因与数据目录
+                            let msg = format!(
+                                "数据库初始化失败，应用无法启动。\n\n原因：{}\n\n数据目录：{}",
+                                e.user_message(),
+                                fox_storage::db::data_dir().display()
+                            );
+                            rfd::MessageDialog::new()
+                                .set_level(rfd::MessageLevel::Error)
+                                .set_title("RustFox 启动失败")
+                                .set_description(&msg)
+                                .show();
+                            return Err(CommandError::from(e).into());
+                        }
+                    };
                     // 恢复持久化的代理设置（失败静默保持直连）
                     tauri::async_runtime::block_on(commands::settings::apply_saved_proxy(&db));
                     app.manage(AppState::new(db));

@@ -7,11 +7,18 @@ use sqlx::SqlitePool;
 
 use fox_core::{AppError, Result};
 
-/// {SystemDataDir}/RustFox
+/// {SystemDataDir}/RustFox（开发构建用 RustFox-dev，与正式版数据隔离：
+/// 避免 tauri dev 跑过更新的迁移后，旧正式版打开同一数据库因迁移版本
+/// 校验失败而启动即退出）
 pub fn data_dir() -> PathBuf {
+    let sub = if cfg!(debug_assertions) {
+        "RustFox-dev"
+    } else {
+        "RustFox"
+    };
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("RustFox")
+        .join(sub)
 }
 
 /// 日志目录 {SystemDataDir}/RustFox/logs

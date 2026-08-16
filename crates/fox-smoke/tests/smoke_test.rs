@@ -109,7 +109,7 @@ async fn full_user_flow() {
         created_at: Utc::now(),
     };
     repo::save_request_history(&db, &history).await.unwrap();
-    let rows = repo::list_request_histories(&db, project.id, 10)
+    let rows = repo::list_request_histories(&db, project.id, None, 10)
         .await
         .unwrap();
     assert_eq!(rows.len(), 1, "历史应已保存");

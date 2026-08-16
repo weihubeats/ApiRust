@@ -49,20 +49,24 @@ pub async fn save_request_history(db: &SqlitePool, model: &RequestHistory) -> Re
     Ok(())
 }
 
+/// 查询项目请求历史（时间倒序）；`endpoint_id` 为 Some 时仅返回该接口的记录。
 pub async fn list_request_histories(
     db: &SqlitePool,
     project_id: Uuid,
+    endpoint_id: Option<Uuid>,
     limit: i64,
 ) -> Result<Vec<RequestHistory>> {
     let rows: Vec<HistoryRow> = sqlx::query_as(
         "SELECT id, project_id, endpoint_id, method, url, status, duration_ms,
                 request_summary_json, response_summary_json, created_at
          FROM request_histories
-         WHERE project_id = ?
+         WHERE project_id = ? AND (? IS NULL OR endpoint_id = ?)
          ORDER BY created_at DESC
          LIMIT ?",
     )
     .bind(project_id.to_string())
+    .bind(endpoint_id.map(|id| id.to_string()))
+    .bind(endpoint_id.map(|id| id.to_string()))
     .bind(limit)
     .fetch_all(db)
     .await?;

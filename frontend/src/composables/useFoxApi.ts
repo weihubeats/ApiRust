@@ -218,8 +218,10 @@ export function useFoxApi() {
   }) => run(() => call<string>('codegen_render', { args }))
 
   // ---------- 请求历史 ----------
-  const listRequestHistories = (projectId: string, limit?: number) =>
-    run(() => call<RequestHistory[]>('list_request_histories', { projectId, limit }))
+  const listRequestHistories = (projectId: string, limit?: number, endpointId?: string | null) =>
+    run(() =>
+      call<RequestHistory[]>('list_request_histories', { projectId, endpointId, limit }),
+    )
 
   // ---------- Mock 服务 ----------
   const mockStart = () => run(() => call<string>('mock_start'))

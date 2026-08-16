@@ -299,15 +299,21 @@ async function removeExample(ex: ResponseExample): Promise<void> {
 
 // ---------- 请求历史 ----------
 const histories = ref<RequestHistory[]>([])
+/** 「仅当前接口」过滤开关：on 时按正在编辑的接口 id 过滤。 */
+const historyOnlyCurrent = ref(false)
 
 async function loadHistory(): Promise<void> {
   if (!store.project) return
   try {
-    histories.value = (await api.listRequestHistories(store.project.id, 30)) ?? []
+    const endpointId = historyOnlyCurrent.value ? draft.value?.id ?? null : null
+    histories.value =
+      (await api.listRequestHistories(store.project.id, 30, endpointId)) ?? []
   } catch {
     // 历史查询失败不打扰编辑流程
   }
 }
+
+watch(historyOnlyCurrent, () => loadHistory())
 
 function historySummary(h: RequestHistory): { status: number; size: number } | null {
   try {
@@ -483,7 +489,13 @@ onUnmounted(() => {
     </div>
 
     <div v-if="histories.length" class="editor-section">
-      <h3 class="section-title">请求历史 (最近 {{ histories.length }})</h3>
+      <h3 class="section-title">
+        请求历史 (最近 {{ histories.length }})
+        <label class="history-filter" title="只显示当前正在编辑接口的请求记录">
+          <input v-model="historyOnlyCurrent" type="checkbox" />
+          仅当前接口
+        </label>
+      </h3>
       <div v-for="h in histories" :key="h.id" class="history-row">
         <span class="history-method" :class="`m-select-${h.method.toLowerCase()}`">{{ h.method }}</span>
         <span class="history-url" :title="h.url">{{ h.url }}</span>
@@ -815,6 +827,18 @@ onUnmounted(() => {
 
 .oauth-status.ok {
   color: var(--rf-success);
+}
+
+.history-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 10px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-3);
+  cursor: pointer;
+  user-select: none;
 }
 
 .history-row {

@@ -10,7 +10,7 @@
 
 ```bash
 cd frontend
-npm run tauri signer generate -w ~/.tauri/rustfox-updater.key
+npm run tauri -- signer generate -w ~/.tauri/rustfox-updater.key
 ```
 
 - 私钥：`~/.tauri/rustfox-updater.key`（**丢失后已发布用户将无法静默升级，务必备份**）

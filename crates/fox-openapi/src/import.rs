@@ -118,7 +118,7 @@ pub(crate) fn parse_value(text: &str) -> Result<serde_json::Value, AppError> {
     let trimmed = text.trim_start();
     match serde_json::from_str::<serde_json::Value>(trimmed) {
         Ok(v) => Ok(v),
-        Err(_) => serde_yaml::from_str::<serde_json::Value>(text).map_err(|e| {
+        Err(_) => serde_norway::from_str::<serde_json::Value>(text).map_err(|e| {
             AppError::Validation(format!("文档解析失败，请检查是否为合法的 JSON/YAML：{e}"))
         }),
     }
@@ -165,7 +165,7 @@ pub fn parse_openapi(text: &str) -> Result<OpenAPI, AppError> {
     let json_result = serde_json::from_str::<OpenAPI>(trimmed);
     let spec = match json_result {
         Ok(spec) => spec,
-        Err(_) => serde_yaml::from_str::<OpenAPI>(text).map_err(|e| {
+        Err(_) => serde_norway::from_str::<OpenAPI>(text).map_err(|e| {
             AppError::Validation(format!(
                 "OpenAPI 文件解析失败，请检查是否为合法的 JSON/YAML：{e}"
             ))

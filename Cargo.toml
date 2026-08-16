@@ -22,13 +22,23 @@ rust-version = "1.79"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+# serde_yaml 已停止维护，serde_norway 是其 API 兼容的社区接续分支
+serde_norway = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tokio = { version = "1", features = ["full"] }
+# 按实际用量裁剪特性（rt/macros/net/time/io-util/fs/sync），避免 full 拖慢编译
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "time",
+    "io-util",
+    "fs",
+    "sync",
+] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures = "0.3"
 async-trait = "0.1"

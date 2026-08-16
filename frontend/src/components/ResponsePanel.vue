@@ -5,7 +5,7 @@
  * - 工具栏：Body/Headers/Cookies 标签 + 格式化/原始/预览 分段切换（右） + 保存为示例 / 复制响应（最右）；
  * - 主体：JSON → 可折叠树形查看器（行号 + VS Code 深色语法着色）；文本 → 行号代码视图；HTML → 沙箱预览。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useToast } from '../composables/useToast'
 import { formatBytes, formatDuration } from '../utils/format'
 import Icon from './ui/Icon.vue'
@@ -67,8 +67,21 @@ const sizeText = computed(() => formatBytes(props.response.size_bytes))
 const headerRows = computed(() => props.response.headers.map(([k, v]) => ({ k, v })))
 
 // ---------- 正文解析 ----------
+// 大响应保护：超过阈值跳过 JSON 解析与树形渲染（全量 parse/渲染会冻结 UI），
+// 回退为按行文本视图；行渲染按块渐进加载（每次追加 LINE_CHUNK 行）。
+const PARSE_LIMIT_BYTES = 1_000_000
+const LINE_CHUNK = 1000
+const visibleLines = ref(LINE_CHUNK)
+watch(
+  () => props.response,
+  () => {
+    visibleLines.value = LINE_CHUNK
+  },
+)
+
 const parsed = computed<unknown | null>(() => {
   if (!props.response.body.trim()) return null
+  if (props.response.body.length > PARSE_LIMIT_BYTES) return null
   try {
     return JSON.parse(props.response.body)
   } catch {
@@ -87,6 +100,14 @@ const isHtml = computed(() => props.response.content_type.toLowerCase().includes
 
 const prettyLines = computed(() => pretty.value.split('\n'))
 const rawLines = computed(() => props.response.body.split('\n'))
+const shownPrettyLines = computed(() => prettyLines.value.slice(0, visibleLines.value))
+const shownRawLines = computed(() => rawLines.value.slice(0, visibleLines.value))
+const hasMorePretty = computed(() => prettyLines.value.length > visibleLines.value)
+const hasMoreRaw = computed(() => rawLines.value.length > visibleLines.value)
+const bodyTooLarge = computed(() => props.response.body.length > PARSE_LIMIT_BYTES)
+function showMoreLines(): void {
+  visibleLines.value += LINE_CHUNK
+}
 
 // ---------- Cookies（由 set-cookie 响应头解析） ----------
 interface Cookie {
@@ -199,19 +220,33 @@ const MODE_OPTIONS: SegmentOption[] = [
     </div>
 
     <div v-if="activeTab === 'body'" class="rp-scroll">
+      <p v-if="bodyTooLarge" class="rp-note">
+        响应超过 1 MB，已按原始文本显示（跳过 JSON 解析与树形渲染以保证流畅）
+      </p>
       <p v-if="!response.body.trim()" class="rp-empty">响应正文为空</p>
       <JsonTree v-else-if="viewMode === 'pretty' && isJson" :data="parsed" />
       <div v-else-if="viewMode === 'pretty'" class="rp-lines">
-        <div v-for="(ln, i) in prettyLines" :key="i" class="rp-line">
+        <div v-for="(ln, i) in shownPrettyLines" :key="i" class="rp-line">
           <span class="rp-line-gutter">{{ i + 1 }}</span>
           <span class="rp-line-text">{{ ln }}</span>
         </div>
+        <button
+          v-if="hasMorePretty"
+          class="rp-more"
+          type="button"
+          @click="showMoreLines"
+        >
+          显示更多（{{ visibleLines }} / {{ prettyLines.length }} 行）
+        </button>
       </div>
       <div v-else-if="viewMode === 'raw'" class="rp-lines">
-        <div v-for="(ln, i) in rawLines" :key="i" class="rp-line">
+        <div v-for="(ln, i) in shownRawLines" :key="i" class="rp-line">
           <span class="rp-line-gutter">{{ i + 1 }}</span>
           <span class="rp-line-text">{{ ln }}</span>
         </div>
+        <button v-if="hasMoreRaw" class="rp-more" type="button" @click="showMoreLines">
+          显示更多（{{ visibleLines }} / {{ rawLines.length }} 行）
+        </button>
       </div>
       <iframe
         v-else-if="isHtml"
@@ -221,10 +256,13 @@ const MODE_OPTIONS: SegmentOption[] = [
         title="响应预览"
       ></iframe>
       <div v-else class="rp-lines">
-        <div v-for="(ln, i) in rawLines" :key="i" class="rp-line">
+        <div v-for="(ln, i) in shownRawLines" :key="i" class="rp-line">
           <span class="rp-line-gutter">{{ i + 1 }}</span>
           <span class="rp-line-text">{{ ln }}</span>
         </div>
+        <button v-if="hasMoreRaw" class="rp-more" type="button" @click="showMoreLines">
+          显示更多（{{ visibleLines }} / {{ rawLines.length }} 行）
+        </button>
       </div>
     </div>
 
@@ -431,6 +469,29 @@ const MODE_OPTIONS: SegmentOption[] = [
   padding: 14px 16px;
   font-size: 12px;
   color: var(--text-3);
+}
+
+.rp-note {
+  margin: 0;
+  padding: 6px 12px 0;
+  font-size: 11.5px;
+  color: var(--warning);
+}
+
+.rp-more {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-top: 1px dashed var(--border);
+  background: none;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.rp-more:hover {
+  opacity: 0.8;
 }
 
 /* ---- Headers ---- */

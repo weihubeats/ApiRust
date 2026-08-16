@@ -112,6 +112,7 @@ pub async fn execute_request(
         };
 
         // 6. 写入请求历史（尽力而为：失败仅告警，不阻断发送）。
+        //    后台任务执行，磁盘写入慢时不拖慢响应返回的感知耗时。
         if let Some(project_id) = args.project_id {
             let history = build_history(
                 project_id,
@@ -120,9 +121,12 @@ pub async fn execute_request(
                 &args.url,
                 &response,
             );
-            if let Err(e) = repo::save_request_history(&state.db, &history).await {
-                eprintln!("[execute_request] 保存历史失败：{}", e.user_message());
-            }
+            let db = state.db.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = repo::save_request_history(&db, &history).await {
+                    eprintln!("[execute_request] 保存历史失败：{}", e.user_message());
+                }
+            });
         }
 
         Ok(response)

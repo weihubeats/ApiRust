@@ -307,19 +307,34 @@ async fn apply_auth(
 /// `Client` 内部维护连接池与 TLS 会话缓存，按请求新建会重复建连、
 /// 重新握手，性能低下；`OnceLock` 保证进程内只构建一次，
 /// 所有（含并发）请求安全复用同一实例。
-fn shared_client() -> Result<&'static Client, AppError> {
-    static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
-    let entry = CLIENT.get_or_init(|| {
-        Client::builder()
-            // 禁用系统代理：本地开发（127.0.0.1 / localhost）不受代理干扰。
-            .no_proxy()
-            .build()
-            .map_err(|e| e.to_string())
-    });
+///
+/// 重定向策略是 Client 级配置，故按 `RequestSpec::follow_redirects`
+/// 维护两个共享实例（跟随 = 默认最多 10 跳；不跟随 = `Policy::none`）。
+fn shared_client(follow_redirects: bool) -> Result<&'static Client, AppError> {
+    static FOLLOW: OnceLock<Result<Client, String>> = OnceLock::new();
+    static NO_FOLLOW: OnceLock<Result<Client, String>> = OnceLock::new();
+    let entry = if follow_redirects {
+        FOLLOW.get_or_init(build_client)
+    } else {
+        NO_FOLLOW.get_or_init(|| {
+            Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|e| e.to_string())
+        })
+    };
     match entry {
         Ok(client) => Ok(client),
         Err(e) => Err(AppError::Validation(format!("HTTP 客户端初始化失败：{e}"))),
     }
+}
+
+fn build_client() -> Result<Client, String> {
+    Client::builder()
+        // 禁用系统代理：本地开发（127.0.0.1 / localhost）不受代理干扰。
+        .no_proxy()
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 /// 发送 HTTP 请求。
@@ -361,7 +376,7 @@ async fn send_request_inner(
     cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<HttpResponseData, AppError> {
     let timeout_ms = timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
-    let client = shared_client()?;
+    let client = shared_client(spec.follow_redirects)?;
 
     let mut url = Url::parse(url).map_err(|e| AppError::Validation(format!("URL 无效：{e}")))?;
 
@@ -388,13 +403,14 @@ async fn send_request_inner(
         }
         req = req.header(k, v);
     }
-    if let Payload::Bytes(body, content_type) = &payload {
-        if let Some(ct) = content_type {
+    // payload 之后不再使用，按值解构直接 move body，避免整包克隆
+    if let Payload::Bytes(body, content_type) = payload {
+        if let Some(ct) = &content_type {
             if !has_header(&headers, "content-type") {
                 req = req.header("content-type", ct.as_str());
             }
         }
-        req = req.body(body.clone());
+        req = req.body(body);
     }
 
     let start = std::time::Instant::now();

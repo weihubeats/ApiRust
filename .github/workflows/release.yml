@@ -76,6 +76,16 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      - name: Rename macOS updater artifacts (arch suffix)
+        if: startsWith(matrix.name, 'macos')
+        shell: bash
+        run: |
+          # arm/intel 两个构建的更新产物同名（RustFox.app.tar.gz），必须加架构后缀防覆盖
+          ARCH="${{ matrix.name == 'macos-arm' && 'aarch64' || 'x64' }}"
+          MAC_DIR="frontend/src-tauri/target/release/bundle/macos"
+          mv "$MAC_DIR/RustFox.app.tar.gz" "$MAC_DIR/RustFox_${GITHUB_REF_NAME#v}_$ARCH.app.tar.gz"
+          mv "$MAC_DIR/RustFox.app.tar.gz.sig" "$MAC_DIR/RustFox_${GITHUB_REF_NAME#v}_$ARCH.app.tar.gz.sig"
+
       - name: Upload artifacts (job)
         uses: actions/upload-artifact@v4
         with:
@@ -116,15 +126,16 @@ jobs:
 
           sig_of() { cat "artifacts/$1.sig" 2>/dev/null | tr -d '\n' || true; }
 
-          # 各平台 updater 产物（名称模式由 tauri bundle 生成规则决定）
-          MAC_ARM_PKG="$(cd artifacts && ls bundle/macos/*_aarch64.app.tar.gz 2>/dev/null | head -1 || true)"
-          MAC_INTEL_PKG="$(cd artifacts && ls bundle/macos/*_x64.app.tar.gz 2>/dev/null | grep -v aarch64 | head -1 || true)"
-          LINUX_PKG="$(cd artifacts && ls bundle/appimage/*_amd64.AppImage 2>/dev/null | head -1 || true)"
-          WIN_PKG="$(cd artifacts && ls bundle/nsis/*_x64-setup.exe 2>/dev/null | head -1 || true)"
+          # 各平台 updater 产物（download-artifact 已剥掉 bundle/ 前缀）
+          MAC_ARM_PKG="$(cd artifacts && ls macos/*_aarch64.app.tar.gz 2>/dev/null | head -1 || true)"
+          MAC_INTEL_PKG="$(cd artifacts && ls macos/*_x64.app.tar.gz 2>/dev/null | head -1 || true)"
+          LINUX_PKG="$(cd artifacts && ls appimage/*_amd64.AppImage 2>/dev/null | head -1 || true)"
+          WIN_PKG="$(cd artifacts && ls nsis/*_x64-setup.exe 2>/dev/null | head -1 || true)"
           echo "mac-arm=$MAC_ARM_PKG mac-intel=$MAC_INTEL_PKG linux=$LINUX_PKG win=$WIN_PKG"
 
           python3 - "$VERSION" "$BASE" "$MAC_ARM_PKG" "$MAC_INTEL_PKG" "$LINUX_PKG" "$WIN_PKG" <<'EOF'
           import json, pathlib, sys
+          from datetime import datetime, timezone
           version, base, mac_arm, mac_intel, linux, win = sys.argv[1:7]
 
           def entry(rel):
@@ -145,8 +156,7 @@ jobs:
           manifest = {
               "version": version,
               "notes": "详见 Release Notes",
-              "pub_date": __import__("datetime").datetime.now(datetime.timezone.utc)
-                  .isoformat().replace("+00:00", "Z"),
+              "pub_date": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
               "platforms": {k: v for k, v in platforms.items() if v},
           }
           if not manifest["platforms"]:

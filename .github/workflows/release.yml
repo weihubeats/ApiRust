@@ -190,6 +190,7 @@ jobs:
 
             - **Windows**: `RustFox_x.x.x_x64-setup.exe`（NSIS 安装包）或 `RustFox_x.x.x_x64_en-US.msi`
             - **macOS**: `RustFox_x.x.x_aarch64.dmg`（Apple Silicon）或 `RustFox_x.x.x_x64.dmg`（Intel）
+              ——首次打开若提示「已损坏」，执行 `xattr -cr /Applications/RustFox.app` 解除隔离（未做 Apple 公证的正常现象，详见使用手册）
             - **Linux**: `rustfox_x.x.x_amd64.deb` 与 `.AppImage`
 
             使用手册：[docs/USER_GUIDE.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/USER_GUIDE.md)

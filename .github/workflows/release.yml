@@ -71,6 +71,10 @@ jobs:
       - name: Build Tauri bundle
         shell: bash
         run: scripts/package-tauri.sh
+        env:
+          # updater 产物签名密钥（tauri signer generate 生成，见 docs/UPDATER.md）
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload artifacts (job)
         uses: actions/upload-artifact@v4
@@ -103,6 +107,54 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release delete "${{ github.ref_name }}" --yes || true
 
+      - name: Generate latest.json (updater manifest)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+
+          sig_of() { cat "artifacts/$1.sig" 2>/dev/null | tr -d '\n' || true; }
+
+          # 各平台 updater 产物（名称模式由 tauri bundle 生成规则决定）
+          MAC_ARM_PKG="$(cd artifacts && ls bundle/macos/*_aarch64.app.tar.gz 2>/dev/null | head -1 || true)"
+          MAC_INTEL_PKG="$(cd artifacts && ls bundle/macos/*_x64.app.tar.gz 2>/dev/null | grep -v aarch64 | head -1 || true)"
+          LINUX_PKG="$(cd artifacts && ls bundle/appimage/*_amd64.AppImage 2>/dev/null | head -1 || true)"
+          WIN_PKG="$(cd artifacts && ls bundle/nsis/*_x64-setup.exe 2>/dev/null | head -1 || true)"
+          echo "mac-arm=$MAC_ARM_PKG mac-intel=$MAC_INTEL_PKG linux=$LINUX_PKG win=$WIN_PKG"
+
+          python3 - "$VERSION" "$BASE" "$MAC_ARM_PKG" "$MAC_INTEL_PKG" "$LINUX_PKG" "$WIN_PKG" <<'EOF'
+          import json, pathlib, sys
+          version, base, mac_arm, mac_intel, linux, win = sys.argv[1:7]
+
+          def entry(rel):
+              if not rel:
+                  return None
+              rel = pathlib.Path(rel).as_posix()
+              name = rel.split("/")[-1]
+              sig_file = pathlib.Path("artifacts") / (rel + ".sig")
+              sig = sig_file.read_text().strip() if sig_file.exists() else ""
+              return {"url": f"{base}/{name}", "signature": sig}
+
+          platforms = {
+              "darwin-aarch64": entry(mac_arm),
+              "darwin-x86_64": entry(mac_intel),
+              "linux-x86_64": entry(linux),
+              "windows-x86_64": entry(win),
+          }
+          manifest = {
+              "version": version,
+              "notes": "详见 Release Notes",
+              "pub_date": __import__("datetime").datetime.now(datetime.timezone.utc)
+                  .isoformat().replace("+00:00", "Z"),
+              "platforms": {k: v for k, v in platforms.items() if v},
+          }
+          if not manifest["platforms"]:
+              sys.exit("未找到任何 updater 产物（.app.tar.gz / .AppImage / -setup.exe）")
+          pathlib.Path("latest.json").write_text(json.dumps(manifest, indent=2))
+          print(pathlib.Path("latest.json").read_text())
+          EOF
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -116,6 +168,8 @@ jobs:
             - **Linux**: `rustfox_x.x.x_amd64.deb` 与 `.AppImage`
 
             使用手册：[docs/USER_GUIDE.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/USER_GUIDE.md)
-          files: artifacts/**
+          files: |
+            artifacts/**
+            latest.json
           draft: true
           generate_release_notes: true

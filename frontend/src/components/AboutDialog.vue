@@ -2,9 +2,14 @@
 /**
  * AboutDialog：自定义「关于 RustFox」弹窗（替代系统默认 About 面板）。
  * - 品牌 logo（狐狸图标 + 渐变底 + 柔和投影）；
- * - 名称 / 版本 / 副标题 + GitHub / 检查更新链接 + 版权行。
+ * - 名称 / 版本 / 副标题 + GitHub / 检查更新链接 + 版权行；
+ * - 检查更新（tauri-plugin-updater）：发现新版本 → 展示版本号与更新说明 →
+ *   下载（带进度）→ 安装 → 重启（tauri-plugin-process relaunch）。
  * 触发来源：macOS 原生菜单「About RustFox」→ rustfox://about 事件 → App.vue 打开。
  */
+import { relaunch } from '@tauri-apps/plugin-process'
+import { check, type Update } from '@tauri-apps/plugin-updater'
+import { ref } from 'vue'
 import { version } from '../../package.json'
 import { useToast } from '../composables/useToast'
 import Icon from './ui/Icon.vue'
@@ -17,8 +22,63 @@ const toast = useToast()
 
 const GITHUB_URL = 'https://github.com/weihubeats/ApiRust'
 
-function checkUpdates(): void {
-  toast.info(`当前已是最新版本 v${version}`)
+const checking = ref(false)
+const downloading = ref(false)
+/** 下载进度（0-1）；null = 未在下载或总量未知。 */
+const progress = ref<number | null>(null)
+/** 检查到的新版本（展示安装按钮）。 */
+const pending = ref<Update | null>(null)
+
+async function checkUpdates(): Promise<void> {
+  if (checking.value) return
+  checking.value = true
+  pending.value = null
+  try {
+    const update = await check()
+    if (update?.available) {
+      pending.value = update
+    } else {
+      toast.info(`当前已是最新版本 v${version}`)
+    }
+  } catch (err) {
+    toast.error('检查更新失败', {
+      message: err instanceof Error ? err.message : String(err),
+    })
+  } finally {
+    checking.value = false
+  }
+}
+
+async function installUpdate(): Promise<void> {
+  const update = pending.value
+  if (!update || downloading.value) return
+  downloading.value = true
+  progress.value = null
+  try {
+    let total = 0
+    await update.downloadAndInstall((event) => {
+      switch (event.event) {
+        case 'Started':
+          total = event.data.contentLength ?? 0
+          progress.value = total > 0 ? 0 : null
+          break
+        case 'Progress':
+          progress.value = total > 0 ? Math.min(event.data.chunkLength / total, 1) : null
+          break
+        case 'Finished':
+          progress.value = 1
+          break
+      }
+    })
+    toast.success('更新已安装，即将重启')
+    setTimeout(() => relaunch(), 800)
+  } catch (err) {
+    toast.error('下载更新失败', {
+      message: err instanceof Error ? err.message : String(err),
+    })
+  } finally {
+    downloading.value = false
+  }
 }
 </script>
 
@@ -45,8 +105,33 @@ function checkUpdates(): void {
           <Icon name="globe" :size="12" /> GitHub Repository
         </a>
         <span class="a-dot" aria-hidden="true"></span>
-        <button class="a-link" type="button" @click="checkUpdates">
-          <Icon name="refresh" :size="12" /> Check for Updates
+        <button class="a-link" type="button" :disabled="checking" @click="checkUpdates">
+          <Icon name="refresh" :size="12" /> {{ checking ? '检查中…' : 'Check for Updates' }}
+        </button>
+      </div>
+
+      <div v-if="pending" class="a-update">
+        <div class="a-update-title">
+          发现新版本 <span class="a-update-version">v{{ pending.version }}</span>
+        </div>
+        <p v-if="pending.body" class="a-update-notes">{{ pending.body }}</p>
+        <div v-if="downloading" class="a-update-progress">
+          <div
+            class="a-update-progress-bar"
+            :style="{ width: progress == null ? '100%' : `${Math.round(progress * 100)}%` }"
+            :class="{ indeterminate: progress == null }"
+          ></div>
+        </div>
+        <span v-if="downloading" class="a-update-status">
+          {{ progress == null ? '下载中…' : `${Math.round(progress * 100)}%` }}
+        </span>
+        <button
+          v-else
+          class="a-update-btn"
+          type="button"
+          @click="installUpdate"
+        >
+          下载并安装
         </button>
       </div>
 
@@ -147,5 +232,89 @@ function checkUpdates(): void {
   margin-top: 6px;
   font-size: 11px;
   color: var(--text-3);
+}
+
+.a-update {
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 10px;
+  background: var(--bg-2, rgba(127, 127, 127, 0.08));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.a-update-title {
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+.a-update-version {
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+
+.a-update-notes {
+  max-height: 96px;
+  overflow-y: auto;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  text-align: left;
+}
+
+.a-update-progress {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-3, rgba(127, 127, 127, 0.2));
+  overflow: hidden;
+}
+
+.a-update-progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.a-update-progress-bar.indeterminate {
+  animation: a-update-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes a-update-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.a-update-status {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.a-update-btn {
+  padding: 5px 16px;
+  border: none;
+  border-radius: 7px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+}
+
+.a-update-btn:hover {
+  background: var(--accent-hover, var(--accent));
 }
 </style>

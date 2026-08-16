@@ -27,6 +27,8 @@ RustFox 核心插件的默认权限：允许前端调用全部 fox 命令
 - `allow-delete-environment`
 - `allow-execute-request`
 - `allow-cancel-request`
+- `allow-get-http-proxy`
+- `allow-set-http-proxy`
 
 ## Permission Table
 

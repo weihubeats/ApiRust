@@ -28,4 +28,6 @@ permissions = [
     "allow-delete-environment",
     "allow-execute-request",
     "allow-cancel-request",
+    "allow-get-http-proxy",
+    "allow-set-http-proxy",
 ]

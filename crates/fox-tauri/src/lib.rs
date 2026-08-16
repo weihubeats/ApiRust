@@ -74,6 +74,8 @@ pub mod plugin {
                         &fox_storage::db::database_path(),
                     ))
                     .map_err(CommandError::from)?;
+                    // 恢复持久化的代理设置（失败静默保持直连）
+                    tauri::async_runtime::block_on(commands::settings::apply_saved_proxy(&db));
                     app.manage(AppState::new(db));
                     Ok(())
                 },
@@ -119,6 +121,8 @@ pub mod plugin {
                 commands::list_mock_rules,
                 commands::save_mock_rule,
                 commands::delete_mock_rule,
+                commands::get_http_proxy,
+                commands::set_http_proxy,
             ])
             .build()
     }

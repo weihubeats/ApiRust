@@ -237,6 +237,12 @@ export function useFoxApi() {
   const deleteMockRule = (ruleId: string) =>
     run(() => call<void>('delete_mock_rule', { ruleId }))
 
+  // ---------- HTTP 设置（全局代理） ----------
+  const getHttpProxy = () => run(() => call<string | null>('get_http_proxy'))
+
+  const setHttpProxy = (proxy: string | null) =>
+    run(() => call<void>('set_http_proxy', { proxy }))
+
   // ---------- 备份/恢复 ----------
   const backupExport = (projectId: string) =>
     run(() => call<string>('backup_export', { projectId }))
@@ -302,6 +308,8 @@ export function useFoxApi() {
     listMockRules,
     saveMockRule,
     deleteMockRule,
+    getHttpProxy,
+    setHttpProxy,
     backupExport,
     backupRestore,
     importDocument,

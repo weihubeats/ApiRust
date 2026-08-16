@@ -27,7 +27,28 @@ onMounted(async () => {
   } catch {
     project.value = null
   }
+  try {
+    proxyUrl.value = (await api.getHttpProxy()) ?? ''
+  } catch {
+    proxyUrl.value = ''
+  }
 })
+
+// ---------- HTTP 代理 ----------
+const proxyUrl = ref('')
+const proxyBusy = ref(false)
+
+async function saveProxy(): Promise<void> {
+  proxyBusy.value = true
+  try {
+    await api.setHttpProxy(proxyUrl.value.trim() || null)
+    toast.success(proxyUrl.value.trim() ? `代理已设置：${proxyUrl.value.trim()}` : '已切换为直连')
+  } catch (err) {
+    toast.error('代理设置失败', { message: err instanceof Error ? err.message : String(err) })
+  } finally {
+    proxyBusy.value = false
+  }
+}
 
 // ---------- 备份与恢复 ----------
 async function exportBackup(): Promise<void> {
@@ -103,6 +124,26 @@ async function onImportFile(event: Event): Promise<void> {
       </section>
 
       <section class="settings-section">
+        <h2 class="rf-subheading">网络代理</h2>
+        <p class="rf-hint">
+          全局 HTTP 代理，应用于所有请求（如 <code>http://127.0.0.1:7890</code>、
+          <code>socks5://host:1080</code>）；留空表示直连。
+        </p>
+        <div class="settings-proxy">
+          <input
+            v-model="proxyUrl"
+            class="settings-proxy-input"
+            type="text"
+            placeholder="http://127.0.0.1:7890（留空 = 直连）"
+            spellcheck="false"
+          />
+          <button class="rf-btn" type="button" :disabled="proxyBusy" @click="saveProxy">
+            {{ proxyBusy ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </section>
+
+      <section class="settings-section">
         <h2 class="rf-subheading">环境管理</h2>
         <p class="rf-hint">
           创建 / 编辑 / 删除环境变量，变量经 <code>&#123;&#123;变量&#125;&#125;</code>
@@ -158,5 +199,22 @@ async function onImportFile(event: Event): Promise<void> {
 
 .settings-file {
   display: none;
+}
+
+.settings-proxy {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.settings-proxy-input {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--bg-2, transparent);
+  color: var(--text-1);
 }
 </style>

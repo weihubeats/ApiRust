@@ -13,6 +13,7 @@ pub mod mock_rule;
 pub mod oauth;
 pub mod project;
 pub mod request;
+pub mod settings;
 
 pub use backup::*;
 pub use codegen::*;
@@ -29,3 +30,4 @@ pub use mock_rule::*;
 pub use oauth::*;
 pub use project::*;
 pub use request::*;
+pub use settings::*;

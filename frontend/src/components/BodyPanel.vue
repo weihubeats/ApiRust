@@ -31,30 +31,31 @@ const MULTIPART_TYPE_OPTIONS = [
 
 /** Body 模式切换：整体替换为对应形状的默认对象（避免残留多余字段）。 */
 function setBodyMode(mode: string): void {
-  if (!props.draft) return
+  const req = props.draft?.request
+  if (!req) return
   const prev = bodyAny.value
   switch (mode) {
     case 'none':
-      props.draft.request.body = { mode: 'none' }
+      req.body = { mode: 'none' }
       break
     case 'json':
     case 'text':
-      props.draft.request.body = { mode, raw: prev?.raw ?? '' }
+      req.body = { mode, raw: prev?.raw ?? '' }
       break
     case 'graphql':
-      props.draft.request.body = {
+      req.body = {
         mode: 'graphql',
         spec: { query: prev?.spec?.query ?? '', variables: prev?.spec?.variables ?? '{}', operation_name: prev?.spec?.operation_name ?? '' },
       }
       break
     case 'urlencoded':
-      props.draft.request.body = { mode: 'urlencoded', fields: prev?.fields ?? [] }
+      req.body = { mode: 'urlencoded', fields: prev?.fields ?? [] }
       break
     case 'multipart':
-      props.draft.request.body = { mode: 'multipart', fields: prev?.fields ?? [] }
+      req.body = { mode: 'multipart', fields: prev?.fields ?? [] }
       break
     default:
-      props.draft.request.body = { mode: 'none' }
+      req.body = { mode: 'none' }
   }
 }
 

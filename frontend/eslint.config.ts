@@ -22,9 +22,6 @@ export default tseslint.config(
     files: ['**/*.{ts,vue}'],
     rules: {
       'vue/multi-word-component-names': 'off',
-      // 既有代码大量直接修改 prop（draft 对象），修复需重构数据流，先降级跟踪
-      'vue/no-mutating-props': 'warn',
-      '@typescript-eslint/no-unused-expressions': 'warn',
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-unused-vars': [
         'error',

@@ -118,7 +118,8 @@ const childEndpoints = computed(() =>
 
 function toggleFolder(id: string): void {
   const next = new Set(expanded.value)
-  next.has(id) ? next.delete(id) : next.add(id)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
   expanded.value = next
 }
 

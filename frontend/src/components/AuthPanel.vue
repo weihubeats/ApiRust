@@ -51,7 +51,8 @@ async function oauthAuthorize(): Promise<void> {
   authorizing.value = true
   try {
     const token = await api.oauthAuthorize(authAny.value)
-    props.draft.request.auth = { ...authAny.value, token }
+    const req = props.draft.request
+    req.auth = { ...authAny.value, token }
     toast.success('OAuth2 授权成功，请保存 (⌘S) 持久化')
   } catch (err) {
     toast.error('OAuth2 授权失败', { message: err instanceof Error ? err.message : String(err) })
@@ -61,22 +62,23 @@ async function oauthAuthorize(): Promise<void> {
 }
 
 function setAuthType(type: string): void {
-  if (!props.draft) return
+  const req = props.draft?.request
+  if (!req) return
   switch (type) {
     case 'none':
-      props.draft.request.auth = { type: 'none' }
+      req.auth = { type: 'none' }
       break
     case 'bearer':
-      props.draft.request.auth = { type: 'bearer', token: '' }
+      req.auth = { type: 'bearer', token: '' }
       break
     case 'basic':
-      props.draft.request.auth = { type: 'basic', username: '', password: '' }
+      req.auth = { type: 'basic', username: '', password: '' }
       break
     case 'apikey':
-      props.draft.request.auth = { type: 'apikey', key: '', value: '', in: 'header' }
+      req.auth = { type: 'apikey', key: '', value: '', in: 'header' }
       break
     case 'oauth2':
-      props.draft.request.auth = {
+      req.auth = {
         type: 'oauth2',
         client_id: '',
         client_secret: '',

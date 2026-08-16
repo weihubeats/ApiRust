@@ -13,14 +13,14 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useFoxApi } from '../composables/useFoxApi'
 import { useToast } from '../composables/useToast'
+import { planCrossGroupMove, planSameGroupMove, wouldCreateCycle } from './treeOps'
+import { splitUrl } from '../utils/url'
 import type {
   AuthSpec,
   CurlParsed,
   Endpoint,
   Environment,
   ExecuteResponse,
-  Folder,
-  KeyValue,
   OAuth2Token,
   Project,
   ResponseExample,
@@ -462,45 +462,30 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const moved = folders.value.find((f) => f.id === folderId)
     if (!moved) return
     // 防环：不允许把文件夹移入自身或其子孙（避免 parent_id 成环）
-    if (newParentId !== null) {
-      let cursor: string | null = newParentId
-      while (cursor !== null) {
-        if (cursor === folderId) return
-        cursor = folders.value.find((f) => f.id === cursor)?.parent_id ?? null
-      }
-    }
-    const changed = new Set<string>()
-    const mark = (f: Folder): void => {
-      changed.add(f.id)
-    }
-    const renumber = (list: Folder[], insertedIndex: number, skipId: string): void => {
-      list
-        .filter((f) => f.id !== skipId)
-        .forEach((f, i) => {
-          const order = i < insertedIndex ? i : i + 1
-          if (f.sort_order !== order) {
-            mark(f)
-            f.sort_order = order
-          }
-        })
-    }
+    if (wouldCreateCycle(folders.value, folderId, newParentId)) return
+    let changed: Map<string, number>
     if (moved.parent_id === newParentId) {
-      const group = folders.value.filter((f) => f.parent_id === newParentId)
-      renumber(group, Math.min(targetIndex, group.length - 1), folderId)
-      moved.sort_order = Math.min(targetIndex, group.length - 1)
-      changed.add(folderId)
+      changed = planSameGroupMove(
+        folders.value.filter((f) => f.parent_id === newParentId),
+        folderId,
+        targetIndex,
+      )
     } else {
-      renumber(folders.value.filter((f) => f.parent_id === moved.parent_id), 0, folderId)
+      changed = planCrossGroupMove(
+        folders.value.filter((f) => f.parent_id === moved.parent_id),
+        folders.value.filter((f) => f.parent_id === newParentId),
+        folderId,
+        targetIndex,
+      )
       moved.parent_id = newParentId
-      const group = folders.value.filter((f) => f.parent_id === newParentId)
-      renumber(group, Math.min(targetIndex, group.length), folderId)
-      moved.sort_order = Math.min(targetIndex, group.length)
-      changed.add(folderId)
     }
+    if (changed.has(folderId)) moved.sort_order = changed.get(folderId)!
     await Promise.all(
-      [...changed].map((id) => {
+      [...changed.keys()].map((id) => {
         const f = folders.value.find((x) => x.id === id)
-        return f ? api.saveFolder({ ...f }) : Promise.resolve()
+        if (!f) return Promise.resolve()
+        if (id === folderId) return api.saveFolder({ ...f })
+        return api.saveFolder({ ...f, sort_order: changed.get(id)! })
       }),
     )
     await refresh()
@@ -510,35 +495,29 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   async function moveEndpoint(endpointId: string, newFolderId: string | null, targetIndex: number): Promise<void> {
     const moved = endpoints.value.find((e) => e.id === endpointId)
     if (!moved) return
-    const changed = new Set<string>()
-    const renumber = (list: Endpoint[], insertedIndex: number, skipId: string): void => {
-      list
-        .filter((e) => e.id !== skipId)
-        .forEach((e, i) => {
-          const order = i < insertedIndex ? i : i + 1
-          if (e.sort_order !== order) {
-            changed.add(e.id)
-            e.sort_order = order
-          }
-        })
-    }
+    let changed: Map<string, number>
     if (moved.folder_id === newFolderId) {
-      const group = endpoints.value.filter((e) => e.folder_id === newFolderId)
-      renumber(group, Math.min(targetIndex, group.length - 1), endpointId)
-      moved.sort_order = Math.min(targetIndex, group.length - 1)
-      changed.add(endpointId)
+      changed = planSameGroupMove(
+        endpoints.value.filter((e) => e.folder_id === newFolderId),
+        endpointId,
+        targetIndex,
+      )
     } else {
-      renumber(endpoints.value.filter((e) => e.folder_id === moved.folder_id), 0, endpointId)
+      changed = planCrossGroupMove(
+        endpoints.value.filter((e) => e.folder_id === moved.folder_id),
+        endpoints.value.filter((e) => e.folder_id === newFolderId),
+        endpointId,
+        targetIndex,
+      )
       moved.folder_id = newFolderId
-      const group = endpoints.value.filter((e) => e.folder_id === newFolderId)
-      renumber(group, Math.min(targetIndex, group.length), endpointId)
-      moved.sort_order = Math.min(targetIndex, group.length)
-      changed.add(endpointId)
     }
+    if (changed.has(endpointId)) moved.sort_order = changed.get(endpointId)!
     await Promise.all(
-      [...changed].map((id) => {
+      [...changed.keys()].map((id) => {
         const e = endpoints.value.find((x) => x.id === id)
-        return e ? api.saveEndpoint({ ...e }) : Promise.resolve()
+        if (!e) return Promise.resolve()
+        if (id === endpointId) return api.saveEndpoint({ ...e })
+        return api.saveEndpoint({ ...e, sort_order: changed.get(id)! })
       }),
     )
     await refresh()
@@ -557,29 +536,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     toast.info('文件夹已删除（含子项）')
   }
 
-  /** 把导入 URL 拆成路径 + 查询参数 + origin；无 scheme 时按 https 补全。 */
-  function splitCurlUrl(url: string): {
-    path: string
-    params: KeyValue[]
-    origin: string
-  } {
-    let target = url.trim()
-    if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(target)) {
-      target = `https://${target}`
-    }
-    const parsed = new URL(target)
-    const params: KeyValue[] = []
-    parsed.searchParams.forEach((value, key) => {
-      params.push({ key, value, enabled: true, description: '' })
-    })
-    let path = parsed.pathname
-    if (!path.startsWith('/')) path = `/${path}`
-    return { path, params, origin: parsed.origin }
-  }
-
   /** cURL 导入：打开为默认标题「未命名接口」的草稿（不落库），保存时生成 id；会话 Base URL 预填为 URL origin。 */
   function openCurlDraft(parsed: CurlParsed, folderId: string | null): void {
-    const { path, params, origin } = splitCurlUrl(parsed.url)
+    const { path, params, origin } = splitUrl(parsed.url)
     const now = new Date().toISOString()
     const blank: Endpoint = {
       id: crypto.randomUUID(),

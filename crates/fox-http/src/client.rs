@@ -170,6 +170,17 @@ async fn build_payload(spec: &RequestSpec) -> Result<Payload, AppError> {
                 Some("application/json".into()),
             ))
         }
+        // 二进制模式：读取文件原始字节作为请求体；Content-Type 默认
+        // octet-stream，用户显式设置的请求头优先（见 send_request_inner）。
+        BodySpec::Binary { path } => {
+            let data = tokio::fs::read(Path::new(path))
+                .await
+                .map_err(|e| AppError::Validation(format!("读取文件 {path} 失败：{e}")))?;
+            Ok(Payload::Bytes(
+                data,
+                Some("application/octet-stream".into()),
+            ))
+        }
     }
 }
 
@@ -1088,6 +1099,47 @@ mod tests {
                     value: "/nonexistent/fox_http_missing.txt".into(),
                     enabled: true,
                 }],
+            },
+            ..Default::default()
+        };
+        let err = build_payload(&spec).await.unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("读取文件"), "意外提示：{msg}"),
+            other => panic!("非 Validation 错误：{other}"),
+        }
+    }
+
+    // ---------- Binary：文件原始字节作为请求体 ----------
+
+    #[tokio::test]
+    async fn binary_payload_reads_file_bytes() {
+        let dir = std::env::temp_dir();
+        let file_path = dir.join("fox_http_binary_test.bin");
+        tokio::fs::write(&file_path, b"\x00\x01raw-bytes\xff")
+            .await
+            .unwrap();
+        let spec = RequestSpec {
+            body: BodySpec::Binary {
+                path: file_path.to_str().unwrap().into(),
+            },
+            ..Default::default()
+        };
+        let payload = build_payload(&spec).await.unwrap();
+        match payload {
+            Payload::Bytes(body, ct) => {
+                assert_eq!(body, b"\x00\x01raw-bytes\xff".to_vec());
+                assert_eq!(ct.as_deref(), Some("application/octet-stream"));
+            }
+            _ => panic!("期望 Binary payload"),
+        }
+        tokio::fs::remove_file(&file_path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn binary_missing_file_reports_error() {
+        let spec = RequestSpec {
+            body: BodySpec::Binary {
+                path: "/nonexistent/fox_http_binary_missing.bin".into(),
             },
             ..Default::default()
         };

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-clear-request-histories"
+description = "Enables the clear_request_histories command without any pre-configured scope."
+commands.allow = ["clear_request_histories"]
+
+[[permission]]
+identifier = "deny-clear-request-histories"
+description = "Denies the clear_request_histories command without any pre-configured scope."
+commands.deny = ["clear_request_histories"]

@@ -9,6 +9,8 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useToast } from '../../composables/useToast'
 import { highlightJSON } from '../../utils/highlight'
+import { compactJson, prettyJson } from '../../utils/jsonFormat'
+import { JsonFormatError } from '../../utils/jsonFormat'
 import CustomSelect from './CustomSelect.vue'
 import Icon from './Icon.vue'
 
@@ -82,21 +84,30 @@ watch(
 )
 
 function format(): void {
-  const t = props.modelValue.trim()
+  // 以 textarea 的实时 DOM 值为权威来源：真实浏览器里 input 事件可能丢失或
+  // 延迟（拖拽写入、自动填充、受控回写竞态），导致 props.modelValue 落后于
+  // 用户实际编辑的内容——此时若按 props 格式化会把编辑器回退成旧数据。
+  const t = (taRef.value?.value ?? props.modelValue).trim()
   if (!t) return
   try {
-    const parsed = JSON.parse(t)
-    const out =
-      formatMode.value === 'compact'
-        ? JSON.stringify(parsed)
-        : JSON.stringify(parsed, null, 2)
+    // 无损格式化：保留重复键、键顺序与数字原文（parse/stringify 往返会丢重复键）。
+    const out = formatMode.value === 'compact' ? compactJson(t) : prettyJson(t)
     if (out !== props.modelValue) {
       emit('update:modelValue', out)
-      void nextTick(() => taRef.value?.focus())
+    } else if (taRef.value && taRef.value.value !== out) {
+      // 模型已一致但 DOM 残留未同步的值：直接纠正 DOM。
+      taRef.value.value = out
     }
     toast.success('已格式化')
-  } catch {
-    toast.error('JSON 无效，无法格式化')
+    void nextTick(() => {
+      // 双保险：emit 回写后强制对齐 DOM（WebKit 偶发不回写受控 value）。
+      if (taRef.value && taRef.value.value !== props.modelValue) {
+        taRef.value.value = props.modelValue
+      }
+      taRef.value?.focus()
+    })
+  } catch (err) {
+    toast.error(err instanceof JsonFormatError ? `JSON 无效：${err.message}` : 'JSON 无效，无法格式化')
   }
 }
 </script>
@@ -127,6 +138,7 @@ function format(): void {
         spellcheck="false"
         :style="{ paddingLeft: `${gutterWidth}px` }"
         @input="onInput"
+        @change="onInput"
         @scroll="syncScroll"
       ></textarea>
 

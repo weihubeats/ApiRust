@@ -99,6 +99,7 @@ pub fn export_markdown(
             }
             BodySpec::None => None,
             BodySpec::Multipart { .. } => None,
+            BodySpec::Binary { .. } => None,
             BodySpec::GraphQL { spec } => {
                 out.push_str("### 请求体（GraphQL）\n\n");
                 out.push_str(&format!("```graphql\n{}\n```\n\n", spec.query));

@@ -21,8 +21,10 @@ import type {
   Endpoint,
   Environment,
   ExecuteResponse,
+  HttpMethod,
   OAuth2Token,
   Project,
+  RequestHistory,
   ResponseExample,
 } from '../types/foxApi'
 
@@ -569,6 +571,97 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activeTabId.value = blank.id
   }
 
+  // ---------- 请求历史（侧栏「请求历史」页签；发送成功后由编辑器触发刷新） ----------
+  const histories = ref<RequestHistory[]>([])
+  /** 「仅当前接口」过滤（HistoryPanel 复选框；变更后需重新 loadHistories）。 */
+  const historyOnlyCurrent = ref(false)
+
+  async function loadHistories(): Promise<void> {
+    if (!project.value) return
+    const endpointId = historyOnlyCurrent.value ? activeEndpoint.value?.id ?? null : null
+    try {
+      histories.value = (await api.listRequestHistories(project.value.id, 50, endpointId)) ?? []
+    } catch {
+      // 历史为辅助数据，加载失败静默（避免干扰主流程）
+    }
+  }
+
+  async function clearHistories(): Promise<void> {
+    if (!project.value) return
+    const endpointId = historyOnlyCurrent.value ? activeEndpoint.value?.id ?? null : null
+    try {
+      const removed = await api.clearRequestHistories(project.value.id, endpointId)
+      histories.value = []
+      toast.success(`已清空 ${removed} 条请求历史`)
+    } catch (err) {
+      toast.error('清空历史失败', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /** 历史摘要（request_summary_json）中可恢复的字段。 */
+  interface HistorySummary {
+    method?: HttpMethod
+    url?: string
+    spec?: Partial<Endpoint['request']>
+  }
+
+  /**
+   * 点击历史记录 → 恢复到主编辑器。
+   * - 归属接口存在：打开其草稿标签页并回填；不存在（临时请求）：新建「未命名接口」草稿；
+   * - 回填 method / path / params / headers / body（摘要值为变量渲染后的实际发送值）；
+   * - 认证保留接口自身配置（摘要入库时后端已置空）；URL origin 预填会话 Base URL。
+   */
+  function restoreFromHistory(h: RequestHistory): void {
+    let summary: HistorySummary = {}
+    try {
+      summary = JSON.parse(h.request_summary_json) as HistorySummary
+    } catch {
+      // 旧版记录只有 method/url，按降级路径恢复
+    }
+    const url = summary.url ?? h.url
+    const { path, params, origin } = splitUrl(url)
+
+    const target = h.endpoint_id ? endpoints.value.find((e) => e.id === h.endpoint_id) : null
+    let id: string
+    if (target) {
+      openEndpoint(target)
+      id = target.id
+    } else {
+      id = crypto.randomUUID()
+      const now = new Date().toISOString()
+      drafts.value.set(id, {
+        id,
+        project_id: project.value?.id ?? '',
+        folder_id: null,
+        name: '未命名接口',
+        method: (summary.method ?? h.method) as HttpMethod,
+        path,
+        description: '',
+        status: 'designing',
+        sort_order: 0,
+        request: defaultRequestSpec(),
+        created_at: now,
+        updated_at: now,
+      })
+      if (!openTabs.value.includes(id)) openTabs.value.push(id)
+      activeTabId.value = id
+    }
+    const draft = drafts.value.get(id)
+    if (!draft) return
+
+    draft.method = (summary.method ?? h.method) as HttpMethod
+    draft.path = path
+    if (origin) sessionBaseUrl.value = origin
+    const spec = summary.spec
+    draft.request.params = spec?.params?.length ? spec.params : params
+    if (spec?.headers) draft.request.headers = spec.headers
+    if (spec?.body) draft.request.body = spec.body
+    if (spec?.path_variables?.length) draft.request.path_variables = spec.path_variables
+    toast.info('已恢复该次请求到编辑器')
+  }
+
   return {
     project,
     folders,
@@ -614,6 +707,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     loadExamples,
     saveAsExample,
     removeExample,
+    histories,
+    historyOnlyCurrent,
+    loadHistories,
+    clearHistories,
+    restoreFromHistory,
   }
 })
 

@@ -3,12 +3,51 @@
 //! 支持 curl / Python (requests) / JavaScript (fetch) / Go (net/http) /
 //! Java (OkHttp) / PHP (cURL)。
 //! URL 传入时即为渲染后的完整地址（含变量与环境替换）。
+//!
+//! # 插件式生成引擎（v2 架构）
+//!
+//! 除传统 `Lang` 枚举 + `render()` 的直调入口外，本 crate 提供强解耦的
+//! 插件式引擎：任意语言生成器实现 [`CodeGenerator`] trait 后向
+//! [`GeneratorRegistry`] 动态注册即可接入，引擎层零硬编码。
+//! 内置生成器：curl / Go (net/http) / Java (OkHttp) / Python (requests)：
+//!
+//! ```
+//! use fox_codegen::{
+//!     ApiBody, ApiDefinition, CurlGenerator, GeneratorRegistry,
+//! };
+//! use fox_core::model::HttpMethod;
+//!
+//! let registry = GeneratorRegistry::new();
+//! registry.register(CurlGenerator).unwrap();
+//!
+//! let api = ApiDefinition::new("https://api.example.com/users", HttpMethod::POST)
+//!     .body(ApiBody::Json { raw: "{\"name\":\"fox\"}".into() });
+//!
+//! let code = registry.generate("curl", &api).unwrap();
+//! assert!(code.contains("curl -X POST"));
+//! ```
+
+mod engine;
+mod error;
+mod generators;
+mod json_types;
+mod model;
+mod registry;
+mod util;
+
+pub use engine::{CodeGenerator, LanguageInfo};
+pub use error::CodeGenError;
+pub use generators::{CurlGenerator, GoGenerator, JavaGenerator, MockGenerator, PythonGenerator};
+pub use json_types::{json_to_structs, TypeLang};
+pub use model::{ApiBody, ApiDefinition, AuthInfo, KeyValuePair};
+pub use registry::GeneratorRegistry;
 
 use base64::Engine;
 use fox_core::model::{
     ApiKeyLocation, AuthSpec, BodySpec, GraphQLSpec, HttpMethod, KeyValue, MultipartField,
     MultipartValueType,
 };
+use util::{dq, encode_component, sq};
 
 /// 目标语言。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,6 +233,9 @@ fn body_parts(body: &BodySpec) -> (String, Option<&'static str>, Option<&Vec<Mul
         }
         BodySpec::Multipart { fields } => (String::new(), None, Some(fields)),
         BodySpec::GraphQL { spec } => (graphql_json(spec), Some("application/json"), None),
+        // 二进制文件无法内联为代码字符串：curl 走 --data-binary 特判，
+        // 其余语言生成 octet-stream 头 + 空 body（文件读取由用户补充）。
+        BodySpec::Binary { .. } => (String::new(), Some("application/octet-stream"), None),
     }
 }
 
@@ -241,43 +283,6 @@ fn merge_headers<'a>(headers: &'a [KeyValue], auth: &'a AuthSpec) -> Vec<(String
     merged
 }
 
-/// RFC 3986 表单编码（Component 规则）。
-fn encode_component(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    const HEX: &[u8] = b"0123456789ABCDEF";
-    for b in s.as_bytes() {
-        if b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_' || *b == b'.' || *b == b'~' {
-            out.push(*b as char);
-        } else {
-            out.push('%');
-            out.push(HEX[(b >> 4) as usize] as char);
-            out.push(HEX[(b & 0xF) as usize] as char);
-        }
-    }
-    out
-}
-
-/// 转义单引号（sh / JS）。
-fn sq(s: &str) -> String {
-    s.replace('\'', "'\\''")
-}
-
-/// 转义双引号字符串常量里的内容。
-fn dq(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 /// 转义 PHP 单引号字符串常量里的内容（单引号串仅 `\'` 与 `\\` 是转义，
 /// 其余反斜杠保持字面量，因此 `$` / `\n` 不会被插值或转义）。
 fn pq(s: &str) -> String {
@@ -302,6 +307,17 @@ fn render_curl(
     let mut out = format!("curl -X {method} '{url}'", url = sq(url));
     for (k, v) in headers {
         out.push_str(&format!(" \\\n     -H '{}: {}'", sq(k), sq(v)));
+    }
+    // 二进制文件：--data-binary @path 按原始字节上传。
+    if let BodySpec::Binary { path } = spec {
+        if !headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        {
+            out.push_str(" \\\n     -H 'Content-Type: application/octet-stream'");
+        }
+        out.push_str(&format!(" \\\n     --data-binary '@{}'", sq(path)));
+        return out;
     }
     if let Some(fields) = multipart {
         for f in fields
@@ -876,6 +892,24 @@ mod tests {
         let code = render(Lang::Java, &req);
         assert!(code.contains("RequestBody body = null;"));
         assert!(code.contains(".method(\"GET\", body)"));
+    }
+
+    #[test]
+    fn curl_binary_uses_data_binary() {
+        let method = HttpMethod::POST;
+        let body = BodySpec::Binary {
+            path: "/tmp/a.png".into(),
+        };
+        let req = GenRequest {
+            method: &method,
+            url: "https://api.example.com/u",
+            headers: &[],
+            body: &body,
+            auth: &AuthSpec::None,
+        };
+        let code = render(Lang::Curl, &req);
+        assert!(code.contains("--data-binary '@/tmp/a.png'"));
+        assert!(code.contains("Content-Type: application/octet-stream"));
     }
 
     #[test]

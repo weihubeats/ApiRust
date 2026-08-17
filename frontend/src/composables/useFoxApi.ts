@@ -215,13 +215,16 @@ export function useFoxApi() {
     headers: KeyValue[]
     body: BodySpec
     auth: AuthSpec
-  }) => run(() => call<string>('codegen_render', { args }))
+  }) => run(() => call<string>('codegen_render', args))
 
   // ---------- 请求历史 ----------
   const listRequestHistories = (projectId: string, limit?: number, endpointId?: string | null) =>
     run(() =>
       call<RequestHistory[]>('list_request_histories', { projectId, endpointId, limit }),
     )
+
+  const clearRequestHistories = (projectId: string, endpointId?: string | null) =>
+    run(() => call<number>('clear_request_histories', { projectId, endpointId }))
 
   // ---------- Mock 服务 ----------
   const mockStart = () => run(() => call<string>('mock_start'))
@@ -304,6 +307,7 @@ export function useFoxApi() {
     oauthAccessToken,
     codegenRender,
     listRequestHistories,
+    clearRequestHistories,
     mockStart,
     mockStop,
     mockStatus,

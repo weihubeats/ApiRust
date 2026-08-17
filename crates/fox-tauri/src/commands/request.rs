@@ -119,6 +119,7 @@ pub async fn execute_request(
                 args.endpoint_id,
                 args.method,
                 &args.url,
+                &spec,
                 &response,
             );
             let db = state.db.clone();
@@ -163,15 +164,24 @@ pub fn cancel_request(state: State<'_, AppState>, request_id: String) -> Command
     }
 }
 
-/// 构建历史记录（字段与 Dioxus 版 `build_history` 对齐）。
+/// 构建历史记录。
+///
+/// `request_summary_json` 在 method/url 之外还存入完整请求规格（变量已渲染），
+/// 作为前端「点击历史恢复到编辑器」的数据源；认证字段统一置空——凭据
+/// 不落历史库，恢复时保留接口自身配置的认证。
 fn build_history(
     project_id: Uuid,
     endpoint_id: Option<Uuid>,
     method: HttpMethod,
     url: &str,
+    spec: &RequestSpec,
     data: &ExecuteResponse,
 ) -> RequestHistory {
     let body_preview: String = data.body.chars().take(2000).collect();
+    let mut spec_value = serde_json::to_value(spec).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = spec_value.as_object_mut() {
+        obj.insert("auth".into(), serde_json::json!({ "type": "none" }));
+    }
     RequestHistory {
         id: Uuid::new_v4(),
         project_id,
@@ -183,6 +193,7 @@ fn build_history(
         request_summary_json: serde_json::json!({
             "method": method.to_string(),
             "url": url,
+            "spec": spec_value,
         })
         .to_string(),
         response_summary_json: serde_json::json!({
@@ -269,6 +280,10 @@ pub(crate) fn render_spec(spec: &RequestSpec, vars: &VariableMap) -> RequestSpec
                     operation_name: fox_core::resolve_variables(&spec.operation_name, vars),
                 },
             },
+            // 文件路径同样支持 {{变量}}（与 multipart 文件字段一致）。
+            BodySpec::Binary { path } => BodySpec::Binary {
+                path: fox_core::resolve_variables(path, vars),
+            },
         },
         timeout_ms: spec.timeout_ms,
         follow_redirects: spec.follow_redirects,
@@ -287,4 +302,56 @@ fn render_kv(items: &[KeyValue], vars: &VariableMap) -> Vec<KeyValue> {
             description: kv.description.clone(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 历史摘要必须包含完整请求规格（前端「恢复到编辑器」的数据源），
+    /// 且认证字段被置空（凭据不落历史库）。
+    #[test]
+    fn history_summary_contains_spec_with_auth_stripped() {
+        let spec = RequestSpec {
+            params: vec![KeyValue::new("page", "1")],
+            headers: vec![KeyValue::new("X-Token", "tok")],
+            path_variables: vec![],
+            auth: AuthSpec::Bearer {
+                token: "secret-token".into(),
+            },
+            body: BodySpec::Json {
+                raw: "{\"a\":1}".into(),
+            },
+            timeout_ms: 30000,
+            follow_redirects: true,
+            tests: None,
+        };
+        let response = ExecuteResponse {
+            status: 200,
+            headers: vec![],
+            body: "{}".into(),
+            content_type: "application/json".into(),
+            duration_ms: 12.5,
+            size_bytes: 2,
+            truncated: false,
+        };
+        let history = build_history(
+            Uuid::new_v4(),
+            Some(Uuid::new_v4()),
+            HttpMethod::POST,
+            "https://api.example.com/users?page=1",
+            &spec,
+            &response,
+        );
+        let summary: serde_json::Value =
+            serde_json::from_str(&history.request_summary_json).unwrap();
+        assert_eq!(summary["method"], "POST");
+        assert_eq!(summary["url"], "https://api.example.com/users?page=1");
+        assert_eq!(summary["spec"]["headers"][0]["key"], "X-Token");
+        assert_eq!(summary["spec"]["body"]["mode"], "json");
+        assert_eq!(summary["spec"]["params"][0]["value"], "1");
+        // 认证凭据不得入库：auth 统一置空
+        assert_eq!(summary["spec"]["auth"]["type"], "none");
+        assert!(summary["spec"]["auth"].get("token").is_none());
+    }
 }

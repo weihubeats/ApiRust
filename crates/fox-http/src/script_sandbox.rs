@@ -357,7 +357,7 @@ fn body_text(spec: &RequestSpec) -> String {
                 .collect();
             serde_urlencoded::to_string(pairs).unwrap_or_default()
         }
-        BodySpec::Multipart { .. } | BodySpec::None => String::new(),
+        BodySpec::Multipart { .. } | BodySpec::None | BodySpec::Binary { .. } => String::new(),
         BodySpec::GraphQL { spec } => {
             crate::client::graphql_request_json(spec, &std::collections::HashMap::new())
                 .unwrap_or_default()

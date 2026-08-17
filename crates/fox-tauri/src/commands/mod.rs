@@ -1,4 +1,5 @@
 pub mod backup;
+pub mod clipboard;
 pub mod codegen;
 pub mod curl;
 pub mod endpoint;
@@ -16,6 +17,7 @@ pub mod request;
 pub mod settings;
 
 pub use backup::*;
+pub use clipboard::*;
 pub use codegen::*;
 pub use curl::*;
 pub use endpoint::*;

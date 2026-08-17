@@ -103,6 +103,7 @@ export type BodySpec =
   | { mode: 'urlencoded'; fields: KeyValue[] }
   | { mode: 'multipart'; fields: MultipartField[] }
   | { mode: 'graphql'; spec: GraphQLSpec }
+  | { mode: 'binary'; path: string }
 
 /** GraphQL 错误位置（Rust `GraphQLErrorLocation`）。 */
 export interface GraphQLErrorLocation {

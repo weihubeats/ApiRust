@@ -12,10 +12,13 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useToast } from '../composables/useToast'
 import { useFoxApi } from '../composables/useFoxApi'
-import { formatDuration } from '../utils/format'
 import { envColorClass, resolveVariables } from '../utils/environment'
+import { PROTOCOLS, protocolFromDomain, stripProtocol, withProtocol } from '../utils/url'
+import type { Protocol } from '../utils/url'
 import AuthPanel from './AuthPanel.vue'
 import BodyPanel from './BodyPanel.vue'
+import CodeExportMenu from './CodeExportMenu.vue'
+import CodeImportDialog from './CodeImportDialog.vue'
 import CodePanel from './CodePanel.vue'
 import EnvironmentManager from './EnvironmentManager.vue'
 import HeadersPanel from './HeadersPanel.vue'
@@ -36,7 +39,6 @@ import type { TabItem } from './ui/Tabs.vue'
 import type {
   ExecuteResponse,
   HttpMethod,
-  RequestHistory,
   ResponseExample,
 } from '../types/foxApi'
 
@@ -49,6 +51,8 @@ const sending = ref(false)
 const activeRequestId = ref<string | null>(null)
 const response = ref<ExecuteResponse | null>(null)
 const sendError = ref<string | null>(null)
+/** 多语言代码导入弹窗（cURL / Java / Python / JS / Go → 接口草稿）。 */
+const showImportDialog = ref(false)
 
 const draft = computed(() => store.activeEndpoint)
 
@@ -140,6 +144,35 @@ const urlTooltip = computed(() => {
   return `会话 Base URL：${resolvedDomain.value}（未使用环境变量）`
 })
 
+/** 协议选择器选项：与 chip 并列显示，如「https://  api-example.com /api/users」。 */
+const PROTOCOL_OPTIONS = PROTOCOLS.map((p) => ({ value: p, label: `${p}://` }))
+
+/** 路径输入框元素引用（快捷按钮聚焦回跳）。 */
+const urlInputEl = ref<HTMLInputElement | null>(null)
+
+/** 协议选择器：从「解析后的」域名源推导当前 scheme，改写时同步环境 base_url 变量或会话 Base URL。 */
+const protocol = computed({
+  get: () => protocolFromDomain(resolvedDomain.value || urlDomain.value),
+  set: (p: Protocol) => {
+    const src = resolvedDomain.value || urlDomain.value
+    if (src.trim().startsWith('{{')) return
+    const next = withProtocol(src, p)
+    if (urlDomain.value.startsWith('{{')) {
+      void store.setEnvironmentBaseUrl(next)
+    } else {
+      store.sessionBaseUrl = next
+    }
+  },
+})
+
+/** chip 展示文案：协议前缀由选择器承担，chip 只显示裸域名。 */
+const domainLabel = computed(() => {
+  const src = resolvedDomain.value
+  if (!src) return ''
+  if (src === urlDomain.value) return src
+  return stripProtocol(src) || src
+})
+
 /** 路径输入框（与 chip 组成完整请求地址）；粘贴完整 URL 时自动拆分。 */
 const urlPath = computed({
   get: () => {
@@ -154,7 +187,7 @@ const urlPath = computed({
     if (!v) return
 
     // 1) 粘贴/改写完整 URL：origin 写入域名源（环境变量优先），query 并入参数。
-    const abs = v.match(/^https?:\/\/[^/]+/)
+    const abs = v.match(/^(?:https?|wss?):\/\/[^/]+/)
     if (abs) {
       let rest = v.slice(abs[0].length) || '/'
       const qIdx = rest.indexOf('?')
@@ -205,7 +238,8 @@ async function send(): Promise<void> {
   activeRequestId.value = rid
   try {
     response.value = await store.send(draft.value, url, rid)
-    loadHistory()
+    // 历史已迁至侧栏「请求历史」页签，发送后由 store 统一刷新。
+    void store.loadHistories()
   } catch (err) {
     const e = err as Error & { code?: string }
     if (e?.code === 'CANCELLED') {
@@ -297,37 +331,34 @@ async function removeExample(ex: ResponseExample): Promise<void> {
   }
 }
 
-// ---------- 请求历史 ----------
-const histories = ref<RequestHistory[]>([])
-/** 「仅当前接口」过滤开关：on 时按正在编辑的接口 id 过滤。 */
-const historyOnlyCurrent = ref(false)
-
-async function loadHistory(): Promise<void> {
-  if (!store.project) return
-  try {
-    const endpointId = historyOnlyCurrent.value ? draft.value?.id ?? null : null
-    histories.value =
-      (await api.listRequestHistories(store.project.id, 30, endpointId)) ?? []
-  } catch {
-    // 历史查询失败不打扰编辑流程
-  }
-}
-
-watch(historyOnlyCurrent, () => loadHistory())
-
-function historySummary(h: RequestHistory): { status: number; size: number } | null {
-  try {
-    const data = JSON.parse(h.response_summary_json) as { status?: number; size_bytes?: number }
-    return data.status != null ? { status: data.status, size: data.size_bytes ?? 0 } : null
-  } catch {
-    return null
-  }
-}
-
 // ---------- 工具抽屉（生成代码 / 测试 / 压测） ----------
 const showTools = ref(false)
 
 const requestUrl = computed(() => (draft.value ? buildUrl() : ''))
+
+/** 路径输入框 Enter → 发送；Esc → 清空路径（setter 忽略空串，直接写草稿）。 */
+function onUrlKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!sending.value) void send()
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    if (draft.value) draft.value.path = ''
+  }
+}
+
+/** 快捷按钮：清空路径。 */
+function clearPath(): void {
+  if (draft.value) draft.value.path = ''
+}
+
+/** 快捷按钮：复制完整请求地址。 */
+async function copyRequestUrl(): Promise<void> {
+  if (!requestUrl.value) return
+  await navigator.clipboard.writeText(requestUrl.value)
+  toast.info('地址已复制')
+}
 
 function onKeydown(event: KeyboardEvent): void {
   if (!(event.metaKey || event.ctrlKey)) return
@@ -357,7 +388,6 @@ watch(
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeydown)
-  loadHistory()
 })
 
 onUnmounted(() => {
@@ -399,6 +429,14 @@ onUnmounted(() => {
           </template>
         </CustomSelect>
         <span class="req-bar-divider"></span>
+        <CustomSelect
+          v-if="urlDomain && !isAbsPath"
+          class="protocol-select"
+          :model-value="protocol"
+          :options="PROTOCOL_OPTIONS"
+          size="sm"
+          @update:model-value="protocol = String($event) as Protocol"
+        />
         <Tooltip v-if="urlDomain && !isAbsPath" :content="urlTooltip" placement="bottom">
           <button
             type="button"
@@ -408,18 +446,40 @@ onUnmounted(() => {
             @click="showEnvManager = true"
           >
             <span v-if="activeEnvName" class="edot" :class="`ed-${envColorClass(activeEnvName)}`"></span>
-            <Icon name="globe" :size="12" class="url-chip-icon" />
-            <span class="url-chip-text">{{ resolvedDomain }}</span>
-            <Icon name="settings" :size="11" class="url-chip-gear" />
+            <Icon name="globe" :size="13" class="url-chip-icon" />
+            <span class="url-chip-text">{{ domainLabel }}</span>
+            <Icon name="chevron-down" :size="12" class="url-chip-chevron" />
           </button>
         </Tooltip>
         <span v-if="urlDomain && !isAbsPath" class="req-bar-divider"></span>
-        <input
-          v-model="urlPath"
-          class="url-input"
-          spellcheck="false"
-          placeholder="路径，如 /api/users；可粘贴完整 URL 自动拆分"
-        />
+        <div class="url-input-wrap">
+          <input
+            ref="urlInputEl"
+            v-model="urlPath"
+            class="url-input"
+            spellcheck="false"
+            placeholder="路径，如 /api/users；可粘贴完整 URL 自动拆分"
+            @keydown="onUrlKeydown"
+          />
+          <template v-if="urlPath">
+            <button
+              type="button"
+              class="url-qbtn url-qbtn-copy"
+              title="复制完整请求地址"
+              @click="copyRequestUrl"
+            >
+              <Icon name="copy" :size="13" />
+            </button>
+            <button
+              type="button"
+              class="url-qbtn url-qbtn-clear"
+              title="清空路径 (Esc)"
+              @click="clearPath"
+            >
+              <Icon name="x" :size="13" />
+            </button>
+          </template>
+        </div>
       </div>
       <div class="editor-actions">
         <button class="rf-btn rf-btn-sm" type="button" title="压测（并发基准）" @click="showTools = true">
@@ -438,8 +498,17 @@ onUnmounted(() => {
         >
           <Icon name="stop" :size="14" /> 取消请求
         </button>
+        <CodeExportMenu :draft="draft" :url="requestUrl" />
         <button class="rf-btn" type="button" @click="save">
           <Icon name="save" :size="14" /> 保存 (⌘S)
+        </button>
+        <button
+          class="rf-btn"
+          type="button"
+          title="从 cURL / Java / Python / JavaScript / Go 代码导入为新接口"
+          @click="showImportDialog = true"
+        >
+          <Icon name="download" :size="14" /> 导入
         </button>
       </div>
     </div>
@@ -487,25 +556,6 @@ onUnmounted(() => {
       </div>
       <pre v-if="viewingExample" class="example-body">{{ prettyBody(viewingExample.body) }}</pre>
     </div>
-
-    <div v-if="histories.length" class="editor-section">
-      <h3 class="section-title">
-        请求历史 (最近 {{ histories.length }})
-        <label class="history-filter" title="只显示当前正在编辑接口的请求记录">
-          <input v-model="historyOnlyCurrent" type="checkbox" />
-          仅当前接口
-        </label>
-      </h3>
-      <div v-for="h in histories" :key="h.id" class="history-row">
-        <span class="history-method" :class="`m-select-${h.method.toLowerCase()}`">{{ h.method }}</span>
-        <span class="history-url" :title="h.url">{{ h.url }}</span>
-        <span v-if="historySummary(h)" class="history-status" :class="{ err: historySummary(h)!.status >= 400 }">
-          {{ historySummary(h)!.status }}
-        </span>
-        <span class="history-meta">{{ formatDuration(h.duration_ms) }}</span>
-        <span class="history-meta">{{ h.created_at.slice(5, 16).replace('T', ' ') }}</span>
-      </div>
-    </div>
   </div>
   <div v-else class="editor-empty">
     <p>从左侧选择接口开始编辑</p>
@@ -546,6 +596,12 @@ onUnmounted(() => {
   <ToolsDrawer :open="showTools" :draft="draft" :url="requestUrl" @close="showTools = false" />
 
   <EnvironmentManager v-model:open="showEnvManager" />
+
+  <CodeImportDialog
+    v-if="showImportDialog"
+    :folder-id="draft?.folder_id ?? null"
+    @close="showImportDialog = false"
+  />
 </template>
 
 <style scoped>
@@ -629,10 +685,10 @@ onUnmounted(() => {
 .url-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 22px;
-  margin: 3px 4px;
-  padding: 0 9px;
+  gap: 7px;
+  height: 28px;
+  margin: 2px 4px;
+  padding: 0 12px;
   border: 1px solid transparent;
   border-radius: 999px;
   font-family: var(--font-mono);
@@ -640,7 +696,7 @@ onUnmounted(() => {
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
-  max-width: 320px;
+  max-width: 360px;
   cursor: pointer;
   transition:
     background var(--dur) var(--ease),
@@ -686,13 +742,28 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.url-chip-gear {
+.url-chip-chevron {
   flex-shrink: 0;
-  opacity: 0.7;
+  opacity: 0.55;
   transition: opacity var(--dur) var(--ease);
 }
-.url-chip:hover .url-chip-gear {
+.url-chip:hover .url-chip-chevron {
   opacity: 1;
+}
+
+/* 协议选择器：与 chip 同视觉层级（无边框透明触发区，宽度固定） */
+.request-bar .protocol-select {
+  flex-shrink: 0;
+  width: 88px;
+}
+.request-bar .protocol-select :deep(.cs-trigger) {
+  height: 100%;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  font-family: var(--font-mono);
+  justify-content: center;
 }
 
 /* 环境色点 */
@@ -719,6 +790,15 @@ onUnmounted(() => {
   background: var(--accent);
 }
 
+.request-bar .url-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
 .request-bar .url-input {
   flex: 1;
   min-width: 0;
@@ -727,8 +807,34 @@ onUnmounted(() => {
   background: transparent;
   box-shadow: none;
   border-radius: 0;
-  padding: 0 10px;
+  padding: 0 62px 0 10px;
   font-family: var(--font-mono);
+}
+
+/* 地址栏快捷按钮：悬停输入框时浮现（手动 drop-shadow 模拟浅分隔） */
+.url-qbtn {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.url-qbtn-copy {
+  right: 32px;
+}
+.url-qbtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
 }
 
 /* ---- 面包屑行（接口名称移至此处） ---- */
@@ -827,56 +933,6 @@ onUnmounted(() => {
 
 .oauth-status.ok {
   color: var(--rf-success);
-}
-
-.history-filter {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: 10px;
-  font-size: 11px;
-  font-weight: 400;
-  color: var(--text-3);
-  cursor: pointer;
-  user-select: none;
-}
-
-.history-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  padding: 3px 0;
-  border-bottom: 1px dashed var(--rf-border);
-}
-
-.history-method {
-  width: 52px;
-  flex-shrink: 0;
-  font-weight: 700;
-}
-
-.history-url {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--rf-text-secondary);
-  font-family: var(--font-mono);
-}
-
-.history-status {
-  color: var(--rf-success);
-  font-weight: 600;
-}
-
-.history-status.err {
-  color: var(--rf-danger);
-}
-
-.history-meta {
-  color: var(--rf-text-muted);
-  flex-shrink: 0;
 }
 
 .response-save {

@@ -322,6 +322,11 @@ pub enum BodySpec {
     GraphQL {
         spec: GraphQLSpec,
     },
+    /// 二进制文件请求体：发送时由执行器读取 `path` 指向文件的原始字节，
+    /// Content-Type 默认 application/octet-stream（用户显式设置的请求头优先）。
+    Binary {
+        path: String,
+    },
 }
 
 impl BodySpec {
@@ -334,6 +339,7 @@ impl BodySpec {
             BodySpec::UrlEncoded { .. } => "urlencoded",
             BodySpec::Multipart { .. } => "multipart",
             BodySpec::GraphQL { .. } => "graphql",
+            BodySpec::Binary { .. } => "binary",
         }
     }
 
@@ -568,6 +574,18 @@ mod tests {
         assert_eq!(json["body"]["mode"], "none");
         assert_eq!(json["timeout_ms"], 30_000);
         assert_eq!(json["follow_redirects"], true);
+    }
+
+    #[test]
+    fn body_spec_binary_json_shape() {
+        let body = BodySpec::Binary {
+            path: "/tmp/a.png".into(),
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["mode"], "binary");
+        assert_eq!(json["path"], "/tmp/a.png");
+        let back: BodySpec = serde_json::from_value(json).unwrap();
+        assert_eq!(back, body);
     }
 
     #[test]

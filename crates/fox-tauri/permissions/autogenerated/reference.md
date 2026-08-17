@@ -33,7 +33,9 @@ RustFox 核心插件的默认权限：允许前端调用全部 fox 命令
 - `allow-oauth-authorize`
 - `allow-oauth-access-token`
 - `allow-codegen-render`
+- `allow-clipboard-write-text`
 - `allow-list-request-histories`
+- `allow-clear-request-histories`
 - `allow-mock-start`
 - `allow-mock-stop`
 - `allow-mock-status`
@@ -132,6 +134,58 @@ Enables the cancel_request command without any pre-configured scope.
 <td>
 
 Denies the cancel_request command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-clear-request-histories`
+
+</td>
+<td>
+
+Enables the clear_request_histories command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-clear-request-histories`
+
+</td>
+<td>
+
+Denies the clear_request_histories command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-clipboard-write-text`
+
+</td>
+<td>
+
+Enables the clipboard_write_text command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-clipboard-write-text`
+
+</td>
+<td>
+
+Denies the clipboard_write_text command without any pre-configured scope.
 
 </td>
 </tr>

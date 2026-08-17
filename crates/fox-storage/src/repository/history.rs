@@ -72,3 +72,20 @@ pub async fn list_request_histories(
     .await?;
     rows.into_iter().map(HistoryRow::into_model).collect()
 }
+
+/// 清空项目请求历史；`endpoint_id` 为 Some 时仅清该接口的记录。返回删除条数。
+pub async fn clear_request_histories(
+    db: &SqlitePool,
+    project_id: Uuid,
+    endpoint_id: Option<Uuid>,
+) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM request_histories WHERE project_id = ? AND (? IS NULL OR endpoint_id = ?)",
+    )
+    .bind(project_id.to_string())
+    .bind(endpoint_id.map(|id| id.to_string()))
+    .bind(endpoint_id.map(|id| id.to_string()))
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
+}

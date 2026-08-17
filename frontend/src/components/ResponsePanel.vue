@@ -1,13 +1,18 @@
 <script setup lang="ts">
 /**
  * ResponsePanel：响应面板。
- * - 顶栏：状态 pill（2xx 实心绿 / 3xx 琥珀 / 4xx-5xx 红，`200 OK`）+ 指标（⏱ 耗时 / 📦 大小，竖线分隔）+ 类型；
- * - 工具栏：Body/Headers/Cookies 标签 + 格式化/原始/预览 分段切换（右） + 保存为示例 / 复制响应（最右）；
+ * - 顶栏：高对比状态栏（2xx 实心绿 / 3xx 琥珀 / 4xx-5xx 红，`201 Created`）
+ *   + 耗时 / 大小指标（竖线分隔）+ 类型；
+ * - 工具栏：Body/Headers/Cookies 标签 + 格式化/原始/预览 分段切换（右）
+ *   + 查找（⌘F）/ 展开-收起全部 / 保存为示例 / 复制响应（最右）；
+ * - 查找：顶部弹出搜索框，高亮匹配 + 上一个/下一个导航（Enter / Shift+Enter / Esc）；
  * - 主体：JSON → 可折叠树形查看器（行号 + VS Code 深色语法着色）；文本 → 行号代码视图；HTML → 沙箱预览。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useToast } from '../composables/useToast'
+import { escapeHtml } from '../utils/highlight'
 import { formatBytes, formatDuration } from '../utils/format'
+import FindBar from './ui/FindBar.vue'
 import Icon from './ui/Icon.vue'
 import JsonTree from './JsonTree.vue'
 import SegmentedControl, { type SegmentOption } from './ui/SegmentedControl.vue'
@@ -181,6 +186,120 @@ const MODE_OPTIONS: SegmentOption[] = [
   { value: 'raw', label: '原始', icon: 'code' },
   { value: 'preview', label: '预览', icon: 'eye' },
 ]
+
+// ---------- 查找（Find in Response） ----------
+const findOpen = ref(false)
+const query = ref('')
+const activeMatch = ref(0)
+/** JSON 树上报的匹配总数（树视图的权威计数）。 */
+const treeTotal = ref(0)
+
+/** JSON 树是否可见（查找对其生效；行视图走本地计数）。 */
+const treeVisible = computed(
+  () => activeTab.value === 'body' && viewMode.value === 'pretty' && isJson.value && !bodyTooLarge.value,
+)
+
+/** 行视图（rp-lines）当前渲染的行；仅按实际可见行计数，保证大响应不卡顿。 */
+const searchLines = computed(() => {
+  if (!query.value) return []
+  if (viewMode.value === 'raw') return shownRawLines.value
+  if (viewMode.value === 'preview') return isHtml.value ? [] : shownRawLines.value
+  return shownPrettyLines.value
+})
+
+function countIn(text: string): number {
+  const ql = query.value.toLowerCase()
+  let n = 0
+  let from = 0
+  for (;;) {
+    const idx = text.toLowerCase().indexOf(ql, from)
+    if (idx === -1) break
+    n += 1
+    from = idx + ql.length
+  }
+  return n
+}
+
+const textTotal = computed(() => searchLines.value.reduce((n, ln) => n + countIn(ln), 0))
+
+const total = computed(() =>
+  treeVisible.value ? treeTotal.value : textTotal.value,
+)
+
+watch(query, () => {
+  activeMatch.value = 0
+})
+
+watch(total, (t) => {
+  if (t === 0) activeMatch.value = 0
+  else if (activeMatch.value >= t) activeMatch.value = t - 1
+})
+
+/** 行视图文本高亮：转义原文并用 <mark> 包裹所有匹配。 */
+function highlightText(raw: string, q: string): string {
+  if (!q) return escapeHtml(raw)
+  const lower = raw.toLowerCase()
+  const ql = q.toLowerCase()
+  let out = ''
+  let from = 0
+  for (;;) {
+    const idx = lower.indexOf(ql, from)
+    if (idx === -1) {
+      out += escapeHtml(raw.slice(from))
+      return out
+    }
+    out += escapeHtml(raw.slice(from, idx))
+    out += `<mark class="rp-find-mark">${escapeHtml(raw.slice(idx, idx + q.length))}</mark>`
+    from = idx + q.length
+  }
+}
+
+function nextMatch(): void {
+  if (!total.value) return
+  activeMatch.value = (activeMatch.value + 1) % total.value
+}
+
+function prevMatch(): void {
+  if (!total.value) return
+  activeMatch.value = (activeMatch.value - 1 + total.value) % total.value
+}
+
+function closeFind(): void {
+  findOpen.value = false
+  query.value = ''
+  activeMatch.value = 0
+  treeTotal.value = 0
+}
+
+function toggleFind(): void {
+  if (findOpen.value) {
+    closeFind()
+  } else {
+    findOpen.value = true
+  }
+}
+
+/** ⌘F / Ctrl+F 打开查找（输入框内不拦截）。 */
+function onWindowKeydown(e: KeyboardEvent): void {
+  if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'f') return
+  if (activeTab.value !== 'body' || !props.response.body.trim()) return
+  const target = e.target as HTMLElement | null
+  if (
+    target &&
+    (target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.isContentEditable)
+  ) {
+    return
+  }
+  e.preventDefault()
+  findOpen.value = true
+}
+
+const treeRef = ref<{ expandAll: () => void; collapseAll: () => void } | null>(null)
+
+onMounted(() => window.addEventListener('keydown', onWindowKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
 </script>
 
 <template>
@@ -190,9 +309,15 @@ const MODE_OPTIONS: SegmentOption[] = [
         <Icon name="dot" :size="8" /> {{ statusText }}
       </span>
       <span class="rp-sep"></span>
-      <span class="rp-meta"><Icon name="clock" :size="13" /> {{ formatDuration(response.duration_ms) }}</span>
+      <span class="rp-meta">
+        <span class="rp-meta-label">耗时</span>
+        <span class="rp-meta-value"><Icon name="clock" :size="12" /> {{ formatDuration(response.duration_ms) }}</span>
+      </span>
       <span class="rp-sep"></span>
-      <span class="rp-meta"><Icon name="package" :size="13" /> {{ sizeText }}</span>
+      <span class="rp-meta">
+        <span class="rp-meta-label">大小</span>
+        <span class="rp-meta-value"><Icon name="package" :size="12" /> {{ sizeText }}</span>
+      </span>
       <span v-if="response.content_type" class="rp-sep"></span>
       <span v-if="response.content_type" class="rp-type">{{ response.content_type }}</span>
       <span v-if="response.truncated" class="rp-truncated" title="后端已截断过长的响应正文">已截断</span>
@@ -210,6 +335,23 @@ const MODE_OPTIONS: SegmentOption[] = [
         @update:model-value="viewMode = $event as ViewMode"
       />
       <span class="rp-actions">
+        <button
+          class="rf-btn rf-btn-sm"
+          type="button"
+          :class="{ active: findOpen }"
+          title="在响应中查找 (⌘F)"
+          @click="toggleFind"
+        >
+          <Icon name="search" :size="13" />
+        </button>
+        <template v-if="treeVisible">
+          <button class="rf-btn rf-btn-sm" type="button" title="展开全部节点" @click="treeRef?.expandAll()">
+            <Icon name="chevron-down" :size="13" /> 展开全部
+          </button>
+          <button class="rf-btn rf-btn-sm" type="button" title="收起全部节点" @click="treeRef?.collapseAll()">
+            <Icon name="chevron-up" :size="13" /> 收起全部
+          </button>
+        </template>
         <button class="rf-btn rf-btn-sm" type="button" title="将当前响应保存为示例" @click="emit('saveExample')">
           <Icon name="save" :size="13" /> 保存为示例
         </button>
@@ -219,50 +361,68 @@ const MODE_OPTIONS: SegmentOption[] = [
       </span>
     </div>
 
-    <div v-if="activeTab === 'body'" class="rp-scroll">
-      <p v-if="bodyTooLarge" class="rp-note">
-        响应超过 1 MB，已按原始文本显示（跳过 JSON 解析与树形渲染以保证流畅）
-      </p>
-      <p v-if="!response.body.trim()" class="rp-empty">响应正文为空</p>
-      <JsonTree v-else-if="viewMode === 'pretty' && isJson" :data="parsed" />
-      <div v-else-if="viewMode === 'pretty'" class="rp-lines">
-        <div v-for="(ln, i) in shownPrettyLines" :key="i" class="rp-line">
-          <span class="rp-line-gutter">{{ i + 1 }}</span>
-          <span class="rp-line-text">{{ ln }}</span>
+    <div v-if="activeTab === 'body'" class="rp-body">
+      <FindBar
+        v-if="findOpen && response.body.trim()"
+        v-model:query="query"
+        :index="activeMatch"
+        :total="total"
+        @prev="prevMatch"
+        @next="nextMatch"
+        @close="closeFind"
+      />
+      <div class="rp-scroll">
+        <p v-if="bodyTooLarge" class="rp-note">
+          响应超过 1 MB，已按原始文本显示（跳过 JSON 解析与树形渲染以保证流畅）
+        </p>
+        <p v-if="!response.body.trim()" class="rp-empty">响应正文为空</p>
+        <JsonTree
+          v-else-if="viewMode === 'pretty' && isJson"
+          ref="treeRef"
+          :data="parsed"
+          :query="treeVisible ? query : ''"
+          :active-match="activeMatch"
+          @match-count="treeTotal = $event"
+        />
+        <div v-else-if="viewMode === 'pretty'" class="rp-lines">
+          <div v-for="(ln, i) in shownPrettyLines" :key="i" class="rp-line">
+            <span class="rp-line-gutter">{{ i + 1 }}</span>
+            <span class="rp-line-text" v-html="highlightText(ln, query)"></span>
+          </div>
+          <button
+            v-if="hasMorePretty"
+            class="rp-more"
+            type="button"
+            @click="showMoreLines"
+          >
+            显示更多（{{ visibleLines }} / {{ prettyLines.length }} 行）
+          </button>
         </div>
-        <button
-          v-if="hasMorePretty"
-          class="rp-more"
-          type="button"
-          @click="showMoreLines"
-        >
-          显示更多（{{ visibleLines }} / {{ prettyLines.length }} 行）
-        </button>
-      </div>
-      <div v-else-if="viewMode === 'raw'" class="rp-lines">
-        <div v-for="(ln, i) in shownRawLines" :key="i" class="rp-line">
-          <span class="rp-line-gutter">{{ i + 1 }}</span>
-          <span class="rp-line-text">{{ ln }}</span>
+        <div v-else-if="viewMode === 'raw'" class="rp-lines">
+          <div v-for="(ln, i) in shownRawLines" :key="i" class="rp-line">
+            <span class="rp-line-gutter">{{ i + 1 }}</span>
+            <span class="rp-line-text" v-html="highlightText(ln, query)"></span>
+          </div>
+          <button v-if="hasMoreRaw" class="rp-more" type="button" @click="showMoreLines">
+            显示更多（{{ visibleLines }} / {{ rawLines.length }} 行）
+          </button>
         </div>
-        <button v-if="hasMoreRaw" class="rp-more" type="button" @click="showMoreLines">
-          显示更多（{{ visibleLines }} / {{ rawLines.length }} 行）
-        </button>
-      </div>
-      <iframe
-        v-else-if="isHtml"
-        class="rp-frame"
-        sandbox="allow-same-origin"
-        :srcdoc="response.body"
-        title="响应预览"
-      ></iframe>
-      <div v-else class="rp-lines">
-        <div v-for="(ln, i) in shownRawLines" :key="i" class="rp-line">
-          <span class="rp-line-gutter">{{ i + 1 }}</span>
-          <span class="rp-line-text">{{ ln }}</span>
+        <iframe
+          v-else-if="isHtml"
+          class="rp-frame"
+          sandbox="allow-same-origin"
+          :srcdoc="response.body"
+          title="响应预览"
+        ></iframe>
+        <div v-else class="rp-lines">
+          <div v-for="(ln, i) in shownRawLines" :key="i" class="rp-line">
+            <span class="rp-line-gutter">{{ i + 1 }}</span>
+            <span class="rp-line-text" v-html="highlightText(ln, query)"></span>
+          </div>
+          <button v-if="hasMoreRaw" class="rp-more" type="button" @click="showMoreLines">
+            显示更多（{{ visibleLines }} / {{ rawLines.length }} 行）
+          </button>
         </div>
-        <button v-if="hasMoreRaw" class="rp-more" type="button" @click="showMoreLines">
-          显示更多（{{ visibleLines }} / {{ rawLines.length }} 行）
-        </button>
       </div>
     </div>
 
@@ -307,12 +467,13 @@ const MODE_OPTIONS: SegmentOption[] = [
   border-color: var(--danger-border);
 }
 
-/* ---- 顶栏 ---- */
+/* ---- 顶栏：高对比状态栏 ---- */
 .rp-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  min-height: 34px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
   overflow: hidden;
@@ -324,10 +485,12 @@ const MODE_OPTIONS: SegmentOption[] = [
   align-items: center;
   gap: 5px;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: 6px;
   font-weight: 700;
   font-size: 12px;
   font-family: var(--font-mono);
+  line-height: 1.4;
+  letter-spacing: 0.2px;
 }
 .rp.tone-ok .rp-status {
   background: var(--success);
@@ -335,34 +498,49 @@ const MODE_OPTIONS: SegmentOption[] = [
   box-shadow: 0 2px 10px rgba(34, 197, 94, 0.35);
 }
 .rp.tone-warn .rp-status {
-  background: var(--warning-tint);
-  color: var(--warning);
+  background: #b45309;
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(245, 158, 11, 0.3);
 }
 .rp.tone-err .rp-status {
-  background: var(--danger-tint);
-  color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(239, 68, 68, 0.35);
 }
 
 /* 指标竖线分隔（border-white/10 h-3） */
 .rp-sep {
   flex-shrink: 0;
   width: 1px;
-  height: 12px;
-  background: rgba(255, 255, 255, 0.1);
+  height: 14px;
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .rp-meta {
   flex-shrink: 0;
   display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  font-family: var(--font-mono);
-  color: var(--text-2);
+  align-items: baseline;
+  gap: 6px;
   white-space: nowrap;
 }
-.rp-meta svg {
-  opacity: 0.75;
+
+.rp-meta-label {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.rp-meta-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-1);
+}
+.rp-meta-value svg {
+  color: var(--accent);
+  opacity: 0.9;
 }
 
 .rp-type {
@@ -417,8 +595,26 @@ const MODE_OPTIONS: SegmentOption[] = [
 .rp-actions .rf-btn svg {
   color: var(--accent);
 }
+.rp-actions .rf-btn.active {
+  color: var(--accent);
+  background: var(--accent-tint, var(--bg-hover));
+}
+
+/* ---- 查找 ---- */
+:deep(.rp-find-mark) {
+  background: var(--accent-tint, rgba(99, 102, 241, 0.25));
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
 
 /* ---- 正文区 ---- */
+.rp-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .rp-scroll {
   max-height: 420px;
   overflow-y: auto;

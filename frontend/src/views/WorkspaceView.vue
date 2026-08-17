@@ -4,7 +4,7 @@
  * 左侧接口树（文件夹 + 接口，含 CRUD），右侧标签页 + 编辑器 + 响应区。
  * 树操作全部走 workspace store（Pinia），点击接口打开草稿标签页。
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useFoxApi } from '../composables/useFoxApi'
@@ -12,12 +12,14 @@ import { useToast } from '../composables/useToast'
 import Brand from '../components/Brand.vue'
 import EndpointTree from '../components/EndpointTree.vue'
 import EnvironmentBar from '../components/EnvironmentBar.vue'
+import HistoryPanel from '../components/HistoryPanel.vue'
 import Icon from '../components/ui/Icon.vue'
 import IconButton from '../components/ui/IconButton.vue'
 import Menu, { type MenuItem } from '../components/ui/Menu.vue'
 import Modal from '../components/ui/Modal.vue'
 import SettingsDialog from '../components/SettingsDialog.vue'
 import TabBar from '../components/TabBar.vue'
+import Tabs, { type TabItem } from '../components/ui/Tabs.vue'
 import EndpointEditor from '../components/EndpointEditor.vue'
 import CurlImportDialog from '../components/CurlImportDialog.vue'
 import ImportDialog from '../components/ImportDialog.vue'
@@ -35,6 +37,14 @@ const showDocImport = ref(false)
 const showMockRules = ref(false)
 const showSettings = ref(false)
 const apiSearch = ref('')
+
+// ---------- 侧栏页签：接口目录 / 请求历史 ----------
+type SidebarTab = 'collections' | 'history'
+const sidebarTab = ref<SidebarTab>('collections')
+const sidebarTabs = computed<TabItem[]>(() => [
+  { key: 'collections', label: '接口目录' },
+  { key: 'history', label: '请求历史', count: store.histories.length || undefined },
+])
 
 // ---------- Mock 服务 ----------
 const mockAddress = ref<string | null>(null)
@@ -298,6 +308,7 @@ function onMenuConfirm(item: MenuItem): void {
 onMounted(() => {
   load()
   refreshMockStatus()
+  void store.loadHistories()
 })
 
 onBeforeUnmount(() => {
@@ -349,8 +360,20 @@ onBeforeUnmount(() => {
             <Icon name="chevron-down" :size="13" class="ps-caret" />
           </button>
           <div class="sidebar-actions">
-            <IconButton name="folder-plus" :size="16" title="新建文件夹" @click="createFolderAtRoot" />
-            <IconButton name="terminal" :size="16" title="导入 cURL" @click="openCurlImport(null)" />
+            <IconButton
+              v-if="sidebarTab === 'collections'"
+              name="folder-plus"
+              :size="16"
+              title="新建文件夹"
+              @click="createFolderAtRoot"
+            />
+            <IconButton
+              v-if="sidebarTab === 'collections'"
+              name="terminal"
+              :size="16"
+              title="导入 cURL"
+              @click="openCurlImport(null)"
+            />
             <IconButton
               name="more-horizontal"
               :size="16"
@@ -359,35 +382,39 @@ onBeforeUnmount(() => {
             />
           </div>
         </div>
-        <div class="sidebar-search">
-          <Icon name="search" :size="13" class="ss-icon" />
-          <input
-            v-model="apiSearch"
-            class="ss-input"
-            type="text"
-            placeholder="搜索接口名称或路径..."
-            spellcheck="false"
-          />
-          <button
-            v-if="apiSearch"
-            class="ss-clear"
-            type="button"
-            title="清除搜索"
-            aria-label="清除搜索"
-            @click="apiSearch = ''"
-          >
-            <Icon name="x" :size="12" />
-          </button>
+        <Tabs v-model="sidebarTab" :tabs="sidebarTabs" size="sm" class="sidebar-tabs" />
+        <div v-show="sidebarTab === 'collections'" class="sidebar-collections">
+          <div class="sidebar-search">
+            <Icon name="search" :size="13" class="ss-icon" />
+            <input
+              v-model="apiSearch"
+              class="ss-input"
+              type="text"
+              placeholder="搜索接口名称或路径..."
+              spellcheck="false"
+            />
+            <button
+              v-if="apiSearch"
+              class="ss-clear"
+              type="button"
+              title="清除搜索"
+              aria-label="清除搜索"
+              @click="apiSearch = ''"
+            >
+              <Icon name="x" :size="12" />
+            </button>
+          </div>
+          <div v-if="store.loadError" class="rf-inline-error" role="alert">
+            <span class="rf-inline-error-text">加载失败：{{ store.loadError }}</span>
+            <button class="rf-btn rf-btn-sm" type="button" :disabled="loading" @click="load">
+              {{ loading ? '重试中…' : '重试' }}
+            </button>
+          </div>
+          <div v-else class="tree-wrap">
+            <EndpointTree ref="treeRef" :folder-id="null" :search="apiSearch" @import-curl="openCurlImport" />
+          </div>
         </div>
-        <div v-if="store.loadError" class="rf-inline-error" role="alert">
-          <span class="rf-inline-error-text">加载失败：{{ store.loadError }}</span>
-          <button class="rf-btn rf-btn-sm" type="button" :disabled="loading" @click="load">
-            {{ loading ? '重试中…' : '重试' }}
-          </button>
-        </div>
-        <div v-else class="tree-wrap">
-          <EndpointTree ref="treeRef" :folder-id="null" :search="apiSearch" @import-curl="openCurlImport" />
-        </div>
+        <HistoryPanel v-if="sidebarTab === 'history'" class="sidebar-history" />
       </aside>
       <main class="rf-main">
         <TabBar v-if="store.openTabs.length" />
@@ -747,6 +774,25 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow-y: auto;
   padding: 8px 12px 12px;
+}
+
+/* ---- 侧栏页签（接口目录 / 请求历史） ---- */
+.sidebar-tabs {
+  flex-shrink: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-collections {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-history {
+  flex: 1;
+  min-height: 0;
 }
 
 .rf-main {

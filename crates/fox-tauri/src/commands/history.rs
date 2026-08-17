@@ -23,3 +23,15 @@ pub async fn list_request_histories(
         .await
         .map_err(CommandError::from)
 }
+
+/// 清空请求历史（`endpoint_id` 提供时仅清该接口），返回删除条数。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn clear_request_histories(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    endpoint_id: Option<Uuid>,
+) -> CommandResult<u64> {
+    repo::clear_request_histories(&state.db, project_id, endpoint_id)
+        .await
+        .map_err(CommandError::from)
+}

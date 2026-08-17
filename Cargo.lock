@@ -634,7 +634,9 @@ version = "0.0.1"
 dependencies = [
  "base64 0.22.1",
  "fox-core",
+ "serde",
  "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

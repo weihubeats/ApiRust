@@ -80,6 +80,10 @@
   --ease: ease-out;
   --dur: 140ms;
 
+  /* ---- 文本选中高亮（深邃蓝 + 纯白，对比度 ≈ 5.2:1，WCAG AA；亮/暗主题通用） ---- */
+  --selection-bg: #2563eb;
+  --selection-fg: #ffffff;
+
   /* ---- 字体 ---- */
   --font-ui:
     'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'HarmonyOS Sans SC',
@@ -184,8 +188,8 @@ body {
 }
 
 ::selection {
-  background: var(--accent-tint);
-  color: var(--text-1);
+  background-color: var(--selection-bg);
+  color: var(--selection-fg);
 }
 
 /* ---- 全局焦点光环（零特异性，组件自有 focus 样式优先） ---- */
@@ -200,6 +204,7 @@ textarea,
 select {
   font-family: var(--font-mono);
   color: var(--text-1);
+  caret-color: var(--accent);
 }
 
 pre,

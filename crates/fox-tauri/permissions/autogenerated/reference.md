@@ -50,6 +50,15 @@ RustFox 核心插件的默认权限：允许前端调用全部 fox 命令
 - `allow-delete-mock-rule`
 - `allow-get-http-proxy`
 - `allow-set-http-proxy`
+- `allow-list-request-examples`
+- `allow-save-request-example`
+- `allow-delete-request-example`
+- `allow-list-test-cases`
+- `allow-save-test-case`
+- `allow-update-test-case-meta`
+- `allow-update-test-case-content`
+- `allow-update-test-case-status`
+- `allow-delete-test-case`
 
 ## Permission Table
 
@@ -368,6 +377,58 @@ Enables the delete_project command without any pre-configured scope.
 <td>
 
 Denies the delete_project command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-delete-request-example`
+
+</td>
+<td>
+
+Enables the delete_request_example command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-delete-request-example`
+
+</td>
+<td>
+
+Denies the delete_request_example command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-delete-test-case`
+
+</td>
+<td>
+
+Enables the delete_test_case command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-delete-test-case`
+
+</td>
+<td>
+
+Denies the delete_test_case command without any pre-configured scope.
 
 </td>
 </tr>
@@ -739,6 +800,32 @@ Denies the list_mock_rules command without any pre-configured scope.
 <tr>
 <td>
 
+`fox-tauri:allow-list-request-examples`
+
+</td>
+<td>
+
+Enables the list_request_examples command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-list-request-examples`
+
+</td>
+<td>
+
+Denies the list_request_examples command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `fox-tauri:allow-list-request-histories`
 
 </td>
@@ -758,6 +845,32 @@ Enables the list_request_histories command without any pre-configured scope.
 <td>
 
 Denies the list_request_histories command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-list-test-cases`
+
+</td>
+<td>
+
+Enables the list_test_cases command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-list-test-cases`
+
+</td>
+<td>
+
+Denies the list_test_cases command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1103,6 +1216,58 @@ Denies the save_project command without any pre-configured scope.
 <tr>
 <td>
 
+`fox-tauri:allow-save-request-example`
+
+</td>
+<td>
+
+Enables the save_request_example command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-save-request-example`
+
+</td>
+<td>
+
+Denies the save_request_example command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-save-test-case`
+
+</td>
+<td>
+
+Enables the save_test_case command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-save-test-case`
+
+</td>
+<td>
+
+Denies the save_test_case command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `fox-tauri:allow-set-active-environment`
 
 </td>
@@ -1200,6 +1365,84 @@ Enables the test_endpoint command without any pre-configured scope.
 <td>
 
 Denies the test_endpoint command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-update-test-case-content`
+
+</td>
+<td>
+
+Enables the update_test_case_content command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-update-test-case-content`
+
+</td>
+<td>
+
+Denies the update_test_case_content command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-update-test-case-meta`
+
+</td>
+<td>
+
+Enables the update_test_case_meta command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-update-test-case-meta`
+
+</td>
+<td>
+
+Denies the update_test_case_meta command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-update-test-case-status`
+
+</td>
+<td>
+
+Enables the update_test_case_status command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-update-test-case-status`
+
+</td>
+<td>
+
+Denies the update_test_case_status command without any pre-configured scope.
 
 </td>
 </tr>

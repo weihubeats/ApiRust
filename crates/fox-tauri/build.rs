@@ -46,6 +46,15 @@ const COMMANDS: &[&str] = &[
     "delete_mock_rule",
     "get_http_proxy",
     "set_http_proxy",
+    "list_request_examples",
+    "save_request_example",
+    "delete_request_example",
+    "list_test_cases",
+    "save_test_case",
+    "update_test_case_meta",
+    "update_test_case_content",
+    "update_test_case_status",
+    "delete_test_case",
 ];
 
 fn main() {

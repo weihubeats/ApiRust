@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-save-test-case"
+description = "Enables the save_test_case command without any pre-configured scope."
+commands.allow = ["save_test_case"]
+
+[[permission]]
+identifier = "deny-save-test-case"
+description = "Denies the save_test_case command without any pre-configured scope."
+commands.deny = ["save_test_case"]

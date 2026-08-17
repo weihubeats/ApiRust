@@ -1,6 +1,6 @@
 # RustFox
 
-> 约 21 MB 的轻量跨平台 API 调试工具。一个安装包，开箱即用。
+> 约 10 MB 的轻量跨平台 API 调试工具。一个安装包，开箱即用。
 
 <!--
   示例图片：docs/imags/home.png（主页）、docs/imags/api-home.png（工作区）。
@@ -12,18 +12,18 @@
 
 ## 为什么选择 RustFox？
 
-### 🪶 21 MB，零运行时依赖
+### 🪶 10 MB，零运行时依赖
 
 同类工具把整个 Chromium/Node.js 运行时打包进安装包，RustFox 用 **Rust + Tauri 2 + 系统 WebView**——不内置浏览器内核、无 Node 沙箱、无 JRE，装完即用。
 
 | 维度 | RustFox | Postman | Bruno | Insomnia |
 | --- | --- | --- | --- | --- |
-| 安装包体积 | **~21 MB** | ~310 MB (Electron) | ~433 MB (Electron) | ~200 MB (Electron) |
+| 安装包体积 | **~10 MB** | ~310 MB (Electron) | ~433 MB (Electron) | ~200 MB (Electron) |
 | 首屏启动 | **< 1 秒** | 2–4 秒 | 2–5 秒 | 2–4 秒 |
 | 运行时内存 | **~40 MB** | ~500 MB+ | ~300 MB+ | ~200 MB+ |
 | 应用壳 | 系统 WebView（无内置 Chromium） | Chromium + Node.js | Chromium + Node.js | Chromium + Node.js |
 
-同等工作负载下，安装包体积缩小 **10–20 倍**、启动快 **2–5 倍**、占用内存减少一个数量级。
+同等工作负载下，安装包体积缩小 **20–40 倍**、启动快 **2–5 倍**、占用内存减少一个数量级。
 
 ### ⚡ 快，但功能不缺
 

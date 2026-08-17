@@ -439,6 +439,30 @@
           "markdownDescription": "Denies the delete_project command without any pre-configured scope."
         },
         {
+          "description": "Enables the delete_request_example command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-request-example",
+          "markdownDescription": "Enables the delete_request_example command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_request_example command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-request-example",
+          "markdownDescription": "Denies the delete_request_example command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_test_case command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-test-case",
+          "markdownDescription": "Enables the delete_test_case command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_test_case command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-test-case",
+          "markdownDescription": "Denies the delete_test_case command without any pre-configured scope."
+        },
+        {
           "description": "Enables the duplicate_endpoint command without any pre-configured scope.",
           "type": "string",
           "const": "allow-duplicate-endpoint",
@@ -607,6 +631,18 @@
           "markdownDescription": "Denies the list_mock_rules command without any pre-configured scope."
         },
         {
+          "description": "Enables the list_request_examples command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-request-examples",
+          "markdownDescription": "Enables the list_request_examples command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_request_examples command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-request-examples",
+          "markdownDescription": "Denies the list_request_examples command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_request_histories command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-request-histories",
@@ -617,6 +653,18 @@
           "type": "string",
           "const": "deny-list-request-histories",
           "markdownDescription": "Denies the list_request_histories command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_test_cases command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-test-cases",
+          "markdownDescription": "Enables the list_test_cases command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_test_cases command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-test-cases",
+          "markdownDescription": "Denies the list_test_cases command without any pre-configured scope."
         },
         {
           "description": "Enables the load_test command without any pre-configured scope.",
@@ -775,6 +823,30 @@
           "markdownDescription": "Denies the save_project command without any pre-configured scope."
         },
         {
+          "description": "Enables the save_request_example command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-request-example",
+          "markdownDescription": "Enables the save_request_example command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_request_example command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-request-example",
+          "markdownDescription": "Denies the save_request_example command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_test_case command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-test-case",
+          "markdownDescription": "Enables the save_test_case command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_test_case command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-test-case",
+          "markdownDescription": "Denies the save_test_case command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_active_environment command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-active-environment",
@@ -823,10 +895,46 @@
           "markdownDescription": "Denies the test_endpoint command without any pre-configured scope."
         },
         {
-          "description": "RustFox 核心插件的默认权限：允许前端调用全部 fox 命令\n（项目 / 接口 / 文件夹 / 环境 / cURL 解析 / 请求执行）。\n命令的 allow-* 权限由 tauri-build 依据 invoke_handler 自动生成。\n\n#### This default permission set includes:\n\n- `allow-get-projects`\n- `allow-save-project`\n- `allow-delete-project`\n- `allow-set-active-project`\n- `allow-get-active-project`\n- `allow-list-endpoints`\n- `allow-get-endpoint`\n- `allow-save-endpoint`\n- `allow-delete-endpoint`\n- `allow-duplicate-endpoint`\n- `allow-list-folders`\n- `allow-save-folder`\n- `allow-delete-folder`\n- `allow-parse-curl-command`\n- `allow-list-environments`\n- `allow-save-environment`\n- `allow-set-active-environment`\n- `allow-get-active-environment`\n- `allow-delete-environment`\n- `allow-execute-request`\n- `allow-cancel-request`\n- `allow-list-examples`\n- `allow-save-example`\n- `allow-delete-example`\n- `allow-oauth-authorize`\n- `allow-oauth-access-token`\n- `allow-codegen-render`\n- `allow-clipboard-write-text`\n- `allow-list-request-histories`\n- `allow-clear-request-histories`\n- `allow-mock-start`\n- `allow-mock-stop`\n- `allow-mock-status`\n- `allow-backup-export`\n- `allow-backup-restore`\n- `allow-import-document`\n- `allow-export-openapi`\n- `allow-test-endpoint`\n- `allow-load-test`\n- `allow-list-mock-rules`\n- `allow-save-mock-rule`\n- `allow-delete-mock-rule`\n- `allow-get-http-proxy`\n- `allow-set-http-proxy`",
+          "description": "Enables the update_test_case_content command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-test-case-content",
+          "markdownDescription": "Enables the update_test_case_content command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_test_case_content command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-test-case-content",
+          "markdownDescription": "Denies the update_test_case_content command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_test_case_meta command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-test-case-meta",
+          "markdownDescription": "Enables the update_test_case_meta command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_test_case_meta command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-test-case-meta",
+          "markdownDescription": "Denies the update_test_case_meta command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_test_case_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-test-case-status",
+          "markdownDescription": "Enables the update_test_case_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_test_case_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-test-case-status",
+          "markdownDescription": "Denies the update_test_case_status command without any pre-configured scope."
+        },
+        {
+          "description": "RustFox 核心插件的默认权限：允许前端调用全部 fox 命令\n（项目 / 接口 / 文件夹 / 环境 / cURL 解析 / 请求执行）。\n命令的 allow-* 权限由 tauri-build 依据 invoke_handler 自动生成。\n\n#### This default permission set includes:\n\n- `allow-get-projects`\n- `allow-save-project`\n- `allow-delete-project`\n- `allow-set-active-project`\n- `allow-get-active-project`\n- `allow-list-endpoints`\n- `allow-get-endpoint`\n- `allow-save-endpoint`\n- `allow-delete-endpoint`\n- `allow-duplicate-endpoint`\n- `allow-list-folders`\n- `allow-save-folder`\n- `allow-delete-folder`\n- `allow-parse-curl-command`\n- `allow-list-environments`\n- `allow-save-environment`\n- `allow-set-active-environment`\n- `allow-get-active-environment`\n- `allow-delete-environment`\n- `allow-execute-request`\n- `allow-cancel-request`\n- `allow-list-examples`\n- `allow-save-example`\n- `allow-delete-example`\n- `allow-oauth-authorize`\n- `allow-oauth-access-token`\n- `allow-codegen-render`\n- `allow-clipboard-write-text`\n- `allow-list-request-histories`\n- `allow-clear-request-histories`\n- `allow-mock-start`\n- `allow-mock-stop`\n- `allow-mock-status`\n- `allow-backup-export`\n- `allow-backup-restore`\n- `allow-import-document`\n- `allow-export-openapi`\n- `allow-test-endpoint`\n- `allow-load-test`\n- `allow-list-mock-rules`\n- `allow-save-mock-rule`\n- `allow-delete-mock-rule`\n- `allow-get-http-proxy`\n- `allow-set-http-proxy`\n- `allow-list-request-examples`\n- `allow-save-request-example`\n- `allow-delete-request-example`\n- `allow-list-test-cases`\n- `allow-save-test-case`\n- `allow-update-test-case-meta`\n- `allow-update-test-case-content`\n- `allow-update-test-case-status`\n- `allow-delete-test-case`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "RustFox 核心插件的默认权限：允许前端调用全部 fox 命令\n（项目 / 接口 / 文件夹 / 环境 / cURL 解析 / 请求执行）。\n命令的 allow-* 权限由 tauri-build 依据 invoke_handler 自动生成。\n\n#### This default permission set includes:\n\n- `allow-get-projects`\n- `allow-save-project`\n- `allow-delete-project`\n- `allow-set-active-project`\n- `allow-get-active-project`\n- `allow-list-endpoints`\n- `allow-get-endpoint`\n- `allow-save-endpoint`\n- `allow-delete-endpoint`\n- `allow-duplicate-endpoint`\n- `allow-list-folders`\n- `allow-save-folder`\n- `allow-delete-folder`\n- `allow-parse-curl-command`\n- `allow-list-environments`\n- `allow-save-environment`\n- `allow-set-active-environment`\n- `allow-get-active-environment`\n- `allow-delete-environment`\n- `allow-execute-request`\n- `allow-cancel-request`\n- `allow-list-examples`\n- `allow-save-example`\n- `allow-delete-example`\n- `allow-oauth-authorize`\n- `allow-oauth-access-token`\n- `allow-codegen-render`\n- `allow-clipboard-write-text`\n- `allow-list-request-histories`\n- `allow-clear-request-histories`\n- `allow-mock-start`\n- `allow-mock-stop`\n- `allow-mock-status`\n- `allow-backup-export`\n- `allow-backup-restore`\n- `allow-import-document`\n- `allow-export-openapi`\n- `allow-test-endpoint`\n- `allow-load-test`\n- `allow-list-mock-rules`\n- `allow-save-mock-rule`\n- `allow-delete-mock-rule`\n- `allow-get-http-proxy`\n- `allow-set-http-proxy`"
+          "markdownDescription": "RustFox 核心插件的默认权限：允许前端调用全部 fox 命令\n（项目 / 接口 / 文件夹 / 环境 / cURL 解析 / 请求执行）。\n命令的 allow-* 权限由 tauri-build 依据 invoke_handler 自动生成。\n\n#### This default permission set includes:\n\n- `allow-get-projects`\n- `allow-save-project`\n- `allow-delete-project`\n- `allow-set-active-project`\n- `allow-get-active-project`\n- `allow-list-endpoints`\n- `allow-get-endpoint`\n- `allow-save-endpoint`\n- `allow-delete-endpoint`\n- `allow-duplicate-endpoint`\n- `allow-list-folders`\n- `allow-save-folder`\n- `allow-delete-folder`\n- `allow-parse-curl-command`\n- `allow-list-environments`\n- `allow-save-environment`\n- `allow-set-active-environment`\n- `allow-get-active-environment`\n- `allow-delete-environment`\n- `allow-execute-request`\n- `allow-cancel-request`\n- `allow-list-examples`\n- `allow-save-example`\n- `allow-delete-example`\n- `allow-oauth-authorize`\n- `allow-oauth-access-token`\n- `allow-codegen-render`\n- `allow-clipboard-write-text`\n- `allow-list-request-histories`\n- `allow-clear-request-histories`\n- `allow-mock-start`\n- `allow-mock-stop`\n- `allow-mock-status`\n- `allow-backup-export`\n- `allow-backup-restore`\n- `allow-import-document`\n- `allow-export-openapi`\n- `allow-test-endpoint`\n- `allow-load-test`\n- `allow-list-mock-rules`\n- `allow-save-mock-rule`\n- `allow-delete-mock-rule`\n- `allow-get-http-proxy`\n- `allow-set-http-proxy`\n- `allow-list-request-examples`\n- `allow-save-request-example`\n- `allow-delete-request-example`\n- `allow-list-test-cases`\n- `allow-save-test-case`\n- `allow-update-test-case-meta`\n- `allow-update-test-case-content`\n- `allow-update-test-case-status`\n- `allow-delete-test-case`"
         }
       ]
     }

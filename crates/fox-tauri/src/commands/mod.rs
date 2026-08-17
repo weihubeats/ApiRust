@@ -14,7 +14,9 @@ pub mod mock_rule;
 pub mod oauth;
 pub mod project;
 pub mod request;
+pub mod request_example;
 pub mod settings;
+pub mod test_case;
 
 pub use backup::*;
 pub use clipboard::*;
@@ -32,4 +34,6 @@ pub use mock_rule::*;
 pub use oauth::*;
 pub use project::*;
 pub use request::*;
+pub use request_example::*;
 pub use settings::*;
+pub use test_case::*;

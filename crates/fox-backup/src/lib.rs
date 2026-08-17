@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use fox_core::model::{Endpoint, Environment, Folder, MockRule, Project, ResponseExample};
+use fox_core::model::{
+    Endpoint, Environment, Folder, MockRule, Project, RequestExample, ResponseExample,
+};
 use fox_core::AppError;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -23,6 +25,9 @@ pub struct BackupFile {
     pub environments: Vec<Environment>,
     pub mock_rules: Vec<MockRule>,
     pub response_examples: Vec<ResponseExample>,
+    /// 请求用例（旧版本备份无此字段，缺失时按空处理）。
+    #[serde(default)]
+    pub request_examples: Vec<RequestExample>,
 }
 
 /// 备份格式标识。
@@ -59,6 +64,7 @@ pub fn build_backup(
     environments: &[Environment],
     mock_rules: &[MockRule],
     response_examples: &[ResponseExample],
+    request_examples: &[RequestExample],
 ) -> BackupFile {
     BackupFile {
         format: FORMAT.to_string(),
@@ -70,6 +76,7 @@ pub fn build_backup(
         environments: environments.to_vec(),
         mock_rules: mock_rules.to_vec(),
         response_examples: response_examples.to_vec(),
+        request_examples: request_examples.to_vec(),
     }
 }
 
@@ -82,6 +89,7 @@ pub struct Restored {
     pub environments: Vec<Environment>,
     pub mock_rules: Vec<MockRule>,
     pub response_examples: Vec<ResponseExample>,
+    pub request_examples: Vec<RequestExample>,
 }
 
 /// 恢复：全量重映射 UUID（新项目）。返回值与 `build_backup` 顺序对应。
@@ -142,6 +150,15 @@ pub fn restore_backup(file: &BackupFile) -> Restored {
         });
     }
 
+    let mut request_examples: Vec<RequestExample> = Vec::new();
+    for e in &file.request_examples {
+        request_examples.push(RequestExample {
+            id: Uuid::new_v4(),
+            endpoint_id: *map.get(&e.endpoint_id).unwrap_or(&new_project_id),
+            ..e.clone()
+        });
+    }
+
     Restored {
         project: Project {
             id: new_project_id,
@@ -152,6 +169,7 @@ pub fn restore_backup(file: &BackupFile) -> Restored {
         environments,
         mock_rules,
         response_examples,
+        request_examples,
     }
 }
 
@@ -159,7 +177,6 @@ pub fn restore_backup(file: &BackupFile) -> Restored {
 mod tests {
     use super::*;
     use fox_core::model::{BodySpec, EndpointStatus, HttpMethod, KeyValue, RequestSpec};
-
     fn sample_data() -> BackupFile {
         let project = Project {
             id: Uuid::new_v4(),
@@ -234,7 +251,25 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        build_backup(&project, &[folder], &[ep], &[env], &[rule], &[example])
+        let mut req_example_request = RequestSpec::default();
+        req_example_request.params.push(KeyValue::new("page", "2"));
+        let req_example = RequestExample {
+            id: Uuid::new_v4(),
+            endpoint_id: ep.id,
+            name: "分页查询".into(),
+            request: req_example_request,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        build_backup(
+            &project,
+            &[folder],
+            &[ep],
+            &[env],
+            &[rule],
+            &[example],
+            &[req_example],
+        )
     }
 
     #[test]
@@ -248,6 +283,16 @@ mod tests {
     #[test]
     fn parse_rejects_wrong_format() {
         assert!(BackupFile::parse(r#"{"format":"other"}"#).is_err());
+    }
+
+    #[test]
+    fn parse_old_backup_without_request_examples_defaults_empty() {
+        let mut data = sample_data();
+        data.request_examples.clear();
+        let text = data.serialize().unwrap();
+        let parsed = BackupFile::parse(&text).unwrap();
+        assert!(parsed.request_examples.is_empty());
+        assert_eq!(parsed.response_examples.len(), 1);
     }
 
     #[test]
@@ -273,6 +318,12 @@ mod tests {
         assert_eq!(restored.mock_rules[0].endpoint_id, Some(ep.id));
         assert_eq!(restored.response_examples[0].endpoint_id, ep.id);
         assert_eq!(restored.environments[0].project_id, restored.project.id);
+        // 请求用例：引用新 endpoint id、请求快照保持、名称一致
+        let req_ex = &restored.request_examples[0];
+        assert_eq!(req_ex.endpoint_id, ep.id);
+        assert_eq!(req_ex.name, "分页查询");
+        assert_eq!(req_ex.request.params[0].key, "page");
+        assert_ne!(req_ex.id, data.request_examples[0].id);
         // 无交叉引用残留
         let old_ids: Vec<Uuid> = data.endpoints.iter().map(|e| e.id).collect();
         for new_ep in &restored.endpoints {

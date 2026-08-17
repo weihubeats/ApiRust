@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-delete-test-case"
+description = "Enables the delete_test_case command without any pre-configured scope."
+commands.allow = ["delete_test_case"]
+
+[[permission]]
+identifier = "deny-delete-test-case"
+description = "Denies the delete_test_case command without any pre-configured scope."
+commands.deny = ["delete_test_case"]

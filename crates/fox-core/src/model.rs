@@ -461,6 +461,71 @@ pub struct ResponseExample {
     pub updated_at: DateTime<Utc>,
 }
 
+/// 请求用例（请求快照）。
+///
+/// 保存接口某次请求的完整 `RequestSpec`（参数 / 认证 / 请求头 / Body / 超时等），
+/// 可一键回填编辑器复用，避免反复手工拼装。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RequestExample {
+    pub id: Uuid,
+    pub endpoint_id: Uuid,
+    pub name: String,
+    pub request: RequestSpec,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// 测试用例运行状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum TestCaseStatus {
+    Success,
+    Failed,
+    Untested,
+}
+
+impl TestCaseStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TestCaseStatus::Success => "Success",
+            TestCaseStatus::Failed => "Failed",
+            TestCaseStatus::Untested => "Untested",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<TestCaseStatus> {
+        match s {
+            "Success" => Some(TestCaseStatus::Success),
+            "Failed" => Some(TestCaseStatus::Failed),
+            "Untested" => Some(TestCaseStatus::Untested),
+            _ => None,
+        }
+    }
+}
+
+/// 测试用例（Apifox 风格用例管理）。
+///
+/// 每个用例保存一次调用的独立快照：URL 路径 + Query 参数 + 请求头 + Body，
+/// 可单独运行、一键回填调试页重新调用。`request_id` 关联主接口（`endpoints`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TestCase {
+    pub id: Uuid,
+    /// 关联的主接口 ID（endpoints.id）。
+    pub request_id: Uuid,
+    pub name: String,
+    /// 用例分组：正向 / 负向 / 边界值 / 安全性 / 其他。
+    pub category: String,
+    pub method: HttpMethod,
+    pub url_path: String,
+    pub params: Vec<KeyValue>,
+    pub headers: Vec<KeyValue>,
+    /// body 类型标识：json / form-data / raw / urlencoded / graphql / binary / none。
+    pub body_type: String,
+    pub body_content: String,
+    pub last_run_status: TestCaseStatus,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Mock 匹配条件项。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MockMatchItem {

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-update-test-case-status"
+description = "Enables the update_test_case_status command without any pre-configured scope."
+commands.allow = ["update_test_case_status"]
+
+[[permission]]
+identifier = "deny-update-test-case-status"
+description = "Denies the update_test_case_status command without any pre-configured scope."
+commands.deny = ["update_test_case_status"]

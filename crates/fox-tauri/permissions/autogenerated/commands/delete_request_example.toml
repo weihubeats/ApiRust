@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-delete-request-example"
+description = "Enables the delete_request_example command without any pre-configured scope."
+commands.allow = ["delete_request_example"]
+
+[[permission]]
+identifier = "deny-delete-request-example"
+description = "Denies the delete_request_example command without any pre-configured scope."
+commands.deny = ["delete_request_example"]

@@ -15,6 +15,7 @@ import { useFoxApi } from '../composables/useFoxApi'
 import { useToast } from '../composables/useToast'
 import { planCrossGroupMove, planSameGroupMove, wouldCreateCycle } from './treeOps'
 import { splitUrl } from '../utils/url'
+import { applyCaseToRequest, restoreBody, snapshotRequest } from '../utils/testCases'
 import type {
   AuthSpec,
   CurlParsed,
@@ -22,10 +23,15 @@ import type {
   Environment,
   ExecuteResponse,
   HttpMethod,
+  KeyValue,
   OAuth2Token,
   Project,
+  RequestExample,
   RequestHistory,
   ResponseExample,
+  TestCase,
+  TestCaseCategory,
+  TestCaseStatus,
 } from '../types/foxApi'
 
 /** 新建接口的默认请求规格（与 fox-core 模型字段一致）。 */
@@ -166,7 +172,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     openTabs.value = []
     drafts.value = new Map()
     examples.value = new Map()
+    requestExamples.value = new Map()
+    testCases.value = new Map()
     activeTabId.value = null
+    activeView.value = 'debug'
     sessionBaseUrl.value = 'http://localhost'
     const p = await api.getActiveProject()
     if (!p) throw new Error('项目不存在')
@@ -181,6 +190,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       openTabs.value.push(endpoint.id)
       drafts.value.set(endpoint.id, { ...endpoint, request: JSON.parse(JSON.stringify(endpoint.request)) })
       loadExamples(endpoint.id)
+      loadRequestExamples(endpoint.id)
+      loadTestCases(endpoint.id)
     }
     activeTabId.value = endpoint.id
   }
@@ -225,6 +236,317 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     await api.deleteExample(exampleId)
     const list = (examples.value.get(endpointId) ?? []).filter((x) => x.id !== exampleId)
     examples.value.set(endpointId, list)
+  }
+
+  /** 请求用例（按接口 id 缓存，openEndpoint 时懒加载）。 */
+  const requestExamples = ref<Map<string, RequestExample[]>>(new Map())
+
+  /** 加载接口的请求用例（懒加载 + 缓存，失败时按空处理）。 */
+  async function loadRequestExamples(endpointId: string): Promise<void> {
+    try {
+      requestExamples.value.set(endpointId, await api.listRequestExamples(endpointId))
+    } catch (err) {
+      console.error('[workspace.loadRequestExamples]', err)
+      requestExamples.value.set(endpointId, [])
+    }
+  }
+
+  /** 把当前请求保存为用例快照（request 深拷贝落库，保存后置顶缓存）。 */
+  async function saveRequestAsExample(
+    endpointId: string,
+    name: string,
+    request: Endpoint['request'],
+  ): Promise<boolean> {
+    const trimmed = name.trim()
+    if (!trimmed) {
+      toast.warning('用例名称不能为空')
+      return false
+    }
+    const now = new Date().toISOString()
+    const example: RequestExample = {
+      id: crypto.randomUUID(),
+      endpoint_id: endpointId,
+      name: trimmed,
+      request: JSON.parse(JSON.stringify(request)),
+      created_at: now,
+      updated_at: now,
+    }
+    try {
+      const saved = await api.saveRequestExample(example)
+      const list = requestExamples.value.get(endpointId) ?? []
+      list.unshift(saved)
+      requestExamples.value.set(endpointId, list)
+      toast.success(`请求用例已保存：${saved.name}`)
+      return true
+    } catch (err) {
+      toast.error('保存请求用例失败', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+      return false
+    }
+  }
+
+  /** 把请求用例回填到草稿（request 深拷贝 + 同步 active_tab 智能默认）。 */
+  function applyRequestExample(endpointId: string, example: RequestExample): void {
+    const draft = drafts.value.get(endpointId)
+    if (!draft) return
+    draft.request = JSON.parse(JSON.stringify(example.request)) as Endpoint['request']
+  }
+
+  async function deleteRequestExample(endpointId: string, exampleId: string): Promise<void> {
+    try {
+      await api.deleteRequestExample(exampleId)
+    } catch (err) {
+      toast.error('删除请求用例失败', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+      return
+    }
+    const list = (requestExamples.value.get(endpointId) ?? []).filter((x) => x.id !== exampleId)
+    requestExamples.value.set(endpointId, list)
+  }
+
+  /** 接口页二级导航：调试 | 设计 | 文档预览 | 测试用例 | Mock。 */
+  const activeView = ref<'debug' | 'design' | 'docs' | 'cases' | 'mock'>('debug')
+  function setActiveView(view: 'debug' | 'design' | 'docs' | 'cases' | 'mock'): void {
+    activeView.value = view
+  }
+
+  /** 测试用例（按接口 id 缓存，openEndpoint 时懒加载）。 */
+  const testCases = ref<Map<string, TestCase[]>>(new Map())
+
+  /** 最近一次运行结果元信息（状态码 / 耗时），驱动列表「运行结果」列与抽屉联动。 */
+  const caseRunMeta = ref<Map<string, { status: number; durationMs: number }>>(new Map())
+
+  /** 当前接口的用例数（导航 Tab 徽标 N）。 */
+  const testCaseCount = computed(() => {
+    const id = activeTabId.value
+    return id ? (testCases.value.get(id)?.length ?? 0) : 0
+  })
+
+  /** 加载接口的测试用例（懒加载 + 缓存，失败时按空处理）。 */
+  async function loadTestCases(endpointId: string): Promise<void> {
+    try {
+      testCases.value.set(endpointId, (await api.listTestCases(endpointId)) ?? [])
+    } catch (err) {
+      console.error('[workspace.loadTestCases]', err)
+      testCases.value.set(endpointId, [])
+    }
+  }
+
+  /** 保存测试用例（新建），返回是否成功。 */
+  async function saveTestCase(
+    endpointId: string,
+    name: string,
+    category: TestCaseCategory,
+    request: Endpoint['request'],
+    path: string,
+    method: HttpMethod,
+  ): Promise<boolean> {
+    const trimmed = name.trim()
+    if (!trimmed) {
+      toast.warning('用例名称不能为空')
+      return false
+    }
+    const snap = snapshotRequest(request)
+    const testCase: TestCase = {
+      id: crypto.randomUUID(),
+      request_id: endpointId,
+      name: trimmed,
+      category,
+      method,
+      url_path: path,
+      params: snap.params,
+      headers: snap.headers,
+      body_type: snap.body_type,
+      body_content: snap.body_content,
+      last_run_status: 'Untested',
+      created_at: new Date().toISOString(),
+    }
+    try {
+      const saved = await api.saveTestCase(testCase)
+      const list = testCases.value.get(endpointId) ?? []
+      list.push(saved)
+      testCases.value.set(endpointId, list)
+      toast.success(`测试用例已保存：${saved.name}`)
+      return true
+    } catch (err) {
+      toast.error('保存测试用例失败', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+      return false
+    }
+  }
+
+  /** 更新用例名称与分组（编辑）。 */
+  async function renameTestCase(endpointId: string, caseId: string, name: string, category: TestCaseCategory): Promise<boolean> {
+    const trimmed = name.trim()
+    if (!trimmed) {
+      toast.warning('用例名称不能为空')
+      return false
+    }
+    try {
+      await api.updateTestCaseMeta(caseId, trimmed, category)
+      const list = testCases.value.get(endpointId)
+      const target = list?.find((c) => c.id === caseId)
+      if (target) {
+        target.name = trimmed
+        target.category = category
+      }
+      return true
+    } catch (err) {
+      toast.error('更新用例失败', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+      return false
+    }
+  }
+
+  /** 克隆用例（另存为「名称 副本」，保留原快照）。 */
+  async function cloneTestCase(endpointId: string, source: TestCase): Promise<boolean> {
+    const testCase: TestCase = {
+      ...JSON.parse(JSON.stringify(source)) as TestCase,
+      id: crypto.randomUUID(),
+      name: `${source.name} 副本`,
+      last_run_status: 'Untested',
+      created_at: new Date().toISOString(),
+    }
+    try {
+      const saved = await api.saveTestCase(testCase)
+      const list = testCases.value.get(endpointId) ?? []
+      list.push(saved)
+      testCases.value.set(endpointId, list)
+      return true
+    } catch (err) {
+      toast.error('克隆用例失败', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+      return false
+    }
+  }
+
+  /** 删除测试用例。 */
+  async function removeTestCase(endpointId: string, caseId: string): Promise<void> {
+    try {
+      await api.deleteTestCase(caseId)
+    } catch (err) {
+      toast.error('删除用例失败', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+      return
+    }
+    const list = (testCases.value.get(endpointId) ?? []).filter((c) => c.id !== caseId)
+    testCases.value.set(endpointId, list)
+  }
+
+  /** 用例快照 → 回填草稿（method / path / params / headers / body），不切换视图。 */
+  function applyTestCaseToDraft(endpointId: string, testCase: TestCase): void {
+    const draft = drafts.value.get(endpointId)
+    if (!draft) return
+    draft.method = testCase.method
+    draft.path = testCase.url_path
+    applyCaseToRequest(draft.request, testCase)
+    if (!draft.request.active_tab) {
+      draft.request.active_tab = ['POST', 'PUT', 'PATCH'].includes(testCase.method) ? 'body' : 'params'
+    }
+  }
+
+  /** 「在调试页打开」：回填草稿并显式切换到调试页。 */
+  function openTestCaseInDebug(endpointId: string, testCase: TestCase): void {
+    applyTestCaseToDraft(endpointId, testCase)
+    activeView.value = 'debug'
+  }
+
+  /** 运行单个用例：拼 URL 执行请求，回写运行状态。返回响应或 null。 */
+  async function runTestCase(endpointId: string, testCase: TestCase, environmentId: string | null): Promise<ExecuteResponse | null> {
+    try {
+      const isAbs = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(testCase.url_path)
+      const path = testCase.url_path.startsWith('/') ? testCase.url_path : `/${testCase.url_path}`
+      const url = isAbs ? testCase.url_path : `${urlDomain.value}${path}`
+      const spec = {
+        params: testCase.params,
+        headers: testCase.headers,
+        path_variables: [] as KeyValue[],
+        auth: { type: 'none' } as AuthSpec,
+        body: restoreBody(testCase.body_type, testCase.body_content),
+        active_tab: null,
+        timeout_ms: 30_000,
+        follow_redirects: true,
+        tests: null,
+      }
+      const response = await api.executeRequest({
+        url,
+        method: testCase.method,
+        spec,
+        environment_id: environmentId,
+        project_id: project.value?.id ?? null,
+        endpoint_id: endpointId,
+        request_id: null,
+      })
+      const status: TestCaseStatus = response.status >= 200 && response.status < 400 ? 'Success' : 'Failed'
+      caseRunMeta.value.set(testCase.id, {
+        status: response.status,
+        durationMs: response.duration_ms,
+      })
+      void updateCaseStatusLocally(endpointId, testCase.id, status)
+      return response
+    } catch (err) {
+      void updateCaseStatusLocally(endpointId, testCase.id, 'Failed')
+      throw err
+    }
+  }
+
+  /** 回写用例运行状态（本地 + 后端）。 */
+  async function updateCaseStatusLocally(endpointId: string, caseId: string, status: TestCaseStatus): Promise<void> {
+    const list = testCases.value.get(endpointId)
+    const target = list?.find((c) => c.id === caseId)
+    if (target) target.last_run_status = status
+    try {
+      await api.updateTestCaseStatus(caseId, status)
+    } catch {
+      /* 状态回写失败不影响主流程 */
+    }
+  }
+
+  /** 抽屉「保存修改」：更新用例完整请求内容（本地 + 后端）。 */
+  async function updateTestCaseContent(
+    endpointId: string,
+    caseId: string,
+    payload: {
+      method: HttpMethod
+      urlPath: string
+      params: KeyValue[]
+      headers: KeyValue[]
+      bodyType: string
+      bodyContent: string
+    },
+  ): Promise<void> {
+    await api.updateTestCaseContent(caseId, payload)
+    const list = testCases.value.get(endpointId)
+    const target = list?.find((c) => c.id === caseId)
+    if (target) {
+      target.method = payload.method
+      target.url_path = payload.urlPath
+      target.params = payload.params
+      target.headers = payload.headers
+      target.body_type = payload.bodyType
+      target.body_content = payload.bodyContent
+    }
+  }
+
+  /** 顺序运行接口的全部用例。返回 {total, success}。 */
+  async function runAllTestCases(endpointId: string): Promise<{ total: number; success: number }> {
+    const cases = testCases.value.get(endpointId) ?? []
+    let success = 0
+    for (const c of cases) {
+      try {
+        const res = await runTestCase(endpointId, c, activeEnvId.value)
+        if (res && res.status >= 200 && res.status < 400) success += 1
+      } catch {
+        /* 单个失败继续后续 */
+      }
+    }
+    return { total: cases.length, success }
   }
 
   /** 打开「新建接口」草稿标签页（未持久化，保存时生成 id）；默认标题「未命名接口」，创建后自动聚焦全选便于输入。 */
@@ -708,6 +1030,26 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     loadExamples,
     saveAsExample,
     removeExample,
+    requestExamples,
+    loadRequestExamples,
+    saveRequestAsExample,
+    applyRequestExample,
+    deleteRequestExample,
+    activeView,
+    setActiveView,
+    testCases,
+    caseRunMeta,
+    testCaseCount,
+    loadTestCases,
+    saveTestCase,
+    renameTestCase,
+    cloneTestCase,
+    removeTestCase,
+    applyTestCaseToDraft,
+    openTestCaseInDebug,
+    updateTestCaseContent,
+    runTestCase,
+    runAllTestCases,
     histories,
     historyOnlyCurrent,
     loadHistories,

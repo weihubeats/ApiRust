@@ -140,6 +140,12 @@ pub mod plugin {
                 commands::delete_mock_rule,
                 commands::get_http_proxy,
                 commands::set_http_proxy,
+                commands::list_test_cases,
+                commands::save_test_case,
+                commands::update_test_case_meta,
+                commands::update_test_case_content,
+                commands::update_test_case_status,
+                commands::delete_test_case,
             ])
             .build()
     }

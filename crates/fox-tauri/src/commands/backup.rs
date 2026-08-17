@@ -11,7 +11,7 @@ use fox_storage::repository as repo;
 use crate::error::CommandResult;
 use crate::state::AppState;
 
-/// 导出项目为备份 JSON 字符串（含项目 + 文件夹 + 接口 + 环境 + Mock 规则 + 响应示例）。
+/// 导出项目为备份 JSON 字符串（含项目 + 文件夹 + 接口 + 环境 + Mock 规则 + 响应示例 + 请求用例）。
 #[tauri::command(rename_all = "camelCase")]
 pub async fn backup_export(state: State<'_, AppState>, project_id: Uuid) -> CommandResult<String> {
     let project = repo::get_project(&state.db, project_id).await?;
@@ -21,12 +21,16 @@ pub async fn backup_export(state: State<'_, AppState>, project_id: Uuid) -> Comm
     let mock_rules = repo::list_mock_rules(&state.db, project_id).await?;
 
     let mut response_examples = Vec::new();
+    let mut request_examples = Vec::new();
     for ep in endpoints
         .iter()
         .filter(|e| e.status != EndpointStatus::Deprecated)
     {
         if let Ok(list) = repo::list_response_examples(&state.db, ep.id).await {
             response_examples.extend(list);
+        }
+        if let Ok(list) = repo::list_request_examples(&state.db, ep.id).await {
+            request_examples.extend(list);
         }
     }
 
@@ -37,6 +41,7 @@ pub async fn backup_export(state: State<'_, AppState>, project_id: Uuid) -> Comm
         &environments,
         &mock_rules,
         &response_examples,
+        &request_examples,
     );
     file.serialize().map_err(Into::into)
 }
@@ -67,6 +72,9 @@ pub async fn backup_restore(
     for example in &restored.response_examples {
         repo::save_response_example(&state.db, example).await?;
     }
+    for example in &restored.request_examples {
+        repo::create_request_example(&state.db, example).await?;
+    }
 
     Ok(serde_json::json!({
         "id": restored.project.id,
@@ -76,5 +84,6 @@ pub async fn backup_restore(
         "environments": restored.environments.len(),
         "mock_rules": restored.mock_rules.len(),
         "response_examples": restored.response_examples.len(),
+        "request_examples": restored.request_examples.len(),
     }))
 }

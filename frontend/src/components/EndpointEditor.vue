@@ -23,18 +23,26 @@ import AuthPanel from './AuthPanel.vue'
 import BodyPanel from './BodyPanel.vue'
 import CodeExportMenu from './CodeExportMenu.vue'
 import CodePanel from './CodePanel.vue'
+import DesignPanel from './DesignPanel.vue'
+import DocsPanel from './DocsPanel.vue'
 import EnvironmentManager from './EnvironmentManager.vue'
 import HeadersPanel from './HeadersPanel.vue'
+import MockPanel from './MockPanel.vue'
+import MockRuleDialog from './MockRuleDialog.vue'
 import CustomSelect from './ui/CustomSelect.vue'
 import EmptyState from './ui/EmptyState.vue'
 import Icon from './ui/Icon.vue'
 import IconButton from './ui/IconButton.vue'
+import Menu, { type MenuItem } from './ui/Menu.vue'
 import Modal from './ui/Modal.vue'
 import ParamsPanel from './ParamsPanel.vue'
 import Popconfirm from './ui/Popconfirm.vue'
 import ResponsePanel from './ResponsePanel.vue'
+import RequestExamplesPanel from './RequestExamplesPanel.vue'
 import ScriptsPanel from './ScriptsPanel.vue'
 import Tabs from './ui/Tabs.vue'
+import TestCaseModal from './TestCaseModal.vue'
+import TestCasesPanel from './TestCasesPanel.vue'
 import TestsPanel from './TestsPanel.vue'
 import Tooltip from './ui/Tooltip.vue'
 import ToolsDrawer from './ToolsDrawer.vue'
@@ -43,6 +51,7 @@ import type {
   ExecuteResponse,
   HttpMethod,
   ResponseExample,
+  TestCaseCategory,
 } from '../types/foxApi'
 
 const store = useWorkspaceStore()
@@ -61,7 +70,7 @@ const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 
 const METHOD_OPTIONS = METHODS.map((m) => ({ value: m, label: m }))
 
 // ---------- 配置 Tab 系统 ----------
-type ConfigTabKey = 'params' | 'auth' | 'headers' | 'body' | 'scripts' | 'tests' | 'code'
+type ConfigTabKey = 'params' | 'auth' | 'headers' | 'body' | 'scripts' | 'tests' | 'examples' | 'code'
 
 /** Method 系智能默认：POST / PUT / PATCH → Body；其余 → Params。 */
 
@@ -104,6 +113,7 @@ const configTabs = computed<TabItem[]>(() => {
     },
     { key: 'scripts', label: 'Scripts' },
     { key: 'tests', label: 'Tests', count: d.request.tests ? 1 : undefined },
+    { key: 'examples', label: 'Examples' },
     { key: 'code', label: 'Code' },
   ]
 })
@@ -181,6 +191,7 @@ const chipClass = computed(() => {
 
 /** 点击基础 URL 标签 → 打开环境管理。 */
 const showEnvManager = ref(false)
+const showMockRules = ref(false)
 
 /** Base URL 紧凑标签：直接展示解析后的裸域名（无域名时退回环境名），一眼可见实际发送目标。 */
 const envBadgeLabel = computed(() =>
@@ -350,6 +361,54 @@ async function confirmName(): Promise<void> {
   draft.value.folder_id = pendingFolderId.value || null
   showNameDialog.value = false
   await store.saveActiveDraft()
+}
+
+// ---------- 二级导航 + 保存为用例 ----------
+const SUB_NAV: { key: 'debug' | 'design' | 'docs' | 'cases' | 'mock'; label: string }[] = [
+  { key: 'debug', label: '调试' },
+  { key: 'design', label: '设计' },
+  { key: 'docs', label: '文档预览' },
+  { key: 'cases', label: '测试用例' },
+  { key: 'mock', label: 'Mock' },
+]
+
+/** 切换接口时回到「调试」页。 */
+watch(
+  () => draft.value?.id,
+  () => store.setActiveView('debug'),
+  { immediate: true },
+)
+
+const saveMenuEl = ref<InstanceType<typeof Menu> | null>(null)
+
+function openSaveMenu(event: MouseEvent): void {
+  saveMenuEl.value?.openAt(event.currentTarget as HTMLElement, [
+    { key: 'save-case', label: '保存为用例', icon: 'list' },
+  ])
+}
+
+function onSaveMenuSelect(item: MenuItem): void {
+  if (item.key === 'save-case') openSaveCaseModal()
+}
+
+const showTestCaseModal = ref(false)
+const pendingCaseName = ref('')
+
+/** 保存为用例：提取当前请求快照（URL / Params / Headers / Body）存入 test_cases。 */
+function openSaveCaseModal(): void {
+  const d = draft.value
+  if (!d) return
+  pendingCaseName.value = d.name !== '未命名接口' ? `${d.method} ${d.path}` : ''
+  showTestCaseModal.value = true
+}
+
+async function onSaveCaseSubmit(payload: {
+  name: string
+  category: TestCaseCategory
+}): Promise<void> {
+  const d = draft.value
+  if (!d) return
+  await store.saveTestCase(d.id, payload.name, payload.category, d.request, d.path, d.method)
 }
 
 // ---------- 请求区 / 响应区高度分割（Splitter） ----------
@@ -529,7 +588,25 @@ onUnmounted(() => {
       </span>
       <span class="breadcrumb-spacer"></span>
     </div>
-    <div class="editor-row">
+
+    <!-- 二级导航：调试 | 设计 | 文档预览 | 测试用例 (N) | Mock -->
+    <div class="sub-nav" role="tablist">
+      <button
+        v-for="nav in SUB_NAV"
+        :key="nav.key"
+        class="sub-nav-item"
+        :class="{ active: store.activeView === nav.key }"
+        type="button"
+        role="tab"
+        @click="store.setActiveView(nav.key)"
+      >
+        {{ nav.label }}
+        <span v-if="nav.key === 'cases'" class="sub-nav-badge">{{ store.testCaseCount }}</span>
+      </button>
+    </div>
+
+    <template v-if="store.activeView === 'debug'">
+      <div class="editor-row">
       <div class="request-bar">
         <CustomSelect
           class="method-select"
@@ -594,9 +671,19 @@ onUnmounted(() => {
           <Icon name="gauge" :size="13" /> 工具
         </button>
         <CodeExportMenu :draft="draft" :url="requestUrl" />
-        <button class="rf-btn" type="button" @click="save">
-          <Icon name="save" :size="14" /> 保存 (⌘S)
-        </button>
+        <div class="save-group">
+          <button class="rf-btn save-main" type="button" @click="save">
+            <Icon name="save" :size="14" /> 保存 (⌘S)
+          </button>
+          <button
+            class="rf-btn save-arrow"
+            type="button"
+            title="更多保存选项"
+            @click="openSaveMenu($event)"
+          >
+            <Icon name="chevron-down" :size="12" />
+          </button>
+        </div>
       </div>
     </div>
 
@@ -612,6 +699,7 @@ onUnmounted(() => {
       <BodyPanel v-else-if="activeTab === 'body'" :draft="draft" />
       <ScriptsPanel v-else-if="activeTab === 'scripts'" :draft="draft" />
       <TestsPanel v-else-if="activeTab === 'tests'" :draft="draft" :url="requestUrl" />
+      <RequestExamplesPanel v-else-if="activeTab === 'examples'" :draft="draft" />
       <CodePanel v-else :draft="draft" :url="requestUrl" />
     </div>
 
@@ -666,6 +754,15 @@ onUnmounted(() => {
       </div>
       <pre v-if="viewingExample" class="example-body">{{ prettyBody(viewingExample.body) }}</pre>
     </div>
+    </template>
+    <DesignPanel v-else-if="store.activeView === 'design'" :draft="draft" />
+    <DocsPanel v-else-if="store.activeView === 'docs'" :draft="draft" />
+    <TestCasesPanel v-else-if="store.activeView === 'cases'" :draft="draft" />
+    <MockPanel
+      v-else-if="store.activeView === 'mock'"
+      :draft="draft"
+      @open-manager="showMockRules = true"
+    />
   </div>
   <div v-else class="editor-empty">
     <p>从左侧选择接口开始编辑</p>
@@ -723,6 +820,18 @@ onUnmounted(() => {
   <ToolsDrawer :open="showTools" :draft="draft" :url="requestUrl" @close="showTools = false" />
 
   <EnvironmentManager v-model:open="showEnvManager" />
+
+  <TestCaseModal
+    :open="showTestCaseModal"
+    title="保存为测试用例"
+    :name="pendingCaseName"
+    @update:open="showTestCaseModal = $event"
+    @submit="onSaveCaseSubmit"
+  />
+
+  <MockRuleDialog v-if="showMockRules" @close="showMockRules = false" />
+
+  <Menu ref="saveMenuEl" @select="onSaveMenuSelect" />
 </template>
 
 <style scoped>
@@ -739,6 +848,68 @@ onUnmounted(() => {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.sub-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+  align-self: flex-start;
+}
+
+.sub-nav-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+.sub-nav-item:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+.sub-nav-item.active {
+  color: var(--text-1);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+.sub-nav-badge {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--accent);
+  background: var(--accent-tint, rgba(168, 85, 247, 0.16));
+}
+
+.save-group {
+  display: flex;
+  align-items: stretch;
+}
+.save-main {
+  border-radius: 7px 0 0 7px;
+}
+.save-arrow {
+  border-radius: 0 7px 7px 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  padding: 0 7px;
 }
 
 .method-select {

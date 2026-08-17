@@ -10,7 +10,10 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use fox_backup::{build_backup, restore_backup, BackupFile};
-use fox_core::model::{BodySpec, HttpMethod, KeyValue, RequestHistory, ResponseExample, TestRun};
+use fox_core::model::{
+    BodySpec, HttpMethod, KeyValue, RequestExample, RequestHistory, ResponseExample, TestCase,
+    TestCaseStatus, TestRun,
+};
 use fox_core::variable::{resolve_variables_with, ResolveOptions};
 use fox_http::client::send_request;
 use fox_mock::server::{self, MockDefinition, MockStore};
@@ -181,6 +184,43 @@ async fn openapi_roundtrip_and_backup() {
         .await
         .unwrap();
 
+    // ---- 请求用例：保存快照 → 列表（最新在前）→ 删除 ----
+    let mut req_example_request = ep.request.clone();
+    req_example_request.params.push(KeyValue::new("page", "2"));
+    let req_example = RequestExample {
+        id: uuid::Uuid::new_v4(),
+        endpoint_id: ep.id,
+        name: "分页查询".into(),
+        request: req_example_request,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    repo::create_request_example(&db, &req_example)
+        .await
+        .unwrap();
+    let mut req_example_request_2 = ep.request.clone();
+    req_example_request_2.headers.push(KeyValue::new("X-Trace", "1"));
+    let req_example_2 = RequestExample {
+        id: uuid::Uuid::new_v4(),
+        endpoint_id: ep.id,
+        name: "带追踪头".into(),
+        request: req_example_request_2,
+        created_at: Utc::now() + chrono::Duration::seconds(5),
+        updated_at: Utc::now() + chrono::Duration::seconds(5),
+    };
+    repo::create_request_example(&db, &req_example_2)
+        .await
+        .unwrap();
+    let req_examples = repo::list_request_examples(&db, ep.id).await.unwrap();
+    assert_eq!(req_examples.len(), 2);
+    assert_eq!(req_examples[0].name, "带追踪头", "最新保存的应排在最前");
+    assert_eq!(req_examples[0].request.headers[0].key, "X-Trace");
+    assert_eq!(req_examples[1].request.params[1].value, "2", "请求快照应完整保留");
+    repo::delete_request_example(&db, req_example.id).await.unwrap();
+    let req_examples = repo::list_request_examples(&db, ep.id).await.unwrap();
+    assert_eq!(req_examples.len(), 1);
+    assert_eq!(req_examples[0].name, "带追踪头");
+
     // ---- 导出 → 导入 → 验证数据一致 ----
     let eps = repo::list_endpoints(&db, project.id).await.unwrap();
     let mut examples_map: HashMap<uuid::Uuid, Vec<ResponseExample>> = HashMap::new();
@@ -206,8 +246,19 @@ async fn openapi_roundtrip_and_backup() {
     let envs = repo::list_environments(&db, project.id).await.unwrap();
     let rules = repo::list_mock_rules(&db, project.id).await.unwrap();
     let all_examples: Vec<ResponseExample> = examples_map.values().flatten().cloned().collect();
+    let all_req_examples: Vec<RequestExample> = repo::list_request_examples(&db, ep.id)
+        .await
+        .unwrap();
 
-    let file = build_backup(&project, &folders, &eps, &envs, &rules, &all_examples);
+    let file = build_backup(
+        &project,
+        &folders,
+        &eps,
+        &envs,
+        &rules,
+        &all_examples,
+        &all_req_examples,
+    );
     let text = file.serialize().expect("序列化备份");
     assert!(text.contains("rustfox-project-backup"));
 
@@ -218,6 +269,7 @@ async fn openapi_roundtrip_and_backup() {
     assert_eq!(restored.folders.len(), 1);
     assert_eq!(restored.endpoints.len(), 1);
     assert_eq!(restored.response_examples.len(), 1);
+    assert_eq!(restored.request_examples.len(), 1, "请求用例应随备份恢复");
 
     // 恢复链路可直接落库并运行（验证引用关系正确）。
     repo::save_project(&db, &restored.project).await.unwrap();
@@ -351,4 +403,114 @@ async fn curl_import_roundtrip_keeps_url_headers_body() {
     assert_eq!(relisted.len(), 1, "upsert 不应产生新行");
     assert_eq!(relisted[0].path, "/posts/1", "upsert 应更新路径");
     assert_eq!(relisted[0].request.headers.len(), 2, "upsert 应更新请求头");
+}
+
+// ---------- 链路 6：测试用例管理（Apifox 风格 CRUD + 运行状态 + 级联删除） ----------
+
+#[tokio::test]
+async fn test_case_management_flow() {
+    use fox_core::model::{Endpoint, RequestSpec};
+    use uuid::Uuid;
+
+    let db = setup_pool().await;
+    let project = repo::create_project(&db, "用例管理", "测试用例链路")
+        .await
+        .unwrap();
+    let new_endpoint: Endpoint = Endpoint {
+            id: Uuid::new_v4(),
+            project_id: project.id,
+            folder_id: None,
+            name: "资金调拨".into(),
+            method: HttpMethod::POST,
+            path: "/funds/transfer".into(),
+            description: String::new(),
+            status: Default::default(),
+            sort_order: 0,
+            request: RequestSpec {
+                params: vec![KeyValue::new("env".to_string(), "prod".to_string())],
+                headers: vec![],
+                path_variables: vec![],
+                auth: Default::default(),
+                body: BodySpec::Json {
+                    raw: "{\"amount\":100}".into(),
+                },
+                active_tab: None,
+                timeout_ms: 30000,
+                follow_redirects: true,
+                tests: None,
+            },
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+    };
+    repo::save_endpoint(&db, &new_endpoint).await.expect("落库接口");
+    let endpoint = repo::list_endpoints(&db, project.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("应能查到接口");
+
+    let now = Utc::now();
+    let case = TestCase {
+        id: Uuid::new_v4(),
+        request_id: endpoint.id,
+        name: "正向-内部划转-SGB".into(),
+        category: "正向".into(),
+        method: HttpMethod::POST,
+        url_path: "/funds/transfer".into(),
+        params: vec![KeyValue::new("env".to_string(), "prod".to_string())],
+        headers: vec![],
+        body_type: "json".into(),
+        body_content: "{\"amount\":100}".into(),
+        last_run_status: TestCaseStatus::Untested,
+        created_at: now,
+    };
+
+    let created = repo::create_test_case(&db, &case).await.expect("创建用例");
+    assert_eq!(created.name, case.name);
+    assert_eq!(created.category, "正向");
+
+    let cases = repo::list_test_cases(&db, endpoint.id).await.unwrap();
+    assert_eq!(cases.len(), 1);
+
+    // 更新元信息（改名 + 换分组）与运行状态。
+    repo::update_test_case_meta(&db, case.id, "负向-金额超限".into(), "边界值".into())
+        .await
+        .unwrap();
+    repo::update_test_case_status(&db, case.id, TestCaseStatus::Success)
+        .await
+        .unwrap();
+    let updated = repo::list_test_cases(&db, endpoint.id).await.unwrap();
+    assert_eq!(updated[0].name, "负向-金额超限");
+    assert_eq!(updated[0].category, "边界值");
+    assert_eq!(updated[0].last_run_status, TestCaseStatus::Success);
+
+    // 删除用例。
+    repo::delete_test_case(&db, case.id).await.unwrap();
+    assert!(repo::list_test_cases(&db, endpoint.id).await.unwrap().is_empty());
+
+    // 级联删除：接口删除后用例随之删除。
+    let case2 = TestCase {
+        id: Uuid::new_v4(),
+        request_id: endpoint.id,
+        name: "级联验证".into(),
+        category: "其他".into(),
+        method: HttpMethod::POST,
+        url_path: "/funds/transfer".into(),
+        params: vec![],
+        headers: vec![],
+        body_type: "none".into(),
+        body_content: String::new(),
+        last_run_status: TestCaseStatus::Failed,
+        created_at: Utc::now(),
+    };
+    repo::create_test_case(&db, &case2).await.unwrap();
+    repo::delete_endpoint(&db, endpoint.id).await.unwrap();
+    assert!(
+        repo::list_test_cases(&db, endpoint.id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "接口删除后用例应级联删除"
+    );
 }

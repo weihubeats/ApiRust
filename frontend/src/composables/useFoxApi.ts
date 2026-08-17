@@ -40,9 +40,12 @@ import type {
   MockRule,
   OAuth2Token,
   Project,
+  RequestExample,
   RequestHistory,
   RequestSpec,
   ResponseExample,
+  TestCase,
+  TestCaseStatus,
 } from '../types/foxApi'
 
 /** 插件命令统一前缀：`plugin:{插件名}|{命令名}`。 */
@@ -200,6 +203,55 @@ export function useFoxApi() {
   const deleteExample = (exampleId: string) =>
     run(() => call<void>('delete_example', { exampleId }))
 
+  // ---------- 请求用例 ----------
+  const listRequestExamples = (endpointId: string) =>
+    run(() => call<RequestExample[]>('list_request_examples', { endpointId }))
+
+  const saveRequestExample = (example: RequestExample) =>
+    run(() => call<RequestExample>('save_request_example', { example }))
+
+  const deleteRequestExample = (exampleId: string) =>
+    run(() => call<void>('delete_request_example', { exampleId }))
+
+  // ---------- 测试用例 ----------
+  const listTestCases = (requestId: string) =>
+    run(() => call<TestCase[]>('list_test_cases', { requestId }))
+
+  const saveTestCase = (testCase: TestCase) =>
+    run(() => call<TestCase>('save_test_case', { testCase }))
+
+  const updateTestCaseMeta = (caseId: string, name: string, category: string) =>
+    run(() => call<void>('update_test_case_meta', { caseId, name, category }))
+
+  const updateTestCaseStatus = (caseId: string, status: TestCaseStatus) =>
+    run(() => call<void>('update_test_case_status', { caseId, status }))
+
+  const updateTestCaseContent = (
+    caseId: string,
+    payload: {
+      method: HttpMethod
+      urlPath: string
+      params: KeyValue[]
+      headers: KeyValue[]
+      bodyType: string
+      bodyContent: string
+    },
+  ) =>
+    run(() =>
+      call<void>('update_test_case_content', {
+        caseId,
+        method: payload.method,
+        urlPath: payload.urlPath,
+        params: payload.params,
+        headers: payload.headers,
+        bodyType: payload.bodyType,
+        bodyContent: payload.bodyContent,
+      }),
+    )
+
+  const deleteTestCase = (caseId: string) =>
+    run(() => call<void>('delete_test_case', { caseId }))
+
   // ---------- OAuth2 ----------
   const oauthAuthorize = (auth: AuthSpec) =>
     run(() => call<OAuth2Token>('oauth_authorize', { auth }))
@@ -303,6 +355,15 @@ export function useFoxApi() {
     listExamples,
     saveExample,
     deleteExample,
+    listRequestExamples,
+    saveRequestExample,
+    deleteRequestExample,
+    listTestCases,
+    saveTestCase,
+    updateTestCaseMeta,
+    updateTestCaseStatus,
+    updateTestCaseContent,
+    deleteTestCase,
     oauthAuthorize,
     oauthAccessToken,
     codegenRender,

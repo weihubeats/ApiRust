@@ -1,7 +1,7 @@
 {
   "name": "rustfox",
   "private": true,
-  "version": "0.0.5",
+  "version": "0.0.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,8 +13,14 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/lint": "^6.9.7",
     "@fontsource/inter": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
+    "@lezer/highlight": "^1.2.3",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-process": "^2.3.1",

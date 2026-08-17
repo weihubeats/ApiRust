@@ -26,6 +26,8 @@ const props = withDefaults(
     valuePlaceholder?: string
     descriptionPlaceholder?: string
     disabled?: boolean
+    /** 自定义列宽（key / value / description 百分比）。缺省时使用 flex 自适应布局。 */
+    columnWidths?: [string, string, string]
   }>(),
   {
     showEnable: true,
@@ -119,15 +121,29 @@ function onKeydown(event: KeyboardEvent, i: number): void {
     if (!el.value) el.select()
   })
 }
+/** grid 模式：启用复选框 + 操作列固定宽，key/value/desc 按百分比精确分配。 */
+function gridTemplate(): string | undefined {
+  if (!props.columnWidths) return undefined
+  const [k, v, d] = props.columnWidths
+  const enable = props.showEnable ? '36px' : '0px'
+  const desc = props.showDescription ? d : '0px'
+  const actions = '32px'
+  return `${enable} ${k} ${v} ${desc} ${actions}`
+}
+
+function gridStyle(): Record<string, string> | undefined {
+  const cols = gridTemplate()
+  return cols ? { gridTemplateColumns: cols, display: 'grid' } : undefined
+}
 </script>
 
 <template>
   <div class="kvt" :class="{ disabled }">
-    <div class="kvt-head">
+    <div class="kvt-head" :style="gridStyle()">
       <span v-if="showEnable" class="kvt-col kvt-enable"></span>
-      <span class="kvt-col kvt-key rf-mono">Key</span>
-      <span class="kvt-col kvt-value rf-mono">Value</span>
-      <span v-if="showDescription" class="kvt-col kvt-desc rf-mono">Description</span>
+      <span class="kvt-col kvt-key rf-mono" :style="gridStyle() ? { width: '100%' } : undefined">Key</span>
+      <span class="kvt-col kvt-value rf-mono" :style="gridStyle() ? { width: '100%' } : undefined">Value</span>
+      <span v-if="showDescription" class="kvt-col kvt-desc rf-mono" :style="gridStyle() ? { width: '100%' } : undefined">Description</span>
       <span class="kvt-col kvt-actions"></span>
     </div>
 
@@ -136,6 +152,7 @@ function onKeydown(event: KeyboardEvent, i: number): void {
       :key="i"
       class="kvt-row"
       :class="{ off: showEnable && row.enabled === false, ghost: isGhost(row) }"
+      :style="gridStyle()"
     >
       <span v-if="showEnable" class="kvt-col kvt-enable">
         <input
@@ -149,6 +166,7 @@ function onKeydown(event: KeyboardEvent, i: number): void {
       <input
         v-model="row.key"
         class="kvt-input kvt-col kvt-key rf-mono"
+        :style="gridStyle() ? { width: '100%' } : undefined"
         :placeholder="keyPlaceholder"
         :disabled="disabled"
         spellcheck="false"
@@ -160,6 +178,7 @@ function onKeydown(event: KeyboardEvent, i: number): void {
       <input
         v-model="row.value"
         class="kvt-input kvt-col kvt-value rf-mono"
+        :style="gridStyle() ? { width: '100%' } : undefined"
         :placeholder="valuePlaceholder"
         :disabled="disabled"
         spellcheck="false"
@@ -171,6 +190,7 @@ function onKeydown(event: KeyboardEvent, i: number): void {
         v-if="showDescription"
         v-model="row.description"
         class="kvt-input kvt-col kvt-desc"
+        :style="gridStyle() ? { width: '100%' } : undefined"
         :placeholder="descriptionPlaceholder"
         :disabled="disabled"
         spellcheck="false"
@@ -217,6 +237,14 @@ function onKeydown(event: KeyboardEvent, i: number): void {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-3);
+}
+
+.kvt-row {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  border-bottom: 1px solid var(--border);
+  transition: background var(--dur) var(--ease);
 }
 
 .kvt-col {

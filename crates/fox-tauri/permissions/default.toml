@@ -51,4 +51,13 @@ permissions = [
     "allow-delete-mock-rule",
     "allow-get-http-proxy",
     "allow-set-http-proxy",
+    "allow-list-request-examples",
+    "allow-save-request-example",
+    "allow-delete-request-example",
+    "allow-list-test-cases",
+    "allow-save-test-case",
+    "allow-update-test-case-meta",
+    "allow-update-test-case-content",
+    "allow-update-test-case-status",
+    "allow-delete-test-case",
 ]

@@ -244,6 +244,40 @@ export interface ResponseExample {
   updated_at: string
 }
 
+/** 请求用例（Rust `RequestExample`）：接口请求快照，可一键回填编辑器。 */
+export interface RequestExample {
+  id: string
+  endpoint_id: string
+  name: string
+  request: RequestSpec
+  created_at: string
+  updated_at: string
+}
+
+/** 测试用例分组（与后端 CATEGORIES 一致）。 */
+export type TestCaseCategory = '正向' | '负向' | '边界值' | '安全性' | '其他'
+
+/** 测试用例运行状态（Rust `TestCaseStatus`）。 */
+export type TestCaseStatus = 'Success' | 'Failed' | 'Untested'
+
+/** 测试用例（Rust `TestCase`，fox-tauri `list_test_cases` 等返回）。 */
+export interface TestCase {
+  id: string
+  /** 关联的主接口 ID（endpoints.id）。 */
+  request_id: string
+  name: string
+  category: TestCaseCategory
+  method: HttpMethod
+  url_path: string
+  params: KeyValue[]
+  headers: KeyValue[]
+  /** body 类型标识：json / form-data / raw / urlencoded / graphql / binary / none。 */
+  body_type: string
+  body_content: string
+  last_run_status: TestCaseStatus
+  created_at: string
+}
+
 /** 代码生成语言（Rust `Lang`，fox-tauri `codegen_render` 的 `lang` 取值）。 */
 export type CodeLang = 'curl' | 'python' | 'js' | 'go' | 'java' | 'php'
 

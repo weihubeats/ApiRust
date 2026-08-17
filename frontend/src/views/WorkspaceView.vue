@@ -24,6 +24,7 @@ import EndpointEditor from '../components/EndpointEditor.vue'
 import CurlImportDialog from '../components/CurlImportDialog.vue'
 import ImportDialog from '../components/ImportDialog.vue'
 import MockRuleDialog from '../components/MockRuleDialog.vue'
+import { useWindowDrag } from '../composables/useWindowDrag'
 
 const store = useWorkspaceStore()
 const router = useRouter()
@@ -311,6 +312,10 @@ onMounted(() => {
   void store.loadHistories()
 })
 
+/** 顶栏拖拽窗口：空白处 mousedown → startDragging；交互元素（按钮/输入等）跳过；双击切换最大化。 */
+const topBarEl = ref<HTMLElement | null>(null)
+useWindowDrag(topBarEl)
+
 onBeforeUnmount(() => {
   menuRef.value?.close()
 })
@@ -318,7 +323,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="workspace">
-    <div v-if="store.project" class="top-bar">
+    <div v-if="store.project" ref="topBarEl" class="top-bar">
       <div class="tb-region tb-left">
         <Brand title="RustFox" class="tb-brand" />
       </div>
@@ -417,7 +422,11 @@ onBeforeUnmount(() => {
         <HistoryPanel v-if="sidebarTab === 'history'" class="sidebar-history" />
       </aside>
       <main class="rf-main">
-        <TabBar v-if="store.openTabs.length" />
+        <TabBar
+          v-if="store.openTabs.length"
+          @import-curl="openCurlImport(null)"
+          @import-openapi="showDocImport = true"
+        />
         <EndpointEditor />
       </main>
     </div>
@@ -515,6 +524,8 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   border-bottom: 1px solid var(--rf-border);
   background: var(--rf-bg-panel);
+  cursor: grab;
+  user-select: none;
 }
 
 .tb-region {

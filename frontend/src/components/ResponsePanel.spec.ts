@@ -119,11 +119,14 @@ describe('ResponsePanel：展开全部 / 收起全部', () => {
     })
     expect(wrapper.find('.jt-line').exists()).toBe(true)
 
-    await wrapper.find('[title="展开全部节点"]').trigger('click')
+    // 展开/收起已合并为单个切换图标按钮（操作区第 2 个，前为查找）
+    const toggleBtn = wrapper.findAll('.rp-icon-btn')[1]
+
+    await toggleBtn.trigger('click')
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).not.toMatch(/…\s+\d+\s+项/)
 
-    await wrapper.find('[title="收起全部节点"]').trigger('click')
+    await wrapper.findAll('.rp-icon-btn')[1].trigger('click')
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).toMatch(/…\s+\d+\s+项/)
     wrapper.unmount()

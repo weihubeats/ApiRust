@@ -6,13 +6,22 @@
  *   hover 时圆点被 ✕ 替换（两者不同时出现，避免挤占）；
  * - 关闭按钮 hover 才出现；脏标签关闭走 Popconfirm。
  */
+import { ref } from 'vue'
 import { useWorkspaceStore } from '../stores/workspace'
+import { useToast } from '../composables/useToast'
 import Icon from './ui/Icon.vue'
 import IconButton from './ui/IconButton.vue'
+import Menu, { type MenuItem } from './ui/Menu.vue'
 import Popconfirm from './ui/Popconfirm.vue'
 import Tooltip from './ui/Tooltip.vue'
 
 const store = useWorkspaceStore()
+const toast = useToast()
+
+const emit = defineEmits<{
+  'import-curl': []
+  'import-openapi': []
+}>()
 
 function close(id: string): void {
   store.closeTab(id)
@@ -20,6 +29,53 @@ function close(id: string): void {
 
 function methodOf(id: string): string {
   return store.draftOf(id)?.method ?? 'GET'
+}
+
+// ---------- 「+」快捷新建：主区 = 空 HTTP 请求，箭头 = 新建类型菜单 ----------
+const addMenu = ref<InstanceType<typeof Menu> | null>(null)
+const addArrowEl = ref<HTMLButtonElement | null>(null)
+
+const ADD_MENU_ITEMS: MenuItem[] = [
+  { key: 'endpoint', label: '新建 HTTP 请求', icon: 'zap', shortcut: '⌘N' },
+  { key: 'curl', label: '导入 cURL...', icon: 'terminal', dividerBefore: true },
+  { key: 'openapi', label: '导入 OpenAPI / Swagger...', icon: 'download' },
+  { key: 'folder', label: '新建目录分组...', icon: 'folder-plus', dividerBefore: true },
+]
+
+function openAddMenu(): void {
+  if (addArrowEl.value) addMenu.value?.openAt(addArrowEl.value, ADD_MENU_ITEMS)
+}
+
+function onAddMenuSelect(item: MenuItem): void {
+  if (item.key === 'endpoint') {
+    store.openNewEndpoint(null)
+  } else if (item.key === 'curl') {
+    emit('import-curl')
+  } else if (item.key === 'openapi') {
+    emit('import-openapi')
+  } else if (item.key === 'folder') {
+    void createFolder()
+  }
+}
+
+async function createFolder(): Promise<void> {
+  const now = new Date().toISOString()
+  try {
+    await store.saveFolder({
+      id: crypto.randomUUID(),
+      project_id: store.project?.id ?? '',
+      parent_id: null,
+      name: '新建文件夹',
+      sort_order: 0,
+      created_at: now,
+      updated_at: now,
+    })
+    toast.success('已创建文件夹，可在左侧重命名')
+  } catch (err) {
+    toast.error('创建文件夹失败', {
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
 }
 </script>
 
@@ -33,7 +89,7 @@ function methodOf(id: string): string {
       @click="store.activeTabId = id"
     >
       <span class="method-tag" :class="`mt-${methodOf(id).toLowerCase()}`">{{ methodOf(id) }}</span>
-      <span class="tab-title" :title="store.titleOf(id)">{{ store.titleOf(id) }}</span>
+      <span class="tab-title" v-tooltip-overflow="store.titleOf(id)">{{ store.titleOf(id) }}</span>
       <span v-if="store.isDirty(id)" class="tab-dirty" title="未保存"><Icon name="dot" :size="7" /></span>
       <Popconfirm
         v-if="store.isDirty(id)"
@@ -44,16 +100,30 @@ function methodOf(id: string): string {
       </Popconfirm>
       <IconButton v-else class="tab-close" name="x" :size="12" title="关闭" @click.stop="close(id)" />
     </div>
-    <Tooltip content="新建请求 (Cmd+T)">
-      <button
-        class="tab-add"
-        type="button"
-        aria-label="新建请求"
-        @click="store.openNewEndpoint(null)"
-      >
-        <Icon name="plus" :size="15" />
-      </button>
+    <Tooltip content="新建请求 (⌘N)">
+      <div class="tab-add-group">
+        <button
+          class="tab-add tab-add-main"
+          type="button"
+          aria-label="新建 HTTP 请求"
+          @click="store.openNewEndpoint(null)"
+        >
+          <Icon name="plus" :size="15" />
+        </button>
+        <span class="tab-add-sep" aria-hidden="true"></span>
+        <button
+          ref="addArrowEl"
+          class="tab-add tab-add-arrow"
+          type="button"
+          aria-label="新建类型菜单"
+          title="新建类型菜单"
+          @click="openAddMenu"
+        >
+          <Icon name="chevron-down" :size="12" />
+        </button>
+      </div>
     </Tooltip>
+    <Menu ref="addMenu" @select="onAddMenuSelect" />
   </div>
 </template>
 
@@ -178,18 +248,35 @@ function methodOf(id: string): string {
   color: var(--danger);
 }
 
-/* ---- 快速新建请求「+」：28×28、圆角背景、hover 白色 10% 蒙层 ---- */
+/* ---- 快捷新建「+」：主区 + 箭头下拉 组合按钮 ---- */
+.tab-add-group {
+  display: inline-flex;
+  align-items: stretch;
+  align-self: center;
+  flex-shrink: 0;
+  height: 28px;
+  margin: 0 2px 2px 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  overflow: hidden;
+  transition:
+    border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+.tab-add-group:hover {
+  border-color: var(--border-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+.tab-add-group:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .tab-add {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  margin: 0 2px 2px 4px;
-  align-self: center;
-  flex-shrink: 0;
   border: none;
-  border-radius: 6px;
   background: transparent;
   color: var(--accent);
   cursor: pointer;
@@ -198,14 +285,21 @@ function methodOf(id: string): string {
     background var(--dur) var(--ease),
     transform var(--dur) var(--ease);
 }
-.tab-add:hover {
-  background: rgba(255, 255, 255, 0.1);
+.tab-add-main {
+  width: 26px;
+}
+.tab-add-arrow {
+  width: 16px;
+  color: var(--text-2);
+}
+.tab-add-arrow:hover {
+  color: var(--text-1);
 }
 .tab-add:active {
   transform: scale(0.92);
 }
-.tab-add:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+.tab-add-sep {
+  width: 1px;
+  background: var(--border);
 }
 </style>

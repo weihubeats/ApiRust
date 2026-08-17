@@ -77,11 +77,10 @@ function shortTime(iso: string): string {
         :key="h.id"
         class="hp-row"
         type="button"
-        :title="`${h.url}（点击恢复到编辑器）`"
         @click="store.restoreFromHistory(h)"
       >
         <span class="hp-method" :class="`m-select-${h.method.toLowerCase()}`">{{ h.method }}</span>
-        <span class="hp-url">{{ shortUrl(h.url) }}</span>
+        <span class="hp-url" v-tooltip-overflow="h.url">{{ shortUrl(h.url) }}</span>
         <span
           v-if="h.status != null"
           class="hp-status"

@@ -90,6 +90,20 @@
     'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, ui-monospace, monospace;
 
+  /* ---- 统一 JSON 语法高亮（One Dark 色阶，请求/响应共用） ---- */
+  --tok-key: #e06c75;
+  --tok-str: #98c379;
+  --tok-num: #d19a66;
+  --tok-bool: #56b6c2;
+  --tok-null: #56b6c2;
+  --tok-punct: #abb2bf;
+  --tok-gutter: #5c6370;
+
+  /* ---- 截断文本溢出 Tooltip（v-tooltip-overflow，见 directives/tooltipOverflow.ts） ---- */
+  --overflow-tip-bg: rgba(23, 23, 23, 0.9);
+  --overflow-tip-border: rgba(64, 64, 64, 0.5);
+  --overflow-tip-text: #e5e5e5;
+
   /* ---- rf-* 兼容别名（指向新令牌，旧组件自动跟随） ---- */
   --rf-bg: var(--bg-app);
   --rf-bg-panel: var(--bg-panel);
@@ -598,4 +612,29 @@ html[data-platform='macos'] .gql-root > .row {
 body.dragging-dnd {
   cursor: grabbing;
   user-select: none;
+}
+/* ---- 溢出 Tooltip 气泡（指令动态注入 body，需全局定义） ---- */
+.rf-overflow-tip {
+  position: fixed;
+  z-index: 400;
+  max-width: 320px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--overflow-tip-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--overflow-tip-border);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  color: var(--overflow-tip-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+.rf-overflow-tip.in {
+  opacity: 1;
 }

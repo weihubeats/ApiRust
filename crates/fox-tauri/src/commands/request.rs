@@ -285,6 +285,7 @@ pub(crate) fn render_spec(spec: &RequestSpec, vars: &VariableMap) -> RequestSpec
                 path: fox_core::resolve_variables(path, vars),
             },
         },
+        active_tab: spec.active_tab.clone(),
         timeout_ms: spec.timeout_ms,
         follow_redirects: spec.follow_redirects,
         tests: spec.tests.clone(),
@@ -322,6 +323,7 @@ mod tests {
             body: BodySpec::Json {
                 raw: "{\"a\":1}".into(),
             },
+            active_tab: None,
             timeout_ms: 30000,
             follow_redirects: true,
             tests: None,

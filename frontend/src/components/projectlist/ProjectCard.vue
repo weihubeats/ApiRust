@@ -33,7 +33,7 @@ const emit = defineEmits<{
     <span class="proj-avatar" :style="avatarStyle(project.name)">{{ initials(project.name) }}</span>
     <div class="proj-main">
       <div class="proj-title-row">
-        <span class="proj-title" :title="project.name">{{ project.name }}</span>
+        <span class="proj-title" v-tooltip-overflow="project.name">{{ project.name }}</span>
         <span class="proj-status" :class="{ active }">{{ active ? 'Active' : 'Draft' }}</span>
       </div>
       <p class="proj-desc">{{ project.description || '暂无描述' }}</p>

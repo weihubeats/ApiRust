@@ -10,13 +10,15 @@
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useToast } from '../composables/useToast'
-import { escapeHtml } from '../utils/highlight'
+import { escapeHtml, highlightJSONText } from '../utils/highlight'
+import { EDITOR_INDENT } from '../constants/editorTheme'
 import { formatBytes, formatDuration } from '../utils/format'
 import FindBar from './ui/FindBar.vue'
 import Icon from './ui/Icon.vue'
 import JsonTree from './JsonTree.vue'
 import SegmentedControl, { type SegmentOption } from './ui/SegmentedControl.vue'
 import Tabs, { type TabItem } from './ui/Tabs.vue'
+import Tooltip from './ui/Tooltip.vue'
 import type { ExecuteResponse } from '../types/foxApi'
 
 const props = defineProps<{ response: ExecuteResponse }>()
@@ -81,6 +83,7 @@ watch(
   () => props.response,
   () => {
     visibleLines.value = LINE_CHUNK
+    treeExpanded.value = false
   },
 )
 
@@ -97,11 +100,19 @@ const parsed = computed<unknown | null>(() => {
 const isJson = computed(() => parsed.value !== null)
 
 const pretty = computed(() => {
-  if (parsed.value !== null) return JSON.stringify(parsed.value, null, 2)
+  if (parsed.value !== null) return JSON.stringify(parsed.value, null, EDITOR_INDENT)
   return props.response.body
 })
 
 const isHtml = computed(() => props.response.content_type.toLowerCase().includes('html'))
+
+/** 内容类型支持「预览」：HTML / 图片 / 音视频 / 二进制文件类。 */
+const isPreviewable = computed(() =>
+  /^(text\/html|image\/|audio\/|video\/|application\/(pdf|octet-stream|zip|x-zip|x-.*?zip|json))/i.test(
+    props.response.content_type,
+  ),
+)
+const isImage = computed(() => props.response.content_type.toLowerCase().startsWith('image/'))
 
 const prettyLines = computed(() => pretty.value.split('\n'))
 const rawLines = computed(() => props.response.body.split('\n'))
@@ -181,11 +192,16 @@ async function copyBody(): Promise<void> {
   }
 }
 
-const MODE_OPTIONS: SegmentOption[] = [
+const MODE_OPTIONS = computed<SegmentOption[]>(() => [
   { value: 'pretty', label: '格式化', icon: 'list' },
   { value: 'raw', label: '原始', icon: 'code' },
-  { value: 'preview', label: '预览', icon: 'eye' },
-]
+  ...(isPreviewable.value ? [{ value: 'preview', label: '预览', icon: 'eye' as const }] : []),
+])
+
+/** 响应类型不支持预览时，强制退回「格式化」，避免残留 preview 状态。 */
+watch(viewMode, (m) => {
+  if (m === 'preview' && !isPreviewable.value) viewMode.value = 'pretty'
+})
 
 // ---------- 查找（Find in Response） ----------
 const findOpen = ref(false)
@@ -254,6 +270,11 @@ function highlightText(raw: string, q: string): string {
   }
 }
 
+/** Pretty 行视图：JSON 语法高亮 + 查找标记（与请求 Body 编辑器共用同一主题，见 utils/highlight.ts）。 */
+function highlightPrettyText(raw: string, q: string): string {
+  return highlightJSONText(raw, q)
+}
+
 function nextMatch(): void {
   if (!total.value) return
   activeMatch.value = (activeMatch.value + 1) % total.value
@@ -298,13 +319,33 @@ function onWindowKeydown(e: KeyboardEvent): void {
 
 const treeRef = ref<{ expandAll: () => void; collapseAll: () => void } | null>(null)
 
+/** 展开/收起全部合并为单切换按钮：记录当前树状态决定动作与图标方向。 */
+const treeExpanded = ref(false)
+function toggleTreeAll(): void {
+  if (treeExpanded.value) {
+    treeRef.value?.collapseAll()
+    treeExpanded.value = false
+  } else {
+    treeRef.value?.expandAll()
+    treeExpanded.value = true
+  }
+}
+
+// ---------- 折叠 ----------
+/** 折叠状态：只保留状态栏，正文区整体收起（面板随之收缩，剩余空间由响应区布局接管）。 */
+const collapsed = ref(false)
+
+function toggleCollapsed(): void {
+  collapsed.value = !collapsed.value
+}
+
 onMounted(() => window.addEventListener('keydown', onWindowKeydown))
 onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
 </script>
 
 <template>
-  <div class="rp" :class="`tone-${tone}`">
-    <div class="rp-head">
+  <div class="rp" :class="[`tone-${tone}`, { collapsed }]">
+    <div class="rp-toolbar">
       <span class="rp-status">
         <Icon name="dot" :size="8" /> {{ statusText }}
       </span>
@@ -321,11 +362,10 @@ onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
       <span v-if="response.content_type" class="rp-sep"></span>
       <span v-if="response.content_type" class="rp-type">{{ response.content_type }}</span>
       <span v-if="response.truncated" class="rp-truncated" title="后端已截断过长的响应正文">已截断</span>
-    </div>
 
-    <div class="rp-tabs">
-      <Tabs v-model="activeTab" :tabs="responseTabs" size="sm" />
-      <span class="rp-tabs-spacer"></span>
+      <Tabs v-model="activeTab" :tabs="responseTabs" size="sm" class="rp-inline-tabs" />
+      <span class="rp-toolbar-spacer"></span>
+
       <SegmentedControl
         v-if="activeTab === 'body'"
         class="rp-mode-seg"
@@ -335,33 +375,40 @@ onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
         @update:model-value="viewMode = $event as ViewMode"
       />
       <span class="rp-actions">
-        <button
-          class="rf-btn rf-btn-sm"
-          type="button"
-          :class="{ active: findOpen }"
-          title="在响应中查找 (⌘F)"
-          @click="toggleFind"
-        >
-          <Icon name="search" :size="13" />
-        </button>
-        <template v-if="treeVisible">
-          <button class="rf-btn rf-btn-sm" type="button" title="展开全部节点" @click="treeRef?.expandAll()">
-            <Icon name="chevron-down" :size="13" /> 展开全部
+        <Tooltip content="在响应中查找 (⌘F)" placement="bottom">
+          <button
+            class="rp-icon-btn"
+            type="button"
+            :class="{ active: findOpen }"
+            @click="toggleFind"
+          >
+            <Icon name="search" :size="13" />
           </button>
-          <button class="rf-btn rf-btn-sm" type="button" title="收起全部节点" @click="treeRef?.collapseAll()">
-            <Icon name="chevron-up" :size="13" /> 收起全部
+        </Tooltip>
+        <Tooltip v-if="treeVisible" :content="treeExpanded ? '收起全部节点' : '展开全部节点'" placement="bottom">
+          <button class="rp-icon-btn" type="button" @click="toggleTreeAll">
+            <Icon :name="treeExpanded ? 'chevron-up' : 'chevron-down'" :size="13" />
           </button>
-        </template>
-        <button class="rf-btn rf-btn-sm" type="button" title="将当前响应保存为示例" @click="emit('saveExample')">
-          <Icon name="save" :size="13" /> 保存为示例
-        </button>
-        <button class="rf-btn rf-btn-sm" type="button" title="复制响应正文" @click="copyBody">
-          <Icon name="copy" :size="13" /> 复制响应
-        </button>
+        </Tooltip>
+        <Tooltip content="将当前响应保存为示例" placement="bottom">
+          <button class="rp-icon-btn" type="button" @click="emit('saveExample')">
+            <Icon name="save" :size="13" />
+          </button>
+        </Tooltip>
+        <Tooltip content="复制响应正文" placement="bottom">
+          <button class="rp-icon-btn" type="button" @click="copyBody">
+            <Icon name="copy" :size="13" />
+          </button>
+        </Tooltip>
+        <Tooltip :content="collapsed ? '展开响应区' : '折叠响应区'" placement="bottom">
+          <button class="rp-icon-btn" type="button" @click="toggleCollapsed">
+            <Icon :name="collapsed ? 'chevron-down' : 'chevron-up'" :size="13" />
+          </button>
+        </Tooltip>
       </span>
     </div>
 
-    <div v-if="activeTab === 'body'" class="rp-body">
+    <div v-show="!collapsed" v-if="activeTab === 'body'" class="rp-body">
       <FindBar
         v-if="findOpen && response.body.trim()"
         v-model:query="query"
@@ -387,7 +434,7 @@ onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
         <div v-else-if="viewMode === 'pretty'" class="rp-lines">
           <div v-for="(ln, i) in shownPrettyLines" :key="i" class="rp-line">
             <span class="rp-line-gutter">{{ i + 1 }}</span>
-            <span class="rp-line-text" v-html="highlightText(ln, query)"></span>
+            <span class="rp-line-text" v-html="highlightPrettyText(ln, query)"></span>
           </div>
           <button
             v-if="hasMorePretty"
@@ -414,19 +461,17 @@ onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
           :srcdoc="response.body"
           title="响应预览"
         ></iframe>
-        <div v-else class="rp-lines">
-          <div v-for="(ln, i) in shownRawLines" :key="i" class="rp-line">
-            <span class="rp-line-gutter">{{ i + 1 }}</span>
-            <span class="rp-line-text" v-html="highlightText(ln, query)"></span>
-          </div>
-          <button v-if="hasMoreRaw" class="rp-more" type="button" @click="showMoreLines">
-            显示更多（{{ visibleLines }} / {{ rawLines.length }} 行）
-          </button>
-        </div>
+        <img
+          v-else-if="isImage"
+          class="rp-frame rp-preview-img"
+          :src="`data:${response.content_type};base64,${response.body}`"
+          alt="响应图片预览"
+        />
+        <div v-else class="rp-preview-note">该文件类型不支持内嵌预览，请切换到「原始」视图查看</div>
       </div>
     </div>
 
-    <div v-else-if="activeTab === 'headers'" class="rp-scroll">
+    <div v-show="!collapsed" v-else-if="activeTab === 'headers'" class="rp-scroll">
       <div v-for="(h, i) in headerRows" :key="i" class="rp-header-row">
         <span class="rp-header-key">{{ h.k }}</span>
         <span class="rp-header-val">{{ h.v }}</span>
@@ -434,7 +479,7 @@ onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
       <p v-if="!headerRows.length" class="rp-empty">无响应头</p>
     </div>
 
-    <div v-else class="rp-scroll">
+    <div v-show="!collapsed" v-else class="rp-scroll">
       <div v-for="(c, i) in cookies" :key="i" class="rp-cookie">
         <div class="rp-cookie-top">
           <span class="rp-cookie-name">{{ c.name }}</span>
@@ -459,24 +504,55 @@ onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
 <style scoped>
 .rp {
   border: 1px solid var(--border-strong);
+  /* 顶边无边框：与请求区之间仅由分割条分隔（Single Border Architecture） */
+  border-top: none;
   border-radius: var(--radius);
   background: var(--bg-card);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 .rp.tone-err {
   border-color: var(--danger-border);
+  border-top: none;
+}
+/* 折叠时只保留状态栏，面板收缩为内容高度 */
+.rp.collapsed {
+  height: auto;
 }
 
-/* ---- 顶栏：高对比状态栏 ---- */
-.rp-head {
+/* ---- 单行工具栏：状态指标 + 页签 + 模式 + 操作 ---- */
+.rp-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 34px;
-  padding: 6px 12px;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
+  flex-shrink: 0;
   overflow: hidden;
+}
+
+.rp-inline-tabs {
+  flex-shrink: 0;
+}
+.rp-inline-tabs :deep(.tabs) {
+  border-bottom: none;
+}
+.rp-inline-tabs :deep(.tab) {
+  height: 28px;
+}
+
+.rp-toolbar-spacer {
+  flex: 1 1 auto;
+  min-width: 8px;
+}
+
+.rp-mode-seg {
+  flex-shrink: 0;
 }
 
 .rp-status {
@@ -562,40 +638,37 @@ onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
   background: var(--warning-tint);
 }
 
-/* ---- 工具栏：标签 + 视图分段 + 操作 ---- */
-.rp-tabs {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 10px 0 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-panel);
-  overflow: hidden;
-}
-
-.rp-tabs-spacer {
-  flex: 1 1 auto;
-}
-
-.rp-mode-seg {
-  flex-shrink: 0;
-}
-
-/* 最右操作区（与视图分段控件留出清晰间隔） */
+/* 最右操作区（纯图标按钮，自带 Tooltip） */
 .rp-actions {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-left: 18px;
+  gap: 4px;
+  margin-left: 6px;
 }
-.rp-actions .rf-btn {
+.rp-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   color: var(--text-2);
+  cursor: pointer;
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease);
 }
-.rp-actions .rf-btn svg {
+.rp-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+.rp-icon-btn svg {
   color: var(--accent);
 }
-.rp-actions .rf-btn.active {
+.rp-icon-btn.active {
   color: var(--accent);
   background: var(--accent-tint, var(--bg-hover));
 }
@@ -612,11 +685,13 @@ onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
 .rp-body {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-height: 0;
 }
 
 .rp-scroll {
-  max-height: 420px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 8px 0;
 }
@@ -642,9 +717,8 @@ onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
   text-align: right;
   padding-right: 10px;
   user-select: none;
-  color: var(--text-3);
+  color: var(--tok-gutter);
   font-size: 11px;
-  opacity: 0.7;
 }
 
 .rp-line-text {
@@ -655,9 +729,21 @@ onUnmounted(() => window.removeEventListener('keydown', onWindowKeydown))
 .rp-frame {
   display: block;
   width: 100%;
-  height: 380px;
+  height: 100%;
   border: none;
   background: var(--bg-panel);
+}
+
+.rp-preview-img {
+  object-fit: contain;
+  padding: 8px;
+}
+
+.rp-preview-note {
+  margin: 0;
+  padding: 14px 16px;
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 .rp-empty {

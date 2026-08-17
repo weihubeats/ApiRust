@@ -147,8 +147,9 @@ function format(): void {
           v-if="status !== 'empty'"
           class="hl-status"
           :class="{ invalid: status === 'invalid' }"
+          :title="status === 'invalid' ? 'JSON 无效' : 'JSON 有效'"
         >
-          {{ status === 'invalid' ? 'JSON 无效' : 'JSON 有效' }}
+          <span class="hl-dot"></span>{{ status === 'invalid' ? '无效' : '有效' }}
         </span>
         <CustomSelect
           :model-value="formatMode"
@@ -157,8 +158,8 @@ function format(): void {
           class="hl-mode"
           @update:model-value="formatMode = String($event) as JsonFormatMode"
         />
-        <button class="hl-btn" type="button" @click="format">
-          <Icon name="zap" :size="12" /> 格式化
+        <button class="hl-btn" type="button" title="格式化 JSON" @click="format">
+          <Icon name="zap" :size="12" />
         </button>
       </div>
     </div>
@@ -170,6 +171,8 @@ function format(): void {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1;
+  min-height: 0;
 }
 
 .hl-wrap {
@@ -178,6 +181,8 @@ function format(): void {
   border-radius: 8px;
   background: #121318;
   overflow: hidden;
+  flex: 1;
+  min-height: 0;
   transition:
     border-color var(--dur) var(--ease),
     box-shadow var(--dur) var(--ease);
@@ -255,7 +260,7 @@ function format(): void {
   padding-right: 10px;
   font-family: var(--font-mono);
   font-size: 11px;
-  color: rgba(215, 219, 227, 0.35);
+  color: var(--tok-gutter);
 }
 
 /* ---- 右上角浮动工具条 ---- */
@@ -276,9 +281,20 @@ function format(): void {
 }
 
 .hl-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 0 6px;
   font-size: 11px;
   color: #86efac;
+  white-space: nowrap;
+}
+.hl-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
 }
 .hl-status.invalid {
   color: #f87171;
@@ -303,9 +319,10 @@ function format(): void {
 .hl-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  width: 24px;
   height: 24px;
-  padding: 0 10px;
+  padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.06);
@@ -319,21 +336,25 @@ function format(): void {
   background: rgba(255, 255, 255, 0.12);
 }
 
-/* ---- 霓虹语法着色 ---- */
+/* ---- 统一 JSON 语法着色（--tok-*，与响应 Body 共用，见 constants/editorTheme.ts） ---- */
 :deep(.hl-k) {
-  color: #c084fc;
+  color: var(--tok-key);
   font-weight: 600;
 }
 :deep(.hl-s) {
-  color: #86efac;
+  color: var(--tok-str);
 }
 :deep(.hl-n) {
-  color: #7dd3fc;
+  color: var(--tok-num);
 }
 :deep(.hl-b) {
-  color: #fbbf24;
+  color: var(--tok-bool);
 }
 :deep(.hl-null) {
-  color: #94a3b8;
+  color: var(--tok-null);
+  font-style: italic;
+}
+:deep(.hl-p) {
+  color: var(--tok-punct);
 }
 </style>

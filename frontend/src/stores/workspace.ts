@@ -36,6 +36,7 @@ export function defaultRequestSpec(): Endpoint['request'] {
     path_variables: [],
     auth: { type: 'none' },
     body: { mode: 'none' },
+    active_tab: null,
     timeout_ms: 30000,
     follow_redirects: true,
     tests: null,

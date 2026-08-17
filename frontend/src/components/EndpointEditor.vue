@@ -12,13 +12,16 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useToast } from '../composables/useToast'
 import { useFoxApi } from '../composables/useFoxApi'
-import { envColorClass, resolveVariables } from '../utils/environment'
-import { PROTOCOLS, protocolFromDomain, stripProtocol, withProtocol } from '../utils/url'
-import type { Protocol } from '../utils/url'
+import { resolveVariables } from '../utils/environment'
+import {
+  applyMethodDefaults,
+  envBadgeLabel as envBadgeLabelOf,
+  envBadgeTooltip as envBadgeTooltipOf,
+  methodNeedsBody,
+} from '../utils/requestBar'
 import AuthPanel from './AuthPanel.vue'
 import BodyPanel from './BodyPanel.vue'
 import CodeExportMenu from './CodeExportMenu.vue'
-import CodeImportDialog from './CodeImportDialog.vue'
 import CodePanel from './CodePanel.vue'
 import EnvironmentManager from './EnvironmentManager.vue'
 import HeadersPanel from './HeadersPanel.vue'
@@ -51,8 +54,6 @@ const sending = ref(false)
 const activeRequestId = ref<string | null>(null)
 const response = ref<ExecuteResponse | null>(null)
 const sendError = ref<string | null>(null)
-/** 多语言代码导入弹窗（cURL / Java / Python / JS / Go → 接口草稿）。 */
-const showImportDialog = ref(false)
 
 const draft = computed(() => store.activeEndpoint)
 
@@ -62,7 +63,31 @@ const METHOD_OPTIONS = METHODS.map((m) => ({ value: m, label: m }))
 // ---------- 配置 Tab 系统 ----------
 type ConfigTabKey = 'params' | 'auth' | 'headers' | 'body' | 'scripts' | 'tests' | 'code'
 
-const activeTab = ref<ConfigTabKey>('params')
+/** Method 系智能默认：POST / PUT / PATCH → Body；其余 → Params。 */
+
+/** 未保存 active_tab 时的智能默认（不写回草稿，避免标记脏）。 */
+const smartTab = ref<ConfigTabKey>('params')
+
+/**
+ * 配置 Tab：优先读接口保存的 active_tab；未设置时按 Method 智能默认。
+ * 用户点击 / 切换 Method 时写回 request.active_tab（随接口持久化）。
+ */
+const activeTab = computed<ConfigTabKey>({
+  get: () => (draft.value?.request.active_tab as ConfigTabKey | null) ?? smartTab.value,
+  set: (tab: ConfigTabKey) => {
+    smartTab.value = tab
+    if (draft.value) draft.value.request.active_tab = tab
+  },
+})
+
+const BODY_TAB_LABELS: Record<string, string> = {
+  json: 'JSON',
+  text: 'Text',
+  urlencoded: 'x-www-form-urlencoded',
+  multipart: 'form-data',
+  graphql: 'GraphQL',
+  binary: 'Binary',
+}
 
 const configTabs = computed<TabItem[]>(() => {
   const d = draft.value
@@ -72,12 +97,37 @@ const configTabs = computed<TabItem[]>(() => {
     { key: 'params', label: 'Params', count: d.request.params.length },
     { key: 'auth', label: 'Auth' },
     { key: 'headers', label: 'Headers', count: d.request.headers.length },
-    { key: 'body', label: 'Body', count: bodyMode !== 'none' ? 1 : undefined },
+    {
+      key: 'body',
+      label: bodyMode !== 'none' ? `Body (${BODY_TAB_LABELS[bodyMode] ?? bodyMode})` : 'Body',
+      count: bodyMode !== 'none' ? 1 : undefined,
+    },
     { key: 'scripts', label: 'Scripts' },
     { key: 'tests', label: 'Tests', count: d.request.tests ? 1 : undefined },
     { key: 'code', label: 'Code' },
   ]
 })
+
+/** 接口切换：无保存的 active_tab 时按 Method 设定智能默认（不落库）。 */
+watch(
+  () => draft.value?.id,
+  () => {
+    smartTab.value = draft.value && methodNeedsBody(draft.value.method) ? 'body' : 'params'
+  },
+  { immediate: true },
+)
+
+/** 手动切换 Method：POST 系 → Body（空体初始化 `{}` + application/json，有体则保持）；其余 → Params。 */
+watch(
+  () => draft.value?.method,
+  (m) => {
+    if (!m || !draft.value) return
+    const d = draft.value
+    const tab = applyMethodDefaults(d.request, m)
+    d.request.active_tab = tab
+    smartTab.value = tab
+  },
+)
 
 function prettyBody(raw: string): string {
   try {
@@ -122,7 +172,7 @@ const urlUnresolved = computed(
   () => urlDomain.value.startsWith('{{') && resolvedDomain.value === urlDomain.value,
 )
 
-/** 基础 URL 标签样式：环境变量已解析 → 主题色标签；未解析 → 警告；会话回退 → 中性。 */
+/** 基础 URL 标签样式：环境变量已解析 → 主题色；未解析 → 警告；会话回退 → 中性。 */
 const chipClass = computed(() => {
   if (urlUnresolved.value) return 'warn'
   if (urlDomain.value.startsWith('{{')) return 'env'
@@ -132,45 +182,33 @@ const chipClass = computed(() => {
 /** 点击基础 URL 标签 → 打开环境管理。 */
 const showEnvManager = ref(false)
 
-/** chip 悬浮提示：完整 URL 如何拼接。 */
-const urlTooltip = computed(() => {
-  if (!draft.value || isAbsPath.value) return ''
-  const src = urlDomain.value
-  if (src.startsWith('{{')) {
-    if (urlUnresolved.value) return `${src} 未定义，请求将按字面量发送`
-    const env = store.environments.find((e) => e.id === store.activeEnvId)
-    return `${src} → ${resolvedDomain.value}${env ? `（来自环境「${env.name}」）` : ''}`
-  }
-  return `会话 Base URL：${resolvedDomain.value}（未使用环境变量）`
-})
+/** Base URL 紧凑标签：直接展示解析后的裸域名（无域名时退回环境名），一眼可见实际发送目标。 */
+const envBadgeLabel = computed(() =>
+  envBadgeLabelOf({
+    urlDomain: urlDomain.value,
+    resolvedDomain: resolvedDomain.value,
+    envName: activeEnvName.value,
+  }),
+)
 
-/** 协议选择器选项：与 chip 并列显示，如「https://  api-example.com /api/users」。 */
-const PROTOCOL_OPTIONS = PROTOCOLS.map((p) => ({ value: p, label: `${p}://` }))
+/** Base URL 标签悬浮提示：`环境：X | 基础路径：https://...`（无环境时仅展示路径来源）。 */
+const envBadgeTooltip = computed(() => {
+  if (!draft.value || isAbsPath.value) return ''
+  return envBadgeTooltipOf({
+    urlDomain: urlDomain.value,
+    resolvedDomain: resolvedDomain.value,
+    envName: activeEnvName.value,
+  })
+})
 
 /** 路径输入框元素引用（快捷按钮聚焦回跳）。 */
 const urlInputEl = ref<HTMLInputElement | null>(null)
 
-/** 协议选择器：从「解析后的」域名源推导当前 scheme，改写时同步环境 base_url 变量或会话 Base URL。 */
-const protocol = computed({
-  get: () => protocolFromDomain(resolvedDomain.value || urlDomain.value),
-  set: (p: Protocol) => {
-    const src = resolvedDomain.value || urlDomain.value
-    if (src.trim().startsWith('{{')) return
-    const next = withProtocol(src, p)
-    if (urlDomain.value.startsWith('{{')) {
-      void store.setEnvironmentBaseUrl(next)
-    } else {
-      store.sessionBaseUrl = next
-    }
-  },
-})
-
-/** chip 展示文案：协议前缀由选择器承担，chip 只显示裸域名。 */
-const domainLabel = computed(() => {
-  const src = resolvedDomain.value
-  if (!src) return ''
-  if (src === urlDomain.value) return src
-  return stripProtocol(src) || src
+/** 路径输入框 placeholder：有基础 URL 时提示自动拼接，无则提示粘贴完整 URL。 */
+const urlPlaceholder = computed(() => {
+  const base = '输入接口路径，如 /api/v1/users'
+  if (!urlDomain.value) return `${base}，或直接粘贴完整 URL`
+  return `${base}，自动拼接 ${resolvedDomain.value || urlDomain.value}`
 })
 
 /** 路径输入框（与 chip 组成完整请求地址）；粘贴完整 URL 时自动拆分。 */
@@ -263,14 +301,38 @@ function cancelSend(): void {
   toast.info('正在取消请求…')
 }
 
-/** 保存：名称为空时先弹名称输入框，确认后再落库。 */
+/** 保存：名称为空或仍是默认「未命名接口」时，先弹「名称 + 保存位置」确认框，确认后再落库。 */
 const showNameDialog = ref(false)
 const pendingName = ref('')
+const pendingFolderId = ref('')
+
+/** 保存位置（文件夹）选项：树形展平，子目录按层级缩进展示。 */
+interface FolderOption {
+  value: string
+  label: string
+  depth: number
+}
+const folderOptions = computed<FolderOption[]>(() => {
+  const out: FolderOption[] = []
+  const walk = (parentId: string | null, depth: number): void => {
+    store.folders
+      .filter((f) => f.parent_id === parentId)
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .forEach((f) => {
+        out.push({ value: f.id, label: f.name, depth })
+        walk(f.id, depth + 1)
+      })
+  }
+  walk(null, 0)
+  return out
+})
 
 async function save(): Promise<void> {
   if (!draft.value) return
-  if (!draft.value.name.trim()) {
+  const name = draft.value.name.trim()
+  if (!name || name === '未命名接口') {
     pendingName.value = ''
+    pendingFolderId.value = draft.value.folder_id ?? ''
     showNameDialog.value = true
     return
   }
@@ -285,8 +347,61 @@ async function confirmName(): Promise<void> {
     return
   }
   draft.value.name = name
+  draft.value.folder_id = pendingFolderId.value || null
   showNameDialog.value = false
   await store.saveActiveDraft()
+}
+
+// ---------- 请求区 / 响应区高度分割（Splitter） ----------
+const REQUEST_MIN = 80
+const REQUEST_DEFAULT = 200
+/** 请求区最大高度 = 编辑器高度 - MAX_OFFSET，保证响应区至少留 MAX_OFFSET px。 */
+const MAX_OFFSET = 100
+
+const editorEl = ref<HTMLElement | null>(null)
+const requestBodyHeight = ref(REQUEST_DEFAULT)
+const splitterDragging = ref(false)
+const requestBodyCollapsed = computed(() => requestBodyHeight.value <= REQUEST_MIN)
+
+let splitStartY = 0
+let splitStartHeight = 0
+let splitDragging = false
+
+function requestMaxHeight(): number {
+  return Math.max((editorEl.value?.clientHeight ?? 600) - MAX_OFFSET, REQUEST_MIN + 40)
+}
+
+/** 分割条 mousedown：开始拖拽，动态调整请求区高度（响应区 flex:1 自动补位）。 */
+function onSplitterDown(event: MouseEvent): void {
+  if (event.button !== 0) return
+  event.preventDefault()
+  splitDragging = true
+  splitterDragging.value = true
+  splitStartY = event.clientY
+  splitStartHeight = requestBodyHeight.value
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onSplitterMove)
+  document.addEventListener('mouseup', onSplitterUp)
+}
+
+function onSplitterMove(event: MouseEvent): void {
+  if (!splitDragging) return
+  const next = splitStartHeight + (event.clientY - splitStartY)
+  requestBodyHeight.value = Math.min(Math.max(next, REQUEST_MIN), requestMaxHeight())
+}
+
+function onSplitterUp(): void {
+  if (!splitDragging) return
+  splitDragging = false
+  splitterDragging.value = false
+  document.body.style.userSelect = ''
+  document.removeEventListener('mousemove', onSplitterMove)
+  document.removeEventListener('mouseup', onSplitterUp)
+}
+
+/** 双击分割条 / 点击微调按钮：请求区收缩到最小高度，再点恢复默认高度。 */
+function toggleRequestBody(): void {
+  requestBodyHeight.value = requestBodyCollapsed.value ? REQUEST_DEFAULT : REQUEST_MIN
 }
 
 // ---------- 响应示例 ----------
@@ -368,20 +483,18 @@ function onKeydown(event: KeyboardEvent): void {
   } else if (event.key === 'Enter') {
     event.preventDefault()
     send()
-  } else if (event.key === 't') {
+  } else if (event.key === 't' || event.key === 'n') {
     event.preventDefault()
     store.openNewEndpoint(null)
   }
 }
 
-/** 新建接口后自动聚焦标题并全选，便于直接输入名称（TabBar「+」/ ⌘T / 树内新建共用）。 */
-const crumbNameInput = ref<HTMLInputElement | null>(null)
+/** 新建接口后自动聚焦地址输入框（TabBar「+」/ ⌘T ⌘N / 树内新建共用），便于直接输入路径。 */
 watch(
   () => store.focusTitleSignal,
   () => {
     void nextTick(() => {
-      crumbNameInput.value?.focus()
-      crumbNameInput.value?.select()
+      urlInputEl.value?.focus()
     })
   },
 )
@@ -392,11 +505,12 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
+  onSplitterUp()
 })
 </script>
 
 <template>
-  <div v-if="draft" class="editor">
+  <div ref="editorEl" v-if="draft" class="editor">
     <div class="editor-row breadcrumb-row">
       <span class="crumb">
         <span class="crumb-part">{{ store.project?.name ?? '未命名项目' }}</span>
@@ -406,7 +520,6 @@ onUnmounted(() => {
         </template>
         <span class="crumb-sep">/</span>
         <input
-          ref="crumbNameInput"
           v-model="draft.name"
           class="crumb-name"
           placeholder="接口名称"
@@ -429,91 +542,69 @@ onUnmounted(() => {
           </template>
         </CustomSelect>
         <span class="req-bar-divider"></span>
-        <CustomSelect
-          v-if="urlDomain && !isAbsPath"
-          class="protocol-select"
-          :model-value="protocol"
-          :options="PROTOCOL_OPTIONS"
-          size="sm"
-          @update:model-value="protocol = String($event) as Protocol"
-        />
-        <Tooltip v-if="urlDomain && !isAbsPath" :content="urlTooltip" placement="bottom">
+        <Tooltip v-if="urlDomain && !isAbsPath" :content="envBadgeTooltip" placement="bottom">
           <button
             type="button"
-            class="url-chip"
+            class="env-badge"
             :class="chipClass"
-            title="点击管理环境"
             @click="showEnvManager = true"
           >
-            <span v-if="activeEnvName" class="edot" :class="`ed-${envColorClass(activeEnvName)}`"></span>
-            <Icon name="globe" :size="13" class="url-chip-icon" />
-            <span class="url-chip-text">{{ domainLabel }}</span>
-            <Icon name="chevron-down" :size="12" class="url-chip-chevron" />
+            <Icon name="globe" :size="13" class="env-badge-icon" />
+            <span class="env-badge-text">{{ envBadgeLabel }}</span>
+            <Icon name="chevron-down" :size="11" class="env-badge-chevron" />
           </button>
         </Tooltip>
-        <span v-if="urlDomain && !isAbsPath" class="req-bar-divider"></span>
         <div class="url-input-wrap">
           <input
             ref="urlInputEl"
             v-model="urlPath"
             class="url-input"
             spellcheck="false"
-            placeholder="路径，如 /api/users；可粘贴完整 URL 自动拆分"
+            :placeholder="urlPlaceholder"
             @keydown="onUrlKeydown"
           />
           <template v-if="urlPath">
-            <button
-              type="button"
-              class="url-qbtn url-qbtn-copy"
-              title="复制完整请求地址"
-              @click="copyRequestUrl"
-            >
-              <Icon name="copy" :size="13" />
-            </button>
-            <button
-              type="button"
-              class="url-qbtn url-qbtn-clear"
-              title="清空路径 (Esc)"
-              @click="clearPath"
-            >
-              <Icon name="x" :size="13" />
-            </button>
+            <Tooltip content="复制完整请求地址" placement="top" class="url-qbtn url-qbtn-copy">
+              <button type="button" class="url-qbtn-btn" @click="copyRequestUrl">
+                <Icon name="copy" :size="13" />
+              </button>
+            </Tooltip>
+            <Tooltip content="清空路径 (Esc)" placement="top" class="url-qbtn">
+              <button type="button" class="url-qbtn-btn" @click="clearPath">
+                <Icon name="x" :size="13" />
+              </button>
+            </Tooltip>
           </template>
         </div>
+        <button v-if="!sending" class="rf-btn rf-btn-send bar-send" type="button" @click="send">
+          <Icon name="send" :size="14" />
+          发送
+        </button>
+        <button
+          v-else
+          class="rf-btn rf-btn-danger bar-send"
+          type="button"
+          @click="cancelSend"
+        >
+          <Icon name="stop" :size="14" /> 取消
+        </button>
       </div>
       <div class="editor-actions">
         <button class="rf-btn rf-btn-sm" type="button" title="压测（并发基准）" @click="showTools = true">
           <Icon name="gauge" :size="13" /> 工具
         </button>
-        <button v-if="!sending" class="rf-btn rf-btn-send" type="button" @click="send">
-          <Icon name="send" :size="14" />
-          发送 (⌘⏎)
-        </button>
-        <button
-          v-else
-          class="rf-btn rf-btn-danger"
-          type="button"
-          title="取消在途请求"
-          @click="cancelSend"
-        >
-          <Icon name="stop" :size="14" /> 取消请求
-        </button>
         <CodeExportMenu :draft="draft" :url="requestUrl" />
         <button class="rf-btn" type="button" @click="save">
           <Icon name="save" :size="14" /> 保存 (⌘S)
         </button>
-        <button
-          class="rf-btn"
-          type="button"
-          title="从 cURL / Java / Python / JavaScript / Go 代码导入为新接口"
-          @click="showImportDialog = true"
-        >
-          <Icon name="download" :size="14" /> 导入
-        </button>
       </div>
     </div>
 
-    <div class="config-box">
+    <div
+      class="config-box"
+      :class="{ collapsed: requestBodyCollapsed }"
+      :style="{ height: `${requestBodyHeight}px` }"
+    >
       <Tabs v-model="activeTab" :tabs="configTabs" size="sm" />
       <ParamsPanel v-if="activeTab === 'params'" :draft="draft" />
       <AuthPanel v-else-if="activeTab === 'auth'" :draft="draft" />
@@ -522,6 +613,25 @@ onUnmounted(() => {
       <ScriptsPanel v-else-if="activeTab === 'scripts'" :draft="draft" />
       <TestsPanel v-else-if="activeTab === 'tests'" :draft="draft" :url="requestUrl" />
       <CodePanel v-else :draft="draft" :url="requestUrl" />
+    </div>
+
+    <div
+      class="rp-splitter"
+      :class="{ dragging: splitterDragging }"
+      title="拖拽调整请求区高度（双击折叠 / 展开）"
+      @mousedown="onSplitterDown"
+      @dblclick="toggleRequestBody"
+    >
+      <button
+        class="rp-splitter-btn"
+        type="button"
+        :title="requestBodyCollapsed ? '展开请求区' : '折叠请求区'"
+        @mousedown.stop
+        @dblclick.stop
+        @click="toggleRequestBody"
+      >
+        <Icon :name="requestBodyCollapsed ? 'chevron-up' : 'chevron-down'" :size="11" />
+      </button>
     </div>
 
     <div class="response-zone">
@@ -561,8 +671,8 @@ onUnmounted(() => {
     <p>从左侧选择接口开始编辑</p>
   </div>
 
-  <Modal v-model:open="showNameDialog" title="保存接口" width="360px">
-    <p class="name-hint">请为接口填写一个名称（必填）：</p>
+  <Modal v-model:open="showNameDialog" title="保存接口" width="420px">
+    <p class="name-hint">请为接口填写名称（必填）：</p>
     <input
       v-model="pendingName"
       class="rf-input name-dialog-input"
@@ -570,6 +680,23 @@ onUnmounted(() => {
       spellcheck="false"
       @keyup.enter="confirmName"
     />
+    <p class="name-hint folder-hint">保存位置（文件夹）：</p>
+    <CustomSelect
+      class="save-folder-select"
+      :model-value="pendingFolderId"
+      :options="folderOptions"
+      placeholder="根目录（不选择文件夹）"
+      @update:model-value="pendingFolderId = String($event)"
+    >
+      <template #display="{ label }">
+        <span class="save-folder-display">{{ label || '根目录（不选择文件夹）' }}</span>
+      </template>
+      <template #option="{ option }">
+        <span :style="{ paddingLeft: `${(option as FolderOption).depth * 16 + 4}px` }">
+          {{ option.label }}
+        </span>
+      </template>
+    </CustomSelect>
     <template #footer>
       <button class="rf-btn" type="button" @click="showNameDialog = false">取消</button>
       <button class="rf-btn rf-btn-primary" type="button" @click="confirmName">
@@ -596,12 +723,6 @@ onUnmounted(() => {
   <ToolsDrawer :open="showTools" :draft="draft" :url="requestUrl" @close="showTools = false" />
 
   <EnvironmentManager v-model:open="showEnvManager" />
-
-  <CodeImportDialog
-    v-if="showImportDialog"
-    :folder-id="draft?.folder_id ?? null"
-    @close="showImportDialog = false"
-  />
 </template>
 
 <style scoped>
@@ -681,113 +802,79 @@ onUnmounted(() => {
   min-width: 0;
 }
 
-/* 基础 URL 标签：圆角胶囊，可点击打开环境管理 */
-.url-chip {
+/* 基础 URL 标签：紧凑无背景，仅 图标 + 环境名/域名，点击打开环境管理 */
+.env-badge {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  height: 28px;
-  margin: 2px 4px;
-  padding: 0 12px;
-  border: 1px solid transparent;
-  border-radius: 999px;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 140px;
+  height: 100%;
+  padding: 0 4px 0 10px;
+  border: none;
+  background: transparent;
+  border-radius: 0;
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
-  white-space: nowrap;
-  max-width: 360px;
+  color: var(--text-2);
   cursor: pointer;
   transition:
     background var(--dur) var(--ease),
-    box-shadow var(--dur) var(--ease),
-    filter var(--dur) var(--ease);
+    color var(--dur) var(--ease);
 }
-.url-chip:hover {
-  box-shadow: 0 0 0 2px var(--accent-tint);
+.env-badge:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+.env-badge:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
-/* 环境 base_url 变量已解析：主题色（蓝/紫）标签 */
-.url-chip.env {
-  background: var(--accent-tint);
+/* 环境 base_url 变量已解析：主题色文字 */
+.env-badge.env {
   color: var(--accent);
 }
-.url-chip.env:hover {
-  filter: brightness(0.96);
+.env-badge.env:hover {
+  color: var(--accent);
 }
 
-/* 变量未定义（将按字面量发送）：警告色标签 */
-.url-chip.warn {
-  background: var(--warning-tint);
+/* 变量未定义（将按字面量发送）：警告色文字 */
+.env-badge.warn {
   color: var(--warning);
 }
-.url-chip.warn:hover {
-  filter: brightness(0.96);
+.env-badge.warn:hover {
+  color: var(--warning);
 }
 
-/* 会话级 Base URL（未使用环境变量）：中性标签 */
-.url-chip.session {
-  background: var(--bg-hover);
+/* 会话级 Base URL（未使用环境变量）：中性文字 */
+.env-badge.session {
   color: var(--text-2);
-  border-color: var(--border);
+}
+.env-badge.session:hover {
+  color: var(--text-1);
 }
 
-.url-chip-text {
+.env-badge-icon {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.env-badge-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.url-chip-icon {
-  flex-shrink: 0;
-}
-
-.url-chip-chevron {
+.env-badge-chevron {
   flex-shrink: 0;
   opacity: 0.55;
   transition: opacity var(--dur) var(--ease);
 }
-.url-chip:hover .url-chip-chevron {
+.env-badge:hover .env-badge-chevron {
   opacity: 1;
-}
-
-/* 协议选择器：与 chip 同视觉层级（无边框透明触发区，宽度固定） */
-.request-bar .protocol-select {
-  flex-shrink: 0;
-  width: 88px;
-}
-.request-bar .protocol-select :deep(.cs-trigger) {
-  height: 100%;
-  border: none;
-  background: transparent;
-  box-shadow: none;
-  border-radius: 0;
-  font-family: var(--font-mono);
-  justify-content: center;
-}
-
-/* 环境色点 */
-.edot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--text-3);
-}
-.ed-dev {
-  background: var(--success);
-}
-.ed-test {
-  background: var(--info);
-}
-.ed-staging {
-  background: var(--warning);
-}
-.ed-prod {
-  background: #f97316;
-}
-.ed-global {
-  background: var(--accent);
 }
 
 .request-bar .url-input-wrap {
@@ -811,20 +898,15 @@ onUnmounted(() => {
   font-family: var(--font-mono);
 }
 
-/* 地址栏快捷按钮：悬停输入框时浮现（手动 drop-shadow 模拟浅分隔） */
+/* 地址栏快捷按钮：悬浮输入框时浮现（Tooltip 触发器 span 承载绝对定位） */
 .url-qbtn {
   position: absolute;
   top: 50%;
   right: 6px;
   transform: translateY(-50%);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 26px;
   height: 26px;
-  border: none;
   border-radius: 6px;
-  background: transparent;
   color: var(--text-2);
   cursor: pointer;
   transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
@@ -835,6 +917,28 @@ onUnmounted(() => {
 .url-qbtn:hover {
   background: var(--bg-hover);
   color: var(--text-1);
+}
+.url-qbtn-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0;
+}
+
+/* 请求栏右侧「发送」按钮：与输入组无缝贴合 */
+.bar-send {
+  height: 100%;
+  flex-shrink: 0;
+  border-radius: 0;
+  padding: 0 16px;
+  font-weight: 600;
 }
 
 /* ---- 面包屑行（接口名称移至此处） ---- */
@@ -901,6 +1005,71 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex-shrink: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---- 请求区 / 响应区分割条（Single Border Architecture：唯一分隔线）----
+ * 请求编辑器底部、响应面板顶部均无边框；仅分割条提供 1px 视觉分隔。
+ * 负 margin 抵消 .editor 的 gap，让请求编辑器底边紧贴分割条（2px），
+ * 响应面板与分割条之间保留 6px 呼吸空间。
+ */
+.rp-splitter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 6px;
+  flex-shrink: 0;
+  margin: -10px 0 -6px;
+  cursor: row-resize;
+  user-select: none;
+  touch-action: none;
+}
+.rp-splitter::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 1px;
+  background: var(--border);
+  transition:
+    background var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+.rp-splitter:hover::before,
+.rp-splitter.dragging::before {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+
+/* 居中拖拽指示胶囊：默认隐约（opacity .4），Hover/拖拽时主题色高亮 */
+.rp-splitter-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 12px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-3);
+  opacity: 0.4;
+  cursor: pointer;
+  transition:
+    opacity var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease);
+}
+.rp-splitter:hover .rp-splitter-btn,
+.rp-splitter.dragging .rp-splitter-btn {
+  opacity: 1;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .kv-remove {
@@ -1015,10 +1184,12 @@ onUnmounted(() => {
   font-size: 12.5px;
 }
 
-/* ---- 响应容器：有响应时由 ResponsePanel 填充，未发送时显示空态 ---- */
+/* ---- 响应容器：flex:1 填满分割条以下所有空间 ---- */
 .response-zone {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .response-empty {
@@ -1046,5 +1217,19 @@ onUnmounted(() => {
 .name-dialog-input {
   width: 100%;
   height: var(--h-md);
+}
+
+.folder-hint {
+  margin-top: 12px;
+}
+
+.save-folder-select {
+  width: 100%;
+}
+
+.save-folder-display {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

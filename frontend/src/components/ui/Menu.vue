@@ -14,6 +14,8 @@ export interface MenuItem {
   key: string
   label: string
   icon?: IconName
+  /** 右侧快捷键提示（如 ⌘N）。 */
+  shortcut?: string
   danger?: boolean
   disabled?: boolean
   dividerBefore?: boolean
@@ -133,6 +135,7 @@ defineExpose({ openAt, close })
           >
             <Icon v-if="item.icon" :name="item.icon" :size="14" />
             <span class="rf-menu-label">{{ item.label }}</span>
+            <kbd v-if="item.shortcut" class="rf-menu-kbd">{{ item.shortcut }}</kbd>
           </button>
         </template>
       </template>
@@ -203,9 +206,24 @@ defineExpose({ openAt, close })
 }
 
 .rf-menu-label {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rf-menu-kbd {
+  flex-shrink: 0;
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-hover);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--text-3);
 }
 
 .rf-menu-divider {

@@ -14,10 +14,11 @@ import '@fontsource/jetbrains-mono/400.css'
 import '@fontsource/jetbrains-mono/500.css'
 import '@fontsource/jetbrains-mono/700.css'
 import './style.css'
+import tooltipOverflow from './directives/tooltipOverflow'
 
 // macOS 无边框标题栏（Overlay）：标记平台，供全局 CSS 为顶部栏预留交通灯空间。
 if (navigator.userAgent.includes('Mac')) {
   document.documentElement.setAttribute('data-platform', 'macos')
 }
 
-createApp(App).use(createPinia()).use(router).mount('#app')
+createApp(App).use(createPinia()).use(router).directive('tooltip-overflow', tooltipOverflow).mount('#app')

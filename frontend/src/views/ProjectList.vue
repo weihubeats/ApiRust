@@ -23,6 +23,7 @@ import ProjectRenameModal from '../components/projectlist/ProjectRenameModal.vue
 import ProjectDeleteModal from '../components/projectlist/ProjectDeleteModal.vue'
 import ScratchRequestModal from '../components/projectlist/ScratchRequestModal.vue'
 import { timeAgo } from '../components/projectlist/projectMeta'
+import { useWindowDrag } from '../composables/useWindowDrag'
 import type { Project } from '../types/foxApi'
 
 const api = useFoxApi()
@@ -188,11 +189,15 @@ async function onDeleted(id: string): Promise<void> {
 }
 
 const showSettings = ref(false)
+
+/** 顶栏拖拽窗口（与工作区顶栏共用 useWindowDrag）。 */
+const topBarEl = ref<HTMLElement | null>(null)
+useWindowDrag(topBarEl)
 </script>
 
 <template>
   <div class="dash">
-    <header class="dash-top">
+    <header ref="topBarEl" class="dash-top">
       <button class="top-brand" type="button" title="回到项目首页" @click="router.push('/projects')">
         <span class="top-logo" aria-hidden="true">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
@@ -365,6 +370,8 @@ const showSettings = ref(false)
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
+  cursor: grab;
+  user-select: none;
 }
 
 .top-brand {

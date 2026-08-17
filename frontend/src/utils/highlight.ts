@@ -43,21 +43,56 @@ export function highlightGraphQL(code: string): string {
   return out
 }
 
-/** 轻量 JSON 高亮（键 / 字符串 / 数字 / 布尔 / null）。 */
-export function highlightJSON(code: string): string {
-  const re =
-    /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|(true|false)|(\bnull\b)/g
-  let out = ''
+/** JSON 词法片段：文本 + 着色类（'' 表示不着色）。 */
+export interface JsonToken {
+  text: string
+  cls: string
+}
+
+const JSON_RE =
+  /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|(true|false)|(\bnull\b)|([{}\[\],])/g
+
+/** JSON 分词：键 / 字符串 / 数字 / 布尔 / null / 标点（请求编辑器与响应视图共用）。 */
+export function jsonTokens(code: string): JsonToken[] {
+  const out: JsonToken[] = []
   let last = 0
-  for (const m of code.matchAll(re)) {
-    out += escapeHtml(code.slice(last, m.index))
-    const [full, str, colon, num, bool, nul] = m
-    if (str) out += `<span class="hl-s${colon ? ' hl-k' : ''}">${escapeHtml(full)}</span>`
-    else if (num) out += `<span class="hl-n">${escapeHtml(full)}</span>`
-    else if (bool) out += `<span class="hl-b">${escapeHtml(full)}</span>`
-    else if (nul) out += `<span class="hl-null">${escapeHtml(full)}</span>`
+  for (const m of code.matchAll(JSON_RE)) {
+    const head = code.slice(last, m.index)
+    if (head) out.push({ text: head, cls: '' })
+    const [full, str, colon, num, bool, nul, punct] = m
+    if (str) out.push({ text: full, cls: colon ? 'hl-k' : 'hl-s' })
+    else if (num) out.push({ text: full, cls: 'hl-n' })
+    else if (bool) out.push({ text: full, cls: 'hl-b' })
+    else if (nul) out.push({ text: full, cls: 'hl-null' })
+    else if (punct) out.push({ text: full, cls: 'hl-p' })
     last = m.index! + full.length
   }
-  out += escapeHtml(code.slice(last))
+  const tail = code.slice(last)
+  if (tail) out.push({ text: tail, cls: '' })
+  return out
+}
+
+/** 轻量 JSON 高亮（键 / 字符串 / 数字 / 布尔 / null / 标点）。 */
+export function highlightJSON(code: string): string {
+  return jsonTokens(code)
+    .map((t) => (t.cls ? `<span class="${t.cls}">${escapeHtml(t.text)}</span>` : escapeHtml(t.text)))
+    .join('')
+}
+
+/** JSON 高亮 + 查找标记（响应行视图用；空 query 时退化为纯高亮）。 */
+export function highlightJSONText(code: string, query: string): string {
+  if (!query) return highlightJSON(code)
+  const ql = query.toLowerCase()
+  const lower = code.toLowerCase()
+  let out = ''
+  let from = 0
+  for (;;) {
+    const idx = lower.indexOf(ql, from)
+    if (idx === -1) break
+    out += highlightJSON(code.slice(from, idx))
+    out += `<mark class="rp-find-mark">${escapeHtml(code.slice(idx, idx + query.length))}</mark>`
+    from = idx + query.length
+  }
+  out += highlightJSON(code.slice(from))
   return out
 }

@@ -93,7 +93,6 @@ function colorClass(name: string): string {
           name="eye"
           :size="14"
           :disabled="!activeEnv"
-          title="环境变量速览"
           @click="showQuick = !showQuick"
         />
       </Tooltip>

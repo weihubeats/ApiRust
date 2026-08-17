@@ -189,6 +189,15 @@ function removeMultipartField(index: number): void {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 主编辑器（JsonEditor 直接子级）：底部无边框，与分割条无缝贴合 */
+.panel > :deep(.json-editor .hl-wrap) {
+  border-bottom: none;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 .mode-bar {
@@ -211,21 +220,29 @@ function removeMultipartField(index: number): void {
 .body-input {
   width: 100%;
   min-height: 120px;
+  flex: 1;
   font-family: var(--font-mono);
   font-size: 12.5px;
   resize: vertical;
+  border-bottom: none;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 .gql-editor {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 1;
+  min-height: 0;
 }
 
 .editor-fields {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 1;
+  min-height: 0;
 }
 
 .kv-row {
@@ -255,6 +272,8 @@ function removeMultipartField(index: number): void {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 1;
+  min-height: 0;
 }
 
 .binary-label {

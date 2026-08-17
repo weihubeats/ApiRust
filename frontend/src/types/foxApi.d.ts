@@ -131,6 +131,8 @@ export interface RequestSpec {
   path_variables: KeyValue[]
   auth: AuthSpec
   body: BodySpec
+  /** 编辑器配置 Tab 记忆（params/auth/headers/body/...），空时按 Method 智能默认。 */
+  active_tab?: string | null
   timeout_ms: number
   follow_redirects: boolean
   tests: unknown | null

@@ -9,6 +9,7 @@
  */
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type Update } from '@tauri-apps/plugin-updater'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { ref } from 'vue'
 import { version } from '../../package.json'
 import { useToast } from '../composables/useToast'
@@ -20,7 +21,18 @@ const emit = defineEmits<{ 'update:open': [open: boolean] }>()
 
 const toast = useToast()
 
-const GITHUB_URL = 'https://github.com/weihubeats/ApiRust'
+const GITHUB_URL = 'https://github.com/weihubeats/RustFox'
+
+/** 打开系统浏览器访问仓库（WebView 内 target=_blank 无效果，须走 opener 插件）。 */
+async function openGitHub(): Promise<void> {
+  try {
+    await openUrl(GITHUB_URL)
+  } catch (err) {
+    toast.error('打开 GitHub 失败', {
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
 
 const checking = ref(false)
 const downloading = ref(false)
@@ -112,9 +124,9 @@ async function installUpdate(): Promise<void> {
       <div class="a-subtitle">High-Performance Native API Testing Suite</div>
 
       <div class="a-links">
-        <a class="a-link" :href="GITHUB_URL" target="_blank" rel="noopener noreferrer">
+        <button class="a-link" type="button" @click="openGitHub">
           <Icon name="globe" :size="12" /> GitHub Repository
-        </a>
+        </button>
         <span class="a-dot" aria-hidden="true"></span>
         <button class="a-link" type="button" :disabled="checking" @click="checkUpdates">
           <Icon name="refresh" :size="12" /> {{ checking ? '检查中…' : 'Check for Updates' }}

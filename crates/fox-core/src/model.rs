@@ -364,6 +364,10 @@ pub struct RequestSpec {
     pub auth: AuthSpec,
     #[serde(default)]
     pub body: BodySpec,
+    /// 编辑器配置 Tab（params/auth/headers/body/...）：用户最近一次停留位置。
+    /// 为空时前端按 HTTP Method 智能默认（POST 系 → body，其余 → params）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_tab: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
     #[serde(default = "default_true")]
@@ -384,6 +388,7 @@ impl Default for RequestSpec {
             path_variables: Vec::new(),
             auth: AuthSpec::None,
             body: BodySpec::None,
+            active_tab: None,
             timeout_ms: 30_000,
             follow_redirects: true,
             tests: None,

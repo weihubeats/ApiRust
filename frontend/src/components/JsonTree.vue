@@ -284,7 +284,6 @@ defineExpose({ expandAll, collapseAll, matchCount })
       :key="i"
       class="jt-line"
       :class="{ 'has-toggle': line.toggleable }"
-      :title="line.title"
       :style="{ paddingLeft: `${line.depth * 16}px` }"
     >
       <span class="jt-gutter">{{ i + 1 }}</span>
@@ -298,7 +297,7 @@ defineExpose({ expandAll, collapseAll, matchCount })
       >
         <Icon :name="line.open ? 'chevron-down' : 'chevron-right'" :size="12" />
       </button>
-      <span class="jt-code" v-html="lineHtmls[i]"></span>
+      <span class="jt-code" v-tooltip-overflow="line.title ?? ''" v-html="lineHtmls[i]"></span>
     </div>
   </div>
 </template>
@@ -324,9 +323,8 @@ defineExpose({ expandAll, collapseAll, matchCount })
   text-align: right;
   padding-right: 10px;
   user-select: none;
-  color: var(--text-3);
+  color: var(--tok-gutter);
   font-size: 11px;
-  opacity: 0.7;
 }
 
 .jt-toggle {
@@ -361,26 +359,26 @@ defineExpose({ expandAll, collapseAll, matchCount })
   text-overflow: ellipsis;
 }
 
-/* 语法着色（VS Code 深色主题调色板）。
+/* 语法着色（--tok-* 统一色阶，与请求 Body 编辑器共用，见 constants/editorTheme.ts）。
  * 行内 token 由 v-html 动态注入，无 scoped 属性，需用 :deep 穿透。 */
 :deep(.jt-tok.jt-key) {
-  color: #569cd6;
+  color: var(--tok-key);
 }
 :deep(.jt-tok.jt-str) {
-  color: #ce9178;
+  color: var(--tok-str);
 }
 :deep(.jt-tok.jt-num) {
-  color: #4fc1ff;
+  color: var(--tok-num);
 }
 :deep(.jt-tok.jt-bool) {
-  color: #b5cea8;
+  color: var(--tok-bool);
 }
 :deep(.jt-tok.jt-null) {
-  color: #6a9955;
+  color: var(--tok-null);
   font-style: italic;
 }
 :deep(.jt-tok.jt-punct) {
-  color: #d4d4d4;
+  color: var(--tok-punct);
 }
 :deep(.jt-tok.jt-dots) {
   color: #888;

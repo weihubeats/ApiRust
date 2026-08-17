@@ -309,6 +309,7 @@ async fn curl_import_roundtrip_keeps_url_headers_body() {
             path_variables: vec![],
             auth: parsed.auth,
             body: parsed.body.unwrap_or(BodySpec::None),
+            active_tab: None,
             timeout_ms: 30000,
             follow_redirects: true,
             tests: None,

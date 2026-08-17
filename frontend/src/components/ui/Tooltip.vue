@@ -3,7 +3,7 @@
  * Tooltip：hover 提示（250ms 延迟出现，随触发元素定位）。
  * 触发元素为默认插槽；气泡 fixed 定位避免被 overflow 裁剪。
  */
-import { onBeforeUnmount, ref } from 'vue'
+import { nextTick, onBeforeUnmount, ref } from 'vue'
 import { onMounted } from 'vue'
 
 const props = withDefaults(
@@ -20,8 +20,10 @@ let timer: number | null = null
 function show(): void {
   if (!props.content) return
   timer = window.setTimeout(() => {
-    position()
+    // 先渲染气泡再测量定位：v-if 未激活时 tipEl 为空，直接 position() 会
+    // 停留在 (0,0) 导致气泡漂到窗口左上角（遮挡 macOS 交通灯）。
     visible.value = true
+    void nextTick(position)
   }, 250)
 }
 
@@ -47,7 +49,7 @@ function position(): void {
       : rect.bottom + 6
   pos.value = {
     left: Math.max(4, Math.min(left, window.innerWidth - tw - 4)),
-    top,
+    top: Math.max(4, top),
   }
 }
 
@@ -99,18 +101,20 @@ onBeforeUnmount(() => {
 .tt-tip {
   position: fixed;
   z-index: 300;
-  max-width: 260px;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  background: var(--text-1);
-  color: var(--bg-app);
+  max-width: 320px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--overflow-tip-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--overflow-tip-border);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  color: var(--overflow-tip-text);
   font-size: 11.5px;
   line-height: 1.5;
   pointer-events: none;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  box-shadow: var(--shadow);
+  white-space: normal;
+  word-break: break-all;
   animation: tt-in 120ms var(--ease);
 }
 .tt-tip.bottom {

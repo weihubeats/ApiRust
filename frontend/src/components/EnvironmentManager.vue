@@ -169,7 +169,7 @@ async function remove(env: Environment): Promise<void> {
             @click="select(env)"
           >
             <span class="edot" :class="`ed-${envColorClass(env.name)}`"></span>
-            <span class="em-row-name" :title="env.name">{{ env.name }}</span>
+            <span class="em-row-name" v-tooltip-overflow="env.name">{{ env.name }}</span>
             <span v-if="envBaseUrl(env)" class="em-row-url">{{ envBaseUrl(env) }}</span>
             <span v-if="env.id === activeEnvId" class="em-row-active">当前</span>
             <Popconfirm
@@ -181,7 +181,6 @@ async function remove(env: Environment): Promise<void> {
                 name="trash"
                 :size="12"
                 tone="danger"
-                title="删除环境"
                 class="em-row-del"
               />
             </Popconfirm>
@@ -252,7 +251,6 @@ async function remove(env: Environment): Promise<void> {
                 <IconButton
                   name="eye"
                   :size="13"
-                  :title="revealed[i] ? '隐藏值' : '显示值'"
                   class="em-reveal"
                   @click="revealed[i] = !revealed[i]"
                 />

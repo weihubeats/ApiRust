@@ -199,7 +199,9 @@ async fn openapi_roundtrip_and_backup() {
         .await
         .unwrap();
     let mut req_example_request_2 = ep.request.clone();
-    req_example_request_2.headers.push(KeyValue::new("X-Trace", "1"));
+    req_example_request_2
+        .headers
+        .push(KeyValue::new("X-Trace", "1"));
     let req_example_2 = RequestExample {
         id: uuid::Uuid::new_v4(),
         endpoint_id: ep.id,
@@ -215,8 +217,13 @@ async fn openapi_roundtrip_and_backup() {
     assert_eq!(req_examples.len(), 2);
     assert_eq!(req_examples[0].name, "带追踪头", "最新保存的应排在最前");
     assert_eq!(req_examples[0].request.headers[0].key, "X-Trace");
-    assert_eq!(req_examples[1].request.params[1].value, "2", "请求快照应完整保留");
-    repo::delete_request_example(&db, req_example.id).await.unwrap();
+    assert_eq!(
+        req_examples[1].request.params[1].value, "2",
+        "请求快照应完整保留"
+    );
+    repo::delete_request_example(&db, req_example.id)
+        .await
+        .unwrap();
     let req_examples = repo::list_request_examples(&db, ep.id).await.unwrap();
     assert_eq!(req_examples.len(), 1);
     assert_eq!(req_examples[0].name, "带追踪头");
@@ -246,9 +253,8 @@ async fn openapi_roundtrip_and_backup() {
     let envs = repo::list_environments(&db, project.id).await.unwrap();
     let rules = repo::list_mock_rules(&db, project.id).await.unwrap();
     let all_examples: Vec<ResponseExample> = examples_map.values().flatten().cloned().collect();
-    let all_req_examples: Vec<RequestExample> = repo::list_request_examples(&db, ep.id)
-        .await
-        .unwrap();
+    let all_req_examples: Vec<RequestExample> =
+        repo::list_request_examples(&db, ep.id).await.unwrap();
 
     let file = build_backup(
         &project,
@@ -417,32 +423,34 @@ async fn test_case_management_flow() {
         .await
         .unwrap();
     let new_endpoint: Endpoint = Endpoint {
-            id: Uuid::new_v4(),
-            project_id: project.id,
-            folder_id: None,
-            name: "资金调拨".into(),
-            method: HttpMethod::POST,
-            path: "/funds/transfer".into(),
-            description: String::new(),
-            status: Default::default(),
-            sort_order: 0,
-            request: RequestSpec {
-                params: vec![KeyValue::new("env".to_string(), "prod".to_string())],
-                headers: vec![],
-                path_variables: vec![],
-                auth: Default::default(),
-                body: BodySpec::Json {
-                    raw: "{\"amount\":100}".into(),
-                },
-                active_tab: None,
-                timeout_ms: 30000,
-                follow_redirects: true,
-                tests: None,
+        id: Uuid::new_v4(),
+        project_id: project.id,
+        folder_id: None,
+        name: "资金调拨".into(),
+        method: HttpMethod::POST,
+        path: "/funds/transfer".into(),
+        description: String::new(),
+        status: Default::default(),
+        sort_order: 0,
+        request: RequestSpec {
+            params: vec![KeyValue::new("env".to_string(), "prod".to_string())],
+            headers: vec![],
+            path_variables: vec![],
+            auth: Default::default(),
+            body: BodySpec::Json {
+                raw: "{\"amount\":100}".into(),
             },
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            active_tab: None,
+            timeout_ms: 30000,
+            follow_redirects: true,
+            tests: None,
+        },
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
     };
-    repo::save_endpoint(&db, &new_endpoint).await.expect("落库接口");
+    repo::save_endpoint(&db, &new_endpoint)
+        .await
+        .expect("落库接口");
     let endpoint = repo::list_endpoints(&db, project.id)
         .await
         .unwrap()
@@ -487,7 +495,10 @@ async fn test_case_management_flow() {
 
     // 删除用例。
     repo::delete_test_case(&db, case.id).await.unwrap();
-    assert!(repo::list_test_cases(&db, endpoint.id).await.unwrap().is_empty());
+    assert!(repo::list_test_cases(&db, endpoint.id)
+        .await
+        .unwrap()
+        .is_empty());
 
     // 级联删除：接口删除后用例随之删除。
     let case2 = TestCase {

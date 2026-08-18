@@ -130,7 +130,8 @@ struct TestCaseRow {
 
 impl TestCaseRow {
     fn into_model(self) -> Result<TestCase> {
-        let status = TestCaseStatus::parse(&self.last_run_status).unwrap_or(TestCaseStatus::Untested);
+        let status =
+            TestCaseStatus::parse(&self.last_run_status).unwrap_or(TestCaseStatus::Untested);
         Ok(TestCase {
             id: super::rows::parse_uuid(&self.id)?,
             request_id: super::rows::parse_uuid(&self.request_id)?,

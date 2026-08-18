@@ -19,10 +19,7 @@ pub async fn create_request_example(
     .bind(example.id.to_string())
     .bind(example.endpoint_id.to_string())
     .bind(&example.name)
-    .bind(
-        serde_json::to_string(&example.request)
-            .map_err(|e| fox_core::AppError::Json(e))?,
-    )
+    .bind(serde_json::to_string(&example.request).map_err(|e| fox_core::AppError::Json(e))?)
     .bind(example.created_at.to_rfc3339())
     .bind(example.updated_at.to_rfc3339())
     .execute(db)
@@ -42,7 +39,9 @@ pub async fn list_request_examples(
     .bind(endpoint_id.to_string())
     .fetch_all(db)
     .await?;
-    rows.into_iter().map(RequestExampleRow::into_model).collect()
+    rows.into_iter()
+        .map(RequestExampleRow::into_model)
+        .collect()
 }
 
 /// 删除单条请求用例。
@@ -70,9 +69,8 @@ impl RequestExampleRow {
             id: super::rows::parse_uuid(&self.id)?,
             endpoint_id: super::rows::parse_uuid(&self.endpoint_id)?,
             name: self.name,
-            request: serde_json::from_str(&self.request_json).map_err(|e| {
-                fox_core::AppError::Json(e)
-            })?,
+            request: serde_json::from_str(&self.request_json)
+                .map_err(|e| fox_core::AppError::Json(e))?,
             created_at: super::rows::parse_time(&self.created_at)?,
             updated_at: super::rows::parse_time(&self.updated_at)?,
         })

@@ -482,7 +482,7 @@ async fn test_case_management_flow() {
     assert_eq!(cases.len(), 1);
 
     // 更新元信息（改名 + 换分组）与运行状态。
-    repo::update_test_case_meta(&db, case.id, "负向-金额超限".into(), "边界值".into())
+    repo::update_test_case_meta(&db, case.id, "负向-金额超限", "边界值")
         .await
         .unwrap();
     repo::update_test_case_status(&db, case.id, TestCaseStatus::Success)

@@ -41,6 +41,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates/fox-tauri
+      - name: 规避 Azure Ubuntu 镜像不可达（CI 偶发 apt-get update 卡死）
+        run: |
+          sudo sed -i 's|http://azure\.archive\.ubuntu\.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
       - name: Install Linux dependencies (WebKit/GTK)
         run: |
           sudo apt-get update
@@ -71,6 +74,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: frontend/src-tauri
+      - name: 规避 Azure Ubuntu 镜像不可达（CI 偶发 apt-get update 卡死）
+        run: |
+          sudo sed -i 's|http://azure\.archive\.ubuntu\.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
       - name: Install Linux dependencies (WebKit/GTK)
         run: |
           sudo apt-get update

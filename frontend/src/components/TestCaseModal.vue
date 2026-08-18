@@ -25,12 +25,12 @@ const emit = defineEmits<{
 }>()
 
 const nameInput = ref('')
-const category = ref<TestCaseCategory>('正向')
+const categorySel = ref<TestCaseCategory>('正向')
 
 const CATEGORY_OPTIONS = TEST_CASE_CATEGORIES.map((c) => ({ value: c, label: c }))
 
 function onCategoryChange(value: string | number): void {
-  category.value = String(value) as TestCaseCategory
+  categorySel.value = String(value) as TestCaseCategory
 }
 
 watch(
@@ -38,7 +38,7 @@ watch(
   (open) => {
     if (open) {
       nameInput.value = props.name ?? ''
-      category.value = props.category ?? '正向'
+      categorySel.value = props.category ?? '正向'
     }
   },
 )
@@ -46,7 +46,7 @@ watch(
 function confirm(): void {
   const trimmed = nameInput.value.trim()
   if (!trimmed) return
-  emit('submit', { name: trimmed, category: category.value })
+  emit('submit', { name: trimmed, category: categorySel.value })
   emit('update:open', false)
 }
 </script>
@@ -73,7 +73,7 @@ function confirm(): void {
       <label class="tcm-field">
         <span class="tcm-label">用例分组</span>
         <CustomSelect
-          :model-value="category"
+          :model-value="categorySel"
           :options="CATEGORY_OPTIONS"
           @update:model-value="onCategoryChange"
         />

@@ -36,6 +36,8 @@ const authLabel = computed(() => {
       return `API Key（${a.in}）`
     case 'oauth2':
       return 'OAuth2'
+    default:
+      return '无'
   }
 })
 </script>

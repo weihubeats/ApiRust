@@ -9,6 +9,9 @@ import CustomSelect from './ui/CustomSelect.vue'
 
 const props = defineProps<{ draft: Endpoint | null }>()
 
+/** 草稿别名：draft 来自 store（可变对象），避免直接在 prop 上写。 */
+const d = computed(() => props.draft)
+
 const STATUS_OPTIONS: { value: EndpointStatus; label: string }[] = [
   { value: 'designing', label: '设计中' },
   { value: 'developing', label: '开发中' },
@@ -20,27 +23,28 @@ const STATUS_OPTIONS: { value: EndpointStatus; label: string }[] = [
 const statusLabel = computed(() => STATUS_OPTIONS.find((s) => s.value === props.draft?.status)?.label ?? '')
 
 function onStatusChange(v: string | number): void {
-  if (props.draft) props.draft.status = String(v) as EndpointStatus
+  const target = d.value
+  if (target) target.status = String(v) as EndpointStatus
 }
 </script>
 
 <template>
-  <div v-if="draft" class="dpn">
+  <div v-if="d" class="dpn">
     <label class="dpn-field">
       <span class="dpn-label">接口名称</span>
-      <input v-model="draft.name" class="dpn-input" type="text" spellcheck="false" />
+      <input v-model="d.name" class="dpn-input" type="text" spellcheck="false" />
     </label>
     <label class="dpn-field">
       <span class="dpn-label">请求路径</span>
       <div class="dpn-path">
-        <span class="dpn-method" :class="`m-select-${draft.method.toLowerCase()}`">{{ draft.method }}</span>
-        <input v-model="draft.path" class="dpn-input dpn-path-input" type="text" spellcheck="false" />
+        <span class="dpn-method" :class="`m-select-${d.method.toLowerCase()}`">{{ d.method }}</span>
+        <input v-model="d.path" class="dpn-input dpn-path-input" type="text" spellcheck="false" />
       </div>
     </label>
     <label class="dpn-field">
       <span class="dpn-label">接口描述</span>
       <textarea
-        v-model="draft.description"
+        v-model="d.description"
         class="dpn-input dpn-textarea"
         rows="3"
         placeholder="接口用途、注意事项、返回约定…"
@@ -51,7 +55,7 @@ function onStatusChange(v: string | number): void {
       <span class="dpn-label">生命周期状态</span>
       <div class="dpn-status-row">
         <CustomSelect
-          :model-value="draft.status"
+          :model-value="d.status"
           :options="STATUS_OPTIONS"
           @update:model-value="onStatusChange"
         />

@@ -7,7 +7,7 @@ import { computed, ref } from 'vue'
 import { useFoxApi } from '../composables/useFoxApi'
 import { useToast } from '../composables/useToast'
 import CustomSelect from './ui/CustomSelect.vue'
-import type { Endpoint } from '../types/foxApi'
+import type { ApiKeyLocation, AuthSpec, Endpoint, OAuth2Token } from '../types/foxApi'
 
 const props = defineProps<{ draft: Endpoint | null }>()
 
@@ -26,8 +26,23 @@ const AUTH_IN_OPTIONS = [
   { value: 'query', label: 'Query' },
 ]
 
-/** Auth 编辑区；type 切换时替换为对应默认对象。 */
-const authAny = computed(() => props.draft?.request.auth as any)
+/** Auth 编辑区；type 切换时替换为对应默认对象。所有分支字段统一为可选项。 */
+type EditableAuth = AuthSpec & {
+  token?: OAuth2Token
+  key?: string
+  value?: string
+  in?: ApiKeyLocation | string
+  username?: string
+  password?: string
+  client_id?: string
+  client_secret?: string
+  auth_url?: string
+  token_url?: string
+  scope?: string
+  redirect_uri?: string
+}
+
+const authAny = computed(() => props.draft?.request.auth as EditableAuth)
 const authorizing = ref(false)
 
 /** OAuth2 授权状态文案。 */
@@ -50,9 +65,9 @@ async function oauthAuthorize(): Promise<void> {
   if (!props.draft) return
   authorizing.value = true
   try {
-    const token = await api.oauthAuthorize(authAny.value)
+    const token = await api.oauthAuthorize(authAny.value as AuthSpec)
     const req = props.draft.request
-    req.auth = { ...authAny.value, token }
+    req.auth = { ...authAny.value, token } as AuthSpec
     toast.success('OAuth2 授权成功，请保存 (⌘S) 持久化')
   } catch (err) {
     toast.error('OAuth2 授权失败', { message: err instanceof Error ? err.message : String(err) })

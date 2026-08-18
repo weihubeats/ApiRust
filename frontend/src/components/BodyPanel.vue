@@ -16,13 +16,24 @@ import JsonEditor from './ui/JsonEditor.vue'
 import SegmentedControl, { type SegmentOption } from './ui/SegmentedControl.vue'
 import { RAW_SUBTYPES, applyBodyTab, applyRawSubtype, rawSubtypeOf, tabOf } from '../utils/bodyMode'
 import type { BodyTab, RawSubtype } from '../utils/bodyMode'
-import type { Endpoint, KeyValue, MultipartField } from '../types/foxApi'
+import type { BodySpec, Endpoint, GraphQLSpec, KeyValue, MultipartField } from '../types/foxApi'
 
 const props = defineProps<{ draft: Endpoint | null }>()
 
-const bodyAny = computed(() => props.draft?.request.body as any)
+/** 编辑视图：BodySpec 联合各分支字段统一为必填（运行时按 activeTab 分支存在）。 */
+type EditableBody = {
+  mode: string
+  raw: string
+  path: string
+  spec: GraphQLSpec
+  fields: KeyValue[] | MultipartField[]
+}
+
+const bodyAny = computed(() => props.draft?.request.body as EditableBody)
 const headersAny = computed(() => props.draft?.request.headers as KeyValue[] | undefined)
-const graphql = computed(() => bodyAny.value?.spec as any)
+const graphql = computed(() => bodyAny.value.spec)
+const urlencodedFields = computed(() => bodyAny.value.fields as KeyValue[])
+const multipartFields = computed(() => bodyAny.value.fields as MultipartField[])
 
 const BODY_TABS: SegmentOption[] = [
   { value: 'none', label: '无' },
@@ -36,14 +47,14 @@ const BODY_TABS: SegmentOption[] = [
 const RAW_SUBTYPE_OPTIONS = RAW_SUBTYPES.map((s) => ({ value: s.value, label: s.label }))
 
 const activeTab = computed({
-  get: () => tabOf(bodyAny.value ?? { mode: 'none' }, headersAny.value ?? []),
+  get: () => tabOf((bodyAny.value ?? { mode: 'none' }) as BodySpec, headersAny.value ?? []),
   set: (tab: string) => {
     if (props.draft) applyBodyTab(props.draft.request, tab as BodyTab)
   },
 })
 
 const rawSubtype = computed({
-  get: () => rawSubtypeOf(bodyAny.value ?? { mode: 'none' }, headersAny.value ?? []),
+  get: () => rawSubtypeOf((bodyAny.value ?? { mode: 'none' }) as BodySpec, headersAny.value ?? []),
   set: (subtype: string) => {
     if (props.draft) applyRawSubtype(props.draft.request, subtype as RawSubtype)
   },
@@ -131,7 +142,7 @@ function removeMultipartField(index: number): void {
     </div>
 
     <div v-else-if="activeTab === 'x-www-form-urlencoded'" class="editor-fields">
-      <div v-for="(f, i) in bodyAny.fields" :key="i" class="kv-row">
+      <div v-for="(f, i) in urlencodedFields" :key="i" class="kv-row">
         <input v-model="f.enabled" type="checkbox" class="kv-check" />
         <input v-model="f.key" class="rf-input rf-input-sm kv-key" placeholder="Key" />
         <input v-model="f.value" class="rf-input rf-input-sm kv-value" placeholder="Value" />
@@ -143,7 +154,7 @@ function removeMultipartField(index: number): void {
     </div>
 
     <div v-else-if="activeTab === 'form-data'" class="editor-fields">
-      <div v-for="(f, i) in bodyAny.fields" :key="i" class="kv-row">
+      <div v-for="(f, i) in multipartFields" :key="i" class="kv-row">
         <input v-model="f.enabled" type="checkbox" class="kv-check" />
         <input v-model="f.key" class="rf-input rf-input-sm kv-key" placeholder="Key" />
         <CustomSelect

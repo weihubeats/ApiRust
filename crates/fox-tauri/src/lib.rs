@@ -91,7 +91,10 @@ pub mod plugin {
                     };
                     // 恢复持久化的代理设置（失败静默保持直连）
                     tauri::async_runtime::block_on(commands::settings::apply_saved_proxy(&db));
-                    app.manage(AppState::new(db));
+                    // 恢复持久化的激活项目 / 环境（settings 表，含归属校验）
+                    let state = AppState::new(db);
+                    let _ = tauri::async_runtime::block_on(state.restore_active());
+                    app.manage(state);
                     Ok(())
                 },
             )

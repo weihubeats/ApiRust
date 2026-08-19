@@ -11,7 +11,5 @@ use crate::error::{CommandError, CommandResult};
 pub fn clipboard_write_text(text: String) -> CommandResult<()> {
     arboard::Clipboard::new()
         .and_then(|mut cb| cb.set_text(text))
-        .map_err(|e| {
-            CommandError::with_code("CLIPBOARD", format!("写入系统剪贴板失败: {e}"))
-        })
+        .map_err(|e| CommandError::with_code("CLIPBOARD", format!("写入系统剪贴板失败: {e}")))
 }

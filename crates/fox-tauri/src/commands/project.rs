@@ -37,6 +37,9 @@ pub async fn delete_project(state: State<'_, AppState>, project_id: Uuid) -> Com
         active.project = None;
         active.environment_id = None;
         active.environment = None;
+        drop(active);
+        repo::set_setting(&state.db, "active_project_id", "null").await?;
+        repo::set_setting(&state.db, "active_environment_id", "null").await?;
     }
     Ok(())
 }

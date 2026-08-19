@@ -54,7 +54,9 @@ pub async fn update_test_case_meta(
         return Err(CommandError::validation("用例名称不能为空"));
     }
     if !CATEGORIES.contains(&category.as_str()) {
-        return Err(CommandError::validation(format!("无效的用例分组：{category}")));
+        return Err(CommandError::validation(format!(
+            "无效的用例分组：{category}"
+        )));
     }
     repo::update_test_case_meta(&state.db, case_id, &name, &category)
         .await

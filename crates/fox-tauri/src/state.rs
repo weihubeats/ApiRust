@@ -114,13 +114,17 @@ impl AppState {
             Some(id) => Some(repo::get_project(&self.db, id).await?),
             None => None,
         };
-        let env_belongs = write
-            .environment
-            .as_ref()
-            .map(|env| Some(env.project_id))
-            .unwrap_or(None);
+        // 环境归属：优先用缓存，缓存缺失（如恢复后的初始状态）时查库补全。
+        let env_project = match (write.environment.as_ref(), write.environment_id) {
+            (Some(env), _) => Some(env.project_id),
+            (None, Some(id)) => match repo::get_environment(&self.db, id).await {
+                Ok(env) => Some(env.project_id),
+                Err(_) => None,
+            },
+            (None, None) => None,
+        };
         let mut env_id = write.environment_id;
-        if env_belongs != project_id {
+        if env_project != project_id {
             write.environment_id = None;
             write.environment = None;
             env_id = None;
@@ -254,6 +258,21 @@ mod tests {
             Some(env_id)
         );
 
+        // 回归：重启后用户经项目列表「重新进入」同一项目，环境必须保留
+        //（restore 后 environment 缓存为空，旧逻辑会误判归属并清空环境）。
+        restarted
+            .set_active_project(Some(project.id))
+            .await
+            .expect("重进项目");
+        {
+            let read = restarted.active.read().await;
+            assert_eq!(
+                read.environment_id,
+                Some(env_id),
+                "重进同一项目不应清空环境"
+            );
+        }
+
         // 环境不属于当前项目时应被丢弃。
         let other_project_id = Uuid::new_v4();
         repo::save_project(
@@ -299,6 +318,16 @@ mod tests {
         assert_eq!(read.project_id, Some(project.id));
         assert_eq!(read.environment_id, None, "跨项目环境应被丢弃");
         drop(read);
+
+        // 切换到其他项目 → 环境应清空并持久化 null。
+        restarted
+            .set_active_project(Some(other_project_id))
+            .await
+            .expect("切换项目");
+        {
+            let read = restarted.active.read().await;
+            assert_eq!(read.environment_id, None, "跨项目环境应清空");
+        }
 
         db.close().await;
         let _ = std::fs::remove_file(&path);

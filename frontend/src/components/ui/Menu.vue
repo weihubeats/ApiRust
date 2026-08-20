@@ -14,6 +14,10 @@ export interface MenuItem {
   key: string
   label: string
   icon?: IconName
+  /** 选中态：右侧显示 check 图标并整行高亮。 */
+  checked?: boolean
+  /** 图标使用主题色（如「新建项目」的 +）。 */
+  iconAccent?: boolean
   /** 右侧快捷键提示（如 ⌘N）。 */
   shortcut?: string
   danger?: boolean
@@ -127,15 +131,27 @@ defineExpose({ openAt, close })
           <div v-if="item.dividerBefore" class="rf-menu-divider"></div>
           <button
             class="rf-menu-item"
-            :class="{ danger: item.danger, disabled: item.disabled }"
+            :class="{ danger: item.danger, disabled: item.disabled, checked: item.checked }"
             type="button"
             role="menuitem"
             :disabled="item.disabled"
             @click="onItemClick(item)"
           >
-            <Icon v-if="item.icon" :name="item.icon" :size="14" />
+            <span
+              v-if="item.icon"
+              class="rf-menu-icon"
+              :class="{ accent: item.iconAccent }"
+            >
+              <Icon :name="item.icon" :size="14" />
+            </span>
             <span class="rf-menu-label">{{ item.label }}</span>
             <kbd v-if="item.shortcut" class="rf-menu-kbd">{{ item.shortcut }}</kbd>
+            <Icon
+              v-else-if="item.checked"
+              class="rf-menu-check"
+              name="check"
+              :size="13"
+            />
           </button>
         </template>
       </template>
@@ -158,11 +174,14 @@ defineExpose({ openAt, close })
   z-index: 300;
   min-width: 176px;
   max-width: 240px;
-  padding: 4px;
+  padding: 5px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-lg);
+  border-radius: 10px;
+  box-shadow:
+    var(--shadow-lg),
+    0 20px 25px -5px rgb(0 0 0 / 0.3),
+    0 8px 10px -6px rgb(0 0 0 / 0.3);
   animation: menu-in 120ms var(--ease);
   transform-origin: top center;
 }
@@ -170,10 +189,9 @@ defineExpose({ openAt, close })
 .rf-menu-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  height: 29px;
-  padding: 0 8px;
+  padding: 7px 16px;
   border: none;
   background: none;
   border-radius: var(--radius-sm);
@@ -182,10 +200,14 @@ defineExpose({ openAt, close })
   color: var(--text-1);
   cursor: pointer;
   text-align: left;
-  transition: background var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 .rf-menu-item:hover {
   background: var(--bg-hover);
+}
+.rf-menu-item.checked {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-1);
 }
 .rf-menu-item.danger {
   color: var(--danger);
@@ -200,9 +222,20 @@ defineExpose({ openAt, close })
 .rf-menu-item.disabled:hover {
   background: none;
 }
-.rf-menu-item .rf-menu-svg {
+
+.rf-menu-icon {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
   color: var(--text-2);
+}
+.rf-menu-icon.accent {
+  color: var(--accent);
+}
+.rf-menu-icon :deep(svg) {
+  display: block;
 }
 
 .rf-menu-label {
@@ -211,6 +244,11 @@ defineExpose({ openAt, close })
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rf-menu-check {
+  flex-shrink: 0;
+  color: var(--accent);
 }
 
 .rf-menu-kbd {
@@ -228,8 +266,8 @@ defineExpose({ openAt, close })
 
 .rf-menu-divider {
   height: 1px;
-  margin: 4px 6px;
-  background: var(--border);
+  margin: 6px 10px;
+  background: var(--border-strong);
 }
 
 .rf-menu-confirm-title {

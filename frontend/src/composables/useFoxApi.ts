@@ -126,6 +126,9 @@ export function useFoxApi() {
 
   const saveProject = (project: Project) => run(() => call<Project>('save_project', { project }))
 
+  const updateProjectsOrder = (projectIds: string[]) =>
+    run(() => call<void>('update_projects_order', { projectIds }))
+
   const deleteProject = (projectId: string) =>
     run(() => call<void>('delete_project', { projectId }))
 
@@ -333,6 +336,7 @@ export function useFoxApi() {
     activeEnvironment,
     getProjects,
     saveProject,
+    updateProjectsOrder,
     deleteProject,
     setActiveProject,
     getActiveProject,

@@ -8,6 +8,7 @@ RustFox 核心插件的默认权限：允许前端调用全部 fox 命令
 
 - `allow-get-projects`
 - `allow-save-project`
+- `allow-update-projects-order`
 - `allow-delete-project`
 - `allow-set-active-project`
 - `allow-get-active-project`
@@ -1365,6 +1366,32 @@ Enables the test_endpoint command without any pre-configured scope.
 <td>
 
 Denies the test_endpoint command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:allow-update-projects-order`
+
+</td>
+<td>
+
+Enables the update_projects_order command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`fox-tauri:deny-update-projects-order`
+
+</td>
+<td>
+
+Denies the update_projects_order command without any pre-configured scope.
 
 </td>
 </tr>

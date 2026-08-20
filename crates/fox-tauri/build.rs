@@ -4,6 +4,7 @@
 const COMMANDS: &[&str] = &[
     "get_projects",
     "save_project",
+    "update_projects_order",
     "delete_project",
     "set_active_project",
     "get_active_project",

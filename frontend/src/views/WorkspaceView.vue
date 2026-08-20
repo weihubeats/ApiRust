@@ -135,12 +135,13 @@ async function openProjectMenu(): Promise<void> {
     items = (await api.getProjects()).map((p) => ({
       key: `switch-project:${p.id}`,
       label: p.name,
-      icon: p.id === store.project?.id ? 'check' : ('folder' as const),
+      icon: 'folder' as const,
+      checked: p.id === store.project?.id,
     }))
   } catch {
     toast.error('项目列表加载失败')
   }
-  items.push({ key: 'new-project', label: '新建项目', icon: 'plus', dividerBefore: true })
+  items.push({ key: 'new-project', label: '新建项目', icon: 'plus', iconAccent: true, dividerBefore: true })
   menuRef.value?.openAt(projectBtn.value, items, 'left')
 }
 

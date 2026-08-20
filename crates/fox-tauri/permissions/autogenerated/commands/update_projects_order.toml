@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-update-projects-order"
+description = "Enables the update_projects_order command without any pre-configured scope."
+commands.allow = ["update_projects_order"]
+
+[[permission]]
+identifier = "deny-update-projects-order"
+description = "Denies the update_projects_order command without any pre-configured scope."
+commands.deny = ["update_projects_order"]

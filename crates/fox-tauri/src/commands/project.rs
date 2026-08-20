@@ -9,10 +9,20 @@ use fox_storage::repository as repo;
 use crate::error::{CommandError, CommandResult};
 use crate::state::AppState;
 
-/// 列出全部项目。
+/// 列出全部项目（按拖拽排序 sort_order 排列）。
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_projects(state: State<'_, AppState>) -> CommandResult<Vec<Project>> {
     repo::list_projects(&state.db).await.map_err(Into::into)
+}
+
+/// 拖拽排序持久化：按前端拖拽后的 id 顺序（事务）批量更新 sort_order。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_projects_order(
+    state: State<'_, AppState>,
+    project_ids: Vec<Uuid>,
+) -> CommandResult<()> {
+    repo::update_projects_order(&state.db, &project_ids).await?;
+    Ok(())
 }
 
 /// 创建或覆盖保存项目。

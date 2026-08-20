@@ -17,6 +17,8 @@ defineProps<{
   active: boolean
   /** 当前展开更多菜单的卡片 id（父级持有，保证同时只开一个） */
   menuOpen: boolean
+  /** 手动排序模式下显示拖拽手柄 */
+  draggable: boolean
 }>()
 
 const emit = defineEmits<{
@@ -29,7 +31,17 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="proj-card" @click="emit('open')">
+  <div class="proj-card" :data-project-id="project.id" @click="emit('open')">
+    <span v-if="draggable" class="dnd-handle" title="拖拽排序" @click.stop>
+      <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden="true">
+        <circle cx="2" cy="2" r="1.3" />
+        <circle cx="8" cy="2" r="1.3" />
+        <circle cx="2" cy="7" r="1.3" />
+        <circle cx="8" cy="7" r="1.3" />
+        <circle cx="2" cy="12" r="1.3" />
+        <circle cx="8" cy="12" r="1.3" />
+      </svg>
+    </span>
     <span class="proj-avatar" :style="avatarStyle(project.name)">{{ initials(project.name) }}</span>
     <div class="proj-main">
       <div class="proj-title-row">
@@ -43,7 +55,7 @@ const emit = defineEmits<{
         <span class="metric"><Icon name="clock" :size="12" />{{ timeAgo(project.updated_at) }}</span>
       </div>
     </div>
-    <div class="proj-side">
+    <div class="proj-side" data-no-drag>
       <span class="proj-open" title="打开项目">
         <Icon name="arrow-up-right" :size="13" /> Open
       </span>
@@ -102,6 +114,37 @@ const emit = defineEmits<{
   font-size: 16px;
   font-weight: 700;
   user-select: none;
+}
+
+/* 拖拽手柄：左上角 6 点，hover 浮现，仅手柄可拖 */
+.dnd-handle {
+  position: absolute;
+  top: 12px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 20px;
+  border-radius: 5px;
+  color: var(--text-3);
+  cursor: grab;
+  opacity: 0;
+  transition:
+    opacity var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+  user-select: none;
+}
+.proj-card:hover .dnd-handle {
+  opacity: 1;
+}
+.dnd-handle:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+.dnd-handle:active {
+  cursor: grabbing;
 }
 
 .proj-main {

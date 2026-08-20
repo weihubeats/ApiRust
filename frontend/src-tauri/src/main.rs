@@ -7,7 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 const ABOUT_EVENT: &str = "rustfox://about";
 
@@ -43,12 +43,24 @@ fn build_menu(app: &tauri::App) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
 
-    let view_menu = Submenu::with_items(
-        app,
-        "View",
-        true,
-        &[&PredefinedMenuItem::fullscreen(app, Some("Toggle Full Screen"))?],
-    )?;
+    let view_menu = {
+        let fullscreen = PredefinedMenuItem::fullscreen(app, Some("Toggle Full Screen"))?;
+        #[cfg(debug_assertions)]
+        {
+            let devtools = MenuItem::with_id(
+                app,
+                "toggle-devtools",
+                "Toggle Developer Tools",
+                true,
+                Some("CmdOrCtrl+Alt+I"),
+            )?;
+            Submenu::with_items(app, "View", true, &[&fullscreen, &devtools])?
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            Submenu::with_items(app, "View", true, &[&fullscreen])?
+        }
+    };
 
     let window_menu = Submenu::with_items(
         app,
@@ -77,6 +89,14 @@ fn main() {
         .on_menu_event(|app, event| {
             if event.id().0 == "about" {
                 let _ = app.emit(ABOUT_EVENT, ());
+            } else if event.id().0 == "toggle-devtools" {
+                if let Some(window) = app.get_webview_window("main") {
+                    if window.is_devtools_open() {
+                        let _ = window.close_devtools();
+                    } else {
+                        let _ = window.open_devtools();
+                    }
+                }
             }
         })
         .run(tauri::generate_context!())

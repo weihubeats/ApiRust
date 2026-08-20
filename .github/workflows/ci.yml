@@ -101,3 +101,6 @@ jobs:
       - name: Check Tauri shell
         working-directory: frontend/src-tauri
         run: cargo check
+      - name: Check Tauri shell (release profile, 覆盖 tauri build 打包路径)
+        working-directory: frontend/src-tauri
+        run: cargo check --release

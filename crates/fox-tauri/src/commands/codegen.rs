@@ -1,4 +1,4 @@
-//! 代码生成 Command:把接口请求渲染为 curl / python / js / go / java / php 片段。
+//! 代码生成 Command:把接口请求渲染为 curl / python / js / go / java / php / rust 片段。
 
 use fox_codegen::{GenRequest, Lang};
 use fox_core::model::{AuthSpec, BodySpec, HttpMethod, KeyValue};

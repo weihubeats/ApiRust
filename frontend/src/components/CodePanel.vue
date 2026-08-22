@@ -33,6 +33,7 @@ const CODE_LANGS: Array<{ value: CodeLang; label: string }> = [
   { value: 'go', label: 'Go (net/http)' },
   { value: 'java', label: 'Java (OkHttp)' },
   { value: 'php', label: 'PHP (cURL)' },
+  { value: 'rust', label: 'Rust (reqwest)' },
 ]
 
 const codeLang = ref<CodeLang>('curl')

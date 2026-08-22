@@ -594,6 +594,24 @@ kbd,
   color: var(--text-2);
 }
 
+/* ---- 文档预览（DocsPanel 族）：轻量卡片与节标题（跨组件共用，须全局） ---- */
+
+.doc-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  padding: var(--sp-4);
+}
+
+.doc-sec-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
 /* ---- macOS Overlay 标题栏：为左上角交通灯（x:12 起，宽约 62px）预留空间 ---- */
 html[data-platform='macos'] .app-brand {
   left: 92px;

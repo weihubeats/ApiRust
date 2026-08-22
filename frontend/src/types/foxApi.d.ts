@@ -279,7 +279,7 @@ export interface TestCase {
 }
 
 /** 代码生成语言（Rust `Lang`，fox-tauri `codegen_render` 的 `lang` 取值）。 */
-export type CodeLang = 'curl' | 'python' | 'js' | 'go' | 'java' | 'php'
+export type CodeLang = 'curl' | 'python' | 'js' | 'go' | 'java' | 'php' | 'rust'
 
 /** 备份恢复摘要（fox-tauri `backup_restore` 返回）。 */
 export interface BackupSummary {

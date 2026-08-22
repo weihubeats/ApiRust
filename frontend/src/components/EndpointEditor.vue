@@ -756,7 +756,7 @@ onUnmounted(() => {
     </div>
     </template>
     <DesignPanel v-else-if="store.activeView === 'design'" :draft="draft" />
-    <DocsPanel v-else-if="store.activeView === 'docs'" :draft="draft" />
+    <DocsPanel v-else-if="store.activeView === 'docs'" :draft="draft" :url="requestUrl" />
     <TestCasesPanel v-else-if="store.activeView === 'cases'" :draft="draft" />
     <MockPanel
       v-else-if="store.activeView === 'mock'"

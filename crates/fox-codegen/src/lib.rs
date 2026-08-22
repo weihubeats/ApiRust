@@ -1,7 +1,7 @@
 //! 客户端代码生成（M13）。
 //!
 //! 支持 curl / Python (requests) / JavaScript (fetch) / Go (net/http) /
-//! Java (OkHttp) / PHP (cURL)。
+//! Java (OkHttp) / PHP (cURL) / Rust (reqwest)。
 //! URL 传入时即为渲染后的完整地址（含变量与环境替换）。
 //!
 //! # 插件式生成引擎（v2 架构）
@@ -58,6 +58,7 @@ pub enum Lang {
     Go,
     Java,
     Php,
+    Rust,
 }
 
 impl Lang {
@@ -69,6 +70,7 @@ impl Lang {
             Lang::Go => "Go (net/http)",
             Lang::Java => "Java (OkHttp)",
             Lang::Php => "PHP (cURL)",
+            Lang::Rust => "Rust (reqwest)",
         }
     }
 
@@ -80,6 +82,7 @@ impl Lang {
             "go" => Some(Lang::Go),
             "java" => Some(Lang::Java),
             "php" => Some(Lang::Php),
+            "rust" => Some(Lang::Rust),
             _ => None,
         }
     }
@@ -132,6 +135,7 @@ pub fn render<'a>(lang: Lang, req: &GenRequest<'a>) -> String {
         Lang::Go => render_go(m, u, &merged, req.body),
         Lang::Java => render_java(m, u, &merged, req.body),
         Lang::Php => render_php(m, u, &merged, req.body),
+        Lang::Rust => render_rust(m, u, &merged, req.body),
     }
 }
 
@@ -654,6 +658,84 @@ fn render_php(
     );
     out
 }
+
+/// 生成 Rust 代码（reqwest blocking 客户端，单文件 main 可直接运行）。
+///
+/// 依赖提示写在首行注释；multipart 文件字段用 `Form::file`（返回 Result，
+/// 链式调用中用 `?` 解开）；Body 用 `dq` 转义的双引号字符串嵌入。
+fn render_rust(
+    method: &HttpMethod,
+    url: &str,
+    headers: &[(String, String)],
+    spec: &BodySpec,
+) -> String {
+    let (body, content_type, multipart) = body_parts(spec);
+    let mut out = String::from(
+        "// Cargo.toml 依赖：reqwest = { version = \"0.12\", features = [\"blocking\", \"multipart\"] }\n\n",
+    );
+    out.push_str("fn main() -> Result<(), Box<dyn std::error::Error>> {\n");
+    out.push_str("    let client = reqwest::blocking::Client::new();\n");
+
+    let has_ct = headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+
+    if let Some(fields) = multipart {
+        // multipart：Form 链式构建（file 字段的 ? 在链中解开，后续仍可链式）。
+        let mut lines: Vec<String> =
+            vec!["    let form = reqwest::multipart::Form::new()".into()];
+        for f in fields
+            .iter()
+            .filter(|f| f.enabled && !f.key.trim().is_empty())
+        {
+            match f.value_type {
+                MultipartValueType::Text => lines.push(format!(
+                    "        .text(\"{}\", \"{}\")",
+                    dq(&f.key),
+                    dq(&f.value)
+                )),
+                MultipartValueType::FilePath => lines.push(format!(
+                    "        .file(\"{}\", \"{}\")?",
+                    dq(&f.key),
+                    dq(&f.value)
+                )),
+            }
+        }
+        out.push_str(&lines.join("\n"));
+        out.push_str(";\n");
+        out.push_str(&format!(
+            "    let response = client.request(\"{method}\".parse()?, \"{}\")\n",
+            dq(url)
+        ));
+        for (k, v) in headers {
+            out.push_str(&format!("        .header(\"{}\", \"{}\")\n", dq(k), dq(v)));
+        }
+        out.push_str("        .multipart(form)\n        .send()?;\n");
+    } else {
+        out.push_str(&format!(
+            "    let response = client.request(\"{method}\".parse()?, \"{}\")\n",
+            dq(url)
+        ));
+        for (k, v) in headers {
+            out.push_str(&format!("        .header(\"{}\", \"{}\")\n", dq(k), dq(v)));
+        }
+        if let Some(ct) = content_type {
+            if !has_ct {
+                out.push_str(&format!("        .header(\"Content-Type\", \"{ct}\")\n"));
+            }
+        }
+        if !body.is_empty() {
+            out.push_str(&format!("        .body(\"{}\")\n", dq(&body)));
+        }
+        out.push_str("        .send()?;\n");
+    }
+
+    out.push_str("    let status = response.status();\n");
+    out.push_str("    let body = response.text()?;\n");
+    out.push_str("    println!(\"{} {}\", status, body);\n");
+    out.push_str("    Ok(())\n}\n");
+    out
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1079,6 +1161,79 @@ mod tests {
         let code = render(Lang::Curl, &req);
         assert_eq!(code.matches("Authorization").count(), 1);
         assert!(code.contains("manual"));
+    }
+
+    #[test]
+    fn rust_reqwest_json_body_and_auth() {
+        let method = HttpMethod::POST;
+        let body = BodySpec::Json {
+            raw: "{\"name\":\"a\"}".into(),
+        };
+        let req = GenRequest {
+            method: &method,
+            url: "https://api.example.com/users",
+            headers: &[],
+            body: &body,
+            auth: &AuthSpec::Bearer {
+                token: "tok123".into(),
+            },
+        };
+        let code = render(Lang::Rust, &req);
+        assert!(code.contains("reqwest::blocking::Client::new()"));
+        assert!(code.contains(".request(\"POST\".parse()?, \"https://api.example.com/users\")"));
+        assert!(code.contains(".header(\"Authorization\", \"Bearer tok123\")"));
+        assert!(code.contains(".header(\"Content-Type\", \"application/json\")"));
+        assert!(code.contains(".body(\"{\\\"name\\\":\\\"a\\\"}\")"));
+        assert!(code.contains("fn main() -> Result<(), Box<dyn std::error::Error>>"));
+    }
+
+    #[test]
+    fn rust_reqwest_get_without_body() {
+        let method = HttpMethod::GET;
+        let req = GenRequest {
+            method: &method,
+            url: "https://api.example.com/g",
+            headers: &[],
+            body: &BodySpec::None,
+            auth: &AuthSpec::None,
+        };
+        let code = render(Lang::Rust, &req);
+        assert!(code.contains(".request(\"GET\".parse()?, \"https://api.example.com/g\")"));
+        assert!(!code.contains(".body("));
+        assert!(!code.contains(".multipart("));
+    }
+
+    #[test]
+    fn rust_reqwest_multipart_uses_form() {
+        let method = HttpMethod::POST;
+        let body = BodySpec::Multipart {
+            fields: vec![
+                MultipartField {
+                    key: "name".into(),
+                    value_type: MultipartValueType::Text,
+                    value: "v".into(),
+                    enabled: true,
+                },
+                MultipartField {
+                    key: "avatar".into(),
+                    value_type: MultipartValueType::FilePath,
+                    value: "/tmp/a.png".into(),
+                    enabled: true,
+                },
+            ],
+        };
+        let req = GenRequest {
+            method: &method,
+            url: "https://api.example.com/u",
+            headers: &[],
+            body: &body,
+            auth: &AuthSpec::None,
+        };
+        let code = render(Lang::Rust, &req);
+        assert!(code.contains("reqwest::multipart::Form::new()"));
+        assert!(code.contains(".text(\"name\", \"v\")"));
+        assert!(code.contains(".file(\"avatar\", \"/tmp/a.png\")?"));
+        assert!(code.contains(".multipart(form)"));
     }
 
     #[test]

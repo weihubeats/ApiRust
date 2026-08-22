@@ -174,16 +174,21 @@ defineExpose({ openAt, close })
   z-index: 300;
   min-width: 176px;
   max-width: 240px;
-  padding: 5px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
+  padding: 6px;
+  background: rgba(23, 23, 23, 0.95);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border: 1px solid #262626;
+  border-radius: 12px;
   box-shadow:
-    var(--shadow-lg),
-    0 20px 25px -5px rgb(0 0 0 / 0.3),
-    0 8px 10px -6px rgb(0 0 0 / 0.3);
+    0 25px 50px -12px rgb(0 0 0 / 0.5),
+    var(--shadow-lg);
   animation: menu-in 120ms var(--ease);
   transform-origin: top center;
+}
+:global(html[data-theme='light']) .rf-menu {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
 }
 
 .rf-menu-item {
@@ -191,29 +196,38 @@ defineExpose({ openAt, close })
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 7px 16px;
+  padding: 6px 12px;
   border: none;
   background: none;
-  border-radius: var(--radius-sm);
-  font-size: 12.5px;
+  border-radius: 8px;
+  font-size: 12px;
   font-family: inherit;
-  color: var(--text-1);
+  color: #d4d4d4;
   cursor: pointer;
   text-align: left;
   transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 .rf-menu-item:hover {
+  background: #262626;
+  color: #f5f5f5;
+}
+:global(html[data-theme='light']) .rf-menu-item {
+  color: var(--text-2);
+}
+:global(html[data-theme='light']) .rf-menu-item:hover {
   background: var(--bg-hover);
+  color: var(--text-1);
 }
 .rf-menu-item.checked {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--text-1);
 }
 .rf-menu-item.danger {
-  color: var(--danger);
+  color: #fb7185;
 }
 .rf-menu-item.danger:hover {
-  background: var(--danger-tint);
+  background: rgba(244, 63, 94, 0.1);
+  color: #fda4af;
 }
 .rf-menu-item.disabled {
   color: var(--text-3);
@@ -228,7 +242,17 @@ defineExpose({ openAt, close })
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
+  width: 14px;
+  height: 14px;
+  color: #a3a3a3;
+}
+.rf-menu-item:hover .rf-menu-icon {
+  color: #e5e5e5;
+}
+:global(html[data-theme='light']) .rf-menu-icon {
+  color: var(--text-3);
+}
+:global(html[data-theme='light']) .rf-menu-item:hover .rf-menu-icon {
   color: var(--text-2);
 }
 .rf-menu-icon.accent {
@@ -266,7 +290,10 @@ defineExpose({ openAt, close })
 
 .rf-menu-divider {
   height: 1px;
-  margin: 6px 10px;
+  margin: 4px -6px;
+  background: #262626;
+}
+:global(html[data-theme='light']) .rf-menu-divider {
   background: var(--border-strong);
 }
 

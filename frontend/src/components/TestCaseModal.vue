@@ -64,6 +64,7 @@ function confirm(): void {
         <input
           v-model="nameInput"
           class="tcm-input"
+          v-focus-end
           type="text"
           placeholder="如：内部划转-SGB"
           spellcheck="false"

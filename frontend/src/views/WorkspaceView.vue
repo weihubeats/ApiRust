@@ -253,7 +253,7 @@ function openSidebarMore(event: MouseEvent): void {
   const items = MORE_ITEMS.map((m) =>
     m.key === 'delete-project' ? { ...m, confirm: `删除项目「${store.project?.name}」？` } : m,
   )
-  menuRef.value?.openAt(el, items, 'right')
+  menuRef.value?.openAt(el, items, 'left')
 }
 
 function createFolderAtRoot(): void {
@@ -473,6 +473,7 @@ onBeforeUnmount(() => {
         <input
           v-model="renameProjectName"
           class="rf-input"
+          v-focus-end
           :class="{ 'rf-input-error': projectFormError }"
           placeholder="项目名称"
           maxlength="60"

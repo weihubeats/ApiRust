@@ -26,6 +26,7 @@ import ProjectDeleteModal from '../components/projectlist/ProjectDeleteModal.vue
 import ScratchRequestModal from '../components/projectlist/ScratchRequestModal.vue'
 import { timeAgo } from '../components/projectlist/projectMeta'
 import { useWindowDrag } from '../composables/useWindowDrag'
+import logo from '../assets/rustfox-logo.png'
 import type { Project } from '../types/foxApi'
 
 const api = useFoxApi()
@@ -295,9 +296,7 @@ useWindowDrag(topBarEl)
     <header ref="topBarEl" class="dash-top">
       <button class="top-brand" type="button" title="回到项目首页" @click="router.push('/projects')">
         <span class="top-logo" aria-hidden="true">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path d="M13.2 2 4.4 13.6h6.2L9.1 22l8.9-11.6h-6.3L13.2 2z" fill="currentColor" />
-          </svg>
+          <img :src="logo" alt="" width="18" height="18" />
         </span>
         <span class="top-title">RustFox</span>
         <span class="top-tag">API 调试工具</span>

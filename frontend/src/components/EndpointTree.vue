@@ -370,9 +370,9 @@ const menuTarget = ref<{ kind: 'folder' | 'endpoint'; id: string } | null>(null)
 function openFolderMenu(event: MouseEvent, f: Folder): void {
   menuTarget.value = { kind: 'folder', id: f.id }
   menu.value?.openAt(event.currentTarget as HTMLElement, [
-    { key: 'subfolder', label: '新建子文件夹', icon: 'folder-plus' },
     { key: 'endpoint', label: '新建接口', icon: 'file-plus' },
-    { key: 'import', label: '导入 cURL', icon: 'terminal', dividerBefore: true },
+    { key: 'import', label: '导入 cURL', icon: 'terminal' },
+    { key: 'subfolder', label: '新建子文件夹', icon: 'folder-plus' },
     { key: 'rename', label: '重命名', icon: 'pencil', dividerBefore: true },
     {
       key: 'delete',
@@ -381,7 +381,7 @@ function openFolderMenu(event: MouseEvent, f: Folder): void {
       danger: true,
       confirm: `删除文件夹「${f.name}」及其全部子文件夹/接口？`,
     },
-  ])
+  ], 'left')
 }
 
 function openEndpointMenu(event: MouseEvent, e: Endpoint): void {
@@ -397,7 +397,7 @@ function openEndpointMenu(event: MouseEvent, e: Endpoint): void {
       dividerBefore: true,
       confirm: `删除接口「${e.name || e.path}」？`,
     },
-  ])
+  ], 'left')
 }
 
 function onMenuSelect(item: MenuItem): void {
@@ -447,6 +447,7 @@ function onMenuConfirm(item: MenuItem): void {
           <input
             v-model="editValue"
             class="rf-input rf-input-sm tree-input"
+            v-focus-end
             autofocus
             @keyup.enter="commitEdit"
             @keyup.esc="cancelEdit"
@@ -502,6 +503,7 @@ function onMenuConfirm(item: MenuItem): void {
           <input
             v-model="editValue"
             class="rf-input rf-input-sm tree-input"
+            v-focus-end
             autofocus
             @keyup.enter="commitEdit"
             @keyup.esc="cancelEdit"
@@ -510,7 +512,7 @@ function onMenuConfirm(item: MenuItem): void {
         </template>
         <template v-else>
           <span class="tree-chevron spacer"></span>
-          <span class="tree-method" :class="`rf-method-${e.method.toLowerCase()}`">{{ e.method }}</span>
+          <span class="tree-method" :class="`method-${e.method.toLowerCase()}`">{{ e.method }}</span>
           <span class="tree-name" :class="{ dirty: store.isDirty(e.id) }" @click="store.openEndpoint(e)">
             <span class="tree-name-text" v-html="highlightName(e.name || e.path)"></span>
             <Icon v-if="store.isDirty(e.id)" class="tree-dirty" name="dot" :size="6" />
@@ -560,12 +562,15 @@ function onMenuConfirm(item: MenuItem): void {
   gap: 6px;
   min-height: 28px;
   padding: 2px 6px;
-  border-radius: var(--radius);
+  border-radius: 6px;
   cursor: default;
   transition: background var(--dur) var(--ease);
 }
 .tree-row:hover {
-  background: var(--bg-hover);
+  background: rgba(38, 38, 38, 0.5);
+}
+:global(html[data-theme='light']) .tree-row:hover {
+  background: rgba(0, 0, 0, 0.04);
 }
 .tree-row.active {
   background: var(--accent-tint);
@@ -663,19 +668,82 @@ function onMenuConfirm(item: MenuItem): void {
   text-align: center;
 }
 
+/* Method 胶囊 Badge：固定宽高、微亮色系（放弃纯文本彩色方案） */
 .tree-method {
-  width: 44px;
+  width: 42px;
+  height: 18px;
   flex-shrink: 0;
-  text-align: left;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  white-space: nowrap;
+}
+.tree-method.method-get {
+  background: rgba(16, 185, 129, 0.1);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.2);
+}
+.tree-method.method-post {
+  background: rgba(245, 158, 11, 0.1);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.2);
+}
+.tree-method.method-put {
+  background: rgba(59, 130, 246, 0.1);
+  color: #60a5fa;
+  border-color: rgba(59, 130, 246, 0.2);
+}
+.tree-method.method-delete {
+  background: rgba(244, 63, 94, 0.1);
+  color: #fb7185;
+  border-color: rgba(244, 63, 94, 0.2);
+}
+.tree-method.method-patch,
+.tree-method.method-graphql {
+  background: rgba(167, 139, 250, 0.1);
+  color: #a78bfa;
+  border-color: rgba(167, 139, 250, 0.2);
+}
+.tree-method.method-options,
+.tree-method.method-head {
+  background: rgba(163, 163, 163, 0.1);
+  color: #a3a3a3;
+  border-color: rgba(163, 163, 163, 0.2);
 }
 
 .tree-actions {
-  display: none;
+  display: inline-flex;
+  align-items: center;
   gap: 1px;
   flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
 }
-.tree-row:hover .tree-actions {
-  display: inline-flex;
+.tree-row:hover .tree-actions,
+.tree-row:focus-within .tree-actions {
+  opacity: 1;
+}
+/* 更多按钮：紧凑 20px 触点，默认无背景，hover 淡灰 */
+.tree-actions :deep(.ib) {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+}
+.tree-actions :deep(.ib:hover) {
+  background: rgba(64, 64, 64, 0.5);
+  color: var(--text-1);
+}
+:global(html[data-theme='light']) .tree-actions :deep(.ib:hover) {
+  background: rgba(0, 0, 0, 0.06);
 }
 
 .tree-input {

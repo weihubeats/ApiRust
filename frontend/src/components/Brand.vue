@@ -4,6 +4,7 @@
  * 标题支持省略号截断，深/浅双主题，hover/focus 五态。
  */
 import { useRouter } from 'vue-router'
+import logo from '../assets/rustfox-logo.png'
 
 withDefaults(defineProps<{ title: string; subtitle?: string }>(), { subtitle: '' })
 
@@ -13,9 +14,7 @@ const router = useRouter()
 <template>
   <button type="button" class="brand" title="回到项目首页" @click="router.push('/projects')">
     <span class="brand-logo" aria-hidden="true">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-        <path d="M13.2 2 4.4 13.6h6.2L9.1 22l8.9-11.6h-6.3L13.2 2z" fill="currentColor" />
-      </svg>
+      <img :src="logo" alt="" width="18" height="18" />
     </span>
     <span class="brand-text">
       <span class="brand-title">{{ title }}</span>

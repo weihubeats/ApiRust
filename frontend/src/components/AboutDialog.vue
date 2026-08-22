@@ -15,6 +15,7 @@ import { version } from '../../package.json'
 import { useToast } from '../composables/useToast'
 import Icon from './ui/Icon.vue'
 import Modal from './ui/Modal.vue'
+import logo from '../assets/rustfox-logo.png'
 
 defineProps<{ open: boolean }>()
 const emit = defineEmits<{ 'update:open': [open: boolean] }>()
@@ -114,9 +115,7 @@ async function installUpdate(): Promise<void> {
   >
     <div class="about">
       <div class="a-logo" aria-hidden="true">
-        <svg width="38" height="38" viewBox="0 0 24 24" fill="none">
-          <path d="M13.2 2 4.4 13.6h6.2L9.1 22l8.9-11.6h-6.3L13.2 2z" fill="currentColor" />
-        </svg>
+        <img :src="logo" alt="" width="38" height="38" />
       </div>
 
       <div class="a-title">RustFox</div>

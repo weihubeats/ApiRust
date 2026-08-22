@@ -67,6 +67,7 @@ async function confirmRename(): Promise<void> {
         id="rename-project"
         v-model="renameName"
         class="rf-input"
+        v-focus-end
         :class="{ 'rf-input-error': renameError }"
         placeholder="项目名称"
         maxlength="60"
